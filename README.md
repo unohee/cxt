@@ -122,4 +122,4 @@ const bsResult = await scanBs('/path/to/project');
 
 ## License
 
-MIT
+Apache License 2.0
