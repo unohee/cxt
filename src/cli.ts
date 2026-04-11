@@ -24,7 +24,7 @@ const c = {
 };
 
 program
-  .name('ctx')
+  .name('cxt')
   .version('0.1.0')
   .description('Code context toolkit — entity registry, BS detector, and AI context injection')
   .option('--lang <locale>', 'Language: en, ko (default: auto-detect from LANG)')
@@ -42,26 +42,26 @@ program
     const m = t();
     return `
 ${c.bold}Examples:${c.reset}
-  ${c.cyan}ctx scan${c.reset}                          ${m.helpScan}
-  ${c.cyan}ctx scan -v${c.reset}                       ${m.helpScanVerbose}
-  ${c.cyan}ctx check --stats${c.reset}                 ${m.helpCheckStats}
-  ${c.cyan}ctx check src/index.ts${c.reset}            ${m.helpCheckFile}
-  ${c.cyan}ctx check --search handleCheck${c.reset}    ${m.helpCheckSearch}
-  ${c.cyan}ctx check --untested${c.reset}              ${m.helpCheckUntested}
-  ${c.cyan}ctx check --high-risk${c.reset}             ${m.helpCheckHighRisk}
-  ${c.cyan}ctx check --tree${c.reset}                  ${m.helpCheckTree}
-  ${c.cyan}ctx check --ci${c.reset}                    ${m.helpCheckCi}
-  ${c.cyan}ctx bs${c.reset}                            ${m.helpBs}
-  ${c.cyan}ctx bs -v${c.reset}                         ${m.helpBsVerbose}
-  ${c.cyan}ctx annotate file::fn --deprecate "reason"${c.reset}
-  ${c.cyan}ctx annotate file::fn --tag team=backend${c.reset}
-  ${c.cyan}ctx inject${c.reset}                        ${m.helpInject}
+  ${c.cyan}cxt scan${c.reset}                          ${m.helpScan}
+  ${c.cyan}cxt scan -v${c.reset}                       ${m.helpScanVerbose}
+  ${c.cyan}cxt check --stats${c.reset}                 ${m.helpCheckStats}
+  ${c.cyan}cxt check src/index.ts${c.reset}            ${m.helpCheckFile}
+  ${c.cyan}cxt check --search handleCheck${c.reset}    ${m.helpCheckSearch}
+  ${c.cyan}cxt check --untested${c.reset}              ${m.helpCheckUntested}
+  ${c.cyan}cxt check --high-risk${c.reset}             ${m.helpCheckHighRisk}
+  ${c.cyan}cxt check --tree${c.reset}                  ${m.helpCheckTree}
+  ${c.cyan}cxt check --ci${c.reset}                    ${m.helpCheckCi}
+  ${c.cyan}cxt bs${c.reset}                            ${m.helpBs}
+  ${c.cyan}cxt bs -v${c.reset}                         ${m.helpBsVerbose}
+  ${c.cyan}cxt annotate file::fn --deprecate "reason"${c.reset}
+  ${c.cyan}cxt annotate file::fn --tag team=backend${c.reset}
+  ${c.cyan}cxt inject${c.reset}                        ${m.helpInject}
 
 ${c.bold}${m.helpSupportedLangs}:${c.reset}
   TypeScript/JS  Python  Go  Rust  Java  C/C++  C#
 
 ${c.bold}${m.helpStorage}:${c.reset}
-  ${c.dim}~/.ctx/registry.db${c.reset} ${m.helpStorageDesc}
+  ${c.dim}~/.cxt/registry.db${c.reset} ${m.helpStorageDesc}
 `;
   });
 
@@ -167,6 +167,17 @@ program
     } finally {
       closeRegistryStore();
     }
+  });
+
+// ---- init ----
+program
+  .command('init')
+  .description('Inject cxt usage guide into ~/.claude/CLAUDE.md')
+  .option('--remove', 'Remove cxt section from CLAUDE.md')
+  .option('--dry', 'Preview changes without writing')
+  .action(async (opts) => {
+    const { handleInit } = await import('./cli/initHandler.js');
+    await handleInit(opts);
   });
 
 program.parse();

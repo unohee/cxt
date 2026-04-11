@@ -1,5 +1,5 @@
 {
-  "name": "ctx",
+  "name": "@intrect/cxt",
   "version": "0.1.0",
   "description": "Code context toolkit — entity registry, BS detector, and AI context injection",
   "license": "Apache-2.0",
@@ -7,7 +7,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "ctx": "dist/cli.js"
+    "cxt": "dist/cli.js"
   },
   "files": [
     "dist",

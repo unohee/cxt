@@ -1,7 +1,7 @@
 // ============================================
 // ctx - Ignore Rules
 // Created: 2026-04-11
-// Purpose: Scan exclusion rules from .gitignore, .ctxignore, and dependency files
+// Purpose: Scan exclusion rules from .gitignore, .cxtignore, and dependency files
 // ============================================
 
 import { readFileSync, existsSync } from 'node:fs';
@@ -39,7 +39,7 @@ export interface IgnoreConfig {
 
 /**
  * Build ignore config for a project root.
- * Reads .gitignore, .ctxignore, and dependency manifests to auto-exclude
+ * Reads .gitignore, .cxtignore, and dependency manifests to auto-exclude
  * third-party, build, and legacy directories.
  */
 export function buildIgnoreConfig(projectRoot: string): IgnoreConfig {
@@ -47,8 +47,8 @@ export function buildIgnoreConfig(projectRoot: string): IgnoreConfig {
   const skipPrefixes = [...BUILTIN_SKIP_PREFIXES];
   const skipPathPatterns: RegExp[] = [];
 
-  // 1. .ctxignore — project-specific exclusions (same syntax as .gitignore)
-  loadIgnoreFile(join(projectRoot, '.ctxignore'), skipDirs, skipPrefixes, skipPathPatterns);
+  // 1. .cxtignore — project-specific exclusions (same syntax as .gitignore)
+  loadIgnoreFile(join(projectRoot, '.cxtignore'), skipDirs, skipPrefixes, skipPathPatterns);
 
   // 2. .gitignore — parse for directory patterns
   loadIgnoreFile(join(projectRoot, '.gitignore'), skipDirs, skipPrefixes, skipPathPatterns);
@@ -83,7 +83,7 @@ export function shouldSkipDir(
   return false;
 }
 
-// ============ .gitignore / .ctxignore parser ============
+// ============ .gitignore / .cxtignore parser ============
 
 function loadIgnoreFile(
   filePath: string,

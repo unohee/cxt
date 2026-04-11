@@ -1,51 +1,51 @@
-# ctx
+# cxt
 
-Code context toolkit — scan codebases for entities (functions, classes, types, constants), detect bad code smells, and inject context into Claude Code sessions.
+**C**ode e**X**ploration **T**oolkit — scan codebases for entities (functions, classes, types, constants), detect bad code smells, and inject context into Claude Code sessions.
 
 ## Install
 
 ```bash
-npm install
-npm run build
-npm link  # register global `ctx` command (optional)
+npm install @intrect/cxt
+# or
+npm install && npm run build && npm link
 ```
 
 ## Usage
 
 ```bash
 # Scan codebase → register entities to local SQLite registry
-ctx scan
-ctx scan -v              # verbose output
+cxt scan
+cxt scan -v              # verbose output
 
 # Query registry
-ctx check --stats        # overall statistics
-ctx check <file>         # per-file entity listing
-ctx check --search <q>   # full-text search (FTS5)
-ctx check --untested     # entities without tests
-ctx check --high-risk    # high-risk entities
-ctx check --deprecated   # deprecated entities
-ctx check --tag <tag>    # filter by tag
-ctx check --tree         # directory tree view
-ctx check --ci           # CI/CD mode (JSON output, exit 1 on critical)
+cxt check --stats        # overall statistics
+cxt check <file>         # per-file entity listing
+cxt check --search <q>   # full-text search (FTS5)
+cxt check --untested     # entities without tests
+cxt check --high-risk    # high-risk entities
+cxt check --deprecated   # deprecated entities
+cxt check --tag <tag>    # filter by tag
+cxt check --tree         # directory tree view
+cxt check --ci           # CI/CD mode (JSON output, exit 1 on critical)
 
 # Bad Smell detection
-ctx bs                   # scan for BS patterns
-ctx bs -v                # verbose per-file output
+cxt bs                   # scan for BS patterns
+cxt bs -v                # verbose per-file output
 
 # Entity annotation
-ctx annotate <name> --deprecate "reason"
-ctx annotate <name> --tag "team=backend"
-ctx annotate <name> --status experimental
-ctx annotate <name> --risk high
-ctx annotate <name> --warn "error/security: SQL injection risk"
-ctx annotate <name> --note "refactor planned"
+cxt annotate <name> --deprecate "reason"
+cxt annotate <name> --tag "team=backend"
+cxt annotate <name> --status experimental
+cxt annotate <name> --risk high
+cxt annotate <name> --warn "error/security: SQL injection risk"
+cxt annotate <name> --note "refactor planned"
 
 # Claude Code context injection (for SessionStart hook)
-ctx inject
+cxt inject
 
 # Language override (default: auto-detect from LANG env)
-ctx --lang en scan
-ctx --lang ko bs
+cxt --lang en scan
+cxt --lang ko bs
 ```
 
 ## Supported Languages
@@ -63,11 +63,11 @@ ctx --lang ko bs
 
 ## Ignore Rules
 
-By default, ctx skips common non-project directories (`node_modules`, `.git`, `dist`, `build`, `target`, `vendor`, `docker`, etc.) and all hidden directories.
+By default, cxt skips common non-project directories (`node_modules`, `.git`, `dist`, `build`, `target`, `vendor`, `docker`, etc.) and all hidden directories.
 
-### .ctxignore
+### .cxtignore
 
-Create a `.ctxignore` file in your project root to exclude additional paths from both `scan` and `bs`:
+Create a `.cxtignore` file in your project root to exclude additional paths from both `scan` and `bs`:
 
 ```gitignore
 # directories
@@ -84,7 +84,7 @@ tools/external/**
 
 ### Auto-detection
 
-ctx also reads your `.gitignore` for directory patterns, and auto-detects vendored subprojects (directories with their own `package.json`/`Cargo.toml`/etc. plus `node_modules`/`.venv`).
+cxt also reads your `.gitignore` for directory patterns, and auto-detects vendored subprojects (directories with their own `package.json`/`Cargo.toml`/etc. plus `node_modules`/`.venv`).
 
 ## BS Detector Rules
 
@@ -108,7 +108,7 @@ Supports English (`en`) and Korean (`ko`). Language is auto-detected from the `L
 
 ## Claude Code Integration
 
-Add `ctx inject` to your `settings.json` SessionStart hook for automatic codebase context injection:
+Add `cxt inject` to your `settings.json` SessionStart hook for automatic codebase context injection:
 
 ```json
 {
@@ -116,7 +116,7 @@ Add `ctx inject` to your `settings.json` SessionStart hook for automatic codebas
     "SessionStart": [
       {
         "type": "command",
-        "command": "ctx inject"
+        "command": "cxt inject"
       }
     ]
   }
@@ -125,12 +125,12 @@ Add `ctx inject` to your `settings.json` SessionStart hook for automatic codebas
 
 ## Storage
 
-Registry is stored at `~/.ctx/registry.db` (SQLite). Each project is isolated by project ID, so multiple codebases can be tracked simultaneously.
+Registry is stored at `~/.cxt/registry.db` (SQLite). Each project is isolated by project ID, so multiple codebases can be tracked simultaneously.
 
 ## Programmatic API
 
 ```typescript
-import { getRegistryStore, scanRepository, scanBs } from 'ctx';
+import { getRegistryStore, scanRepository, scanBs } from '@intrect/cxt';
 
 // Scan
 const result = await scanRepository('/path/to/project', 'my-project');

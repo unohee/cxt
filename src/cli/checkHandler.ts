@@ -1,7 +1,7 @@
 // ============================================
 // ctx - CLI Check Handler
 // Created: 2026-04-11
-// Purpose: `ctx check` 명령어 — 코드 레지스트리 조회
+// Purpose: `cxt check` 명령어 — 코드 레지스트리 조회
 // ============================================
 
 import { readFileSync, existsSync } from 'node:fs';
@@ -476,11 +476,11 @@ export async function handleCheck(
       console.log(`\n${c.bold}${m.codeRegistry}${c.reset}: ${stats.total} entities`);
       console.log(`  ${stats.deprecated} deprecated, ${stats.untested} untested, ${stats.highRisk} high-risk, ${stats.withWarnings} with warnings`);
       console.log(`\n  ${c.dim}${m.usage}${c.reset}`);
-      console.log(`  ${c.dim}  ctx check <file>       ${c.reset}${m.fileBrief}`);
-      console.log(`  ${c.dim}  ctx check --stats       ${c.reset}${m.registryStats}`);
-      console.log(`  ${c.dim}  ctx check --deprecated  ${c.reset}${m.deprecatedEntities}`);
-      console.log(`  ${c.dim}  ctx check --untested    ${c.reset}${m.untestedEntities}`);
-      console.log(`  ${c.dim}  ctx check --search <q>  ${c.reset}FTS search\n`);
+      console.log(`  ${c.dim}  cxt check <file>       ${c.reset}${m.fileBrief}`);
+      console.log(`  ${c.dim}  cxt check --stats       ${c.reset}${m.registryStats}`);
+      console.log(`  ${c.dim}  cxt check --deprecated  ${c.reset}${m.deprecatedEntities}`);
+      console.log(`  ${c.dim}  cxt check --untested    ${c.reset}${m.untestedEntities}`);
+      console.log(`  ${c.dim}  cxt check --search <q>  ${c.reset}FTS search\n`);
     }
   } finally {
     closeRegistryStore();

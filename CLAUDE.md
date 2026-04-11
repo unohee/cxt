@@ -29,7 +29,7 @@ src/
     ├── sqliteStore.ts        # SQLite + FTS5 registry (better-sqlite3)
     ├── entityScanner.ts      # 8-language entity extraction + registry sync
     ├── bsDetector.ts         # BS pattern static analysis
-    └── ignoreRules.ts        # Scan exclusion rules (.gitignore, .ctxignore, auto-detect)
+    └── ignoreRules.ts        # Scan exclusion rules (.gitignore, .cxtignore, auto-detect)
 ```
 
 ## Key Design Decisions
@@ -41,7 +41,7 @@ src/
 - Complexity score: LOC + nesting depth + parameter count (0-10)
 
 ### SQLite + FTS5
-- `~/.ctx/registry.db` with per-project entity storage
+- `~/.cxt/registry.db` with per-project entity storage
 - Content-synced FTS5 + triggers for auto-indexing
 - WAL mode, N+1 prevention with batch queries
 - Auto-migration from old (Rust-era) schemas
@@ -54,7 +54,7 @@ src/
 
 ### Ignore Rules (3-tier)
 1. **Built-in**: node_modules, .git, dist, build, target, docker, htmlcov, hidden dirs, etc.
-2. **File-based**: `.gitignore` + `.ctxignore` directory/prefix/path patterns
+2. **File-based**: `.gitignore` + `.cxtignore` directory/prefix/path patterns
 3. **Auto-detect**: Vendored subprojects (own manifest + node_modules/.venv)
 
 ### Project ID auto-resolution

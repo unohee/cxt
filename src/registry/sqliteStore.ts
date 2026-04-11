@@ -17,7 +17,7 @@ import type {
   FileBrief, RegistryStats,
 } from './schema.js';
 
-const DEFAULT_DB_PATH = resolve(homedir(), '.ctx', 'registry.db');
+const DEFAULT_DB_PATH = resolve(homedir(), '.cxt', 'registry.db');
 
 // ============ 인터페이스 ============
 

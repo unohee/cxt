@@ -17,6 +17,7 @@ Thumbs.db
 # Env / secrets
 .env
 .env.*
+.npmrc
 
 # Build artifacts
 *.tgz
