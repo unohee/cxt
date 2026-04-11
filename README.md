@@ -42,6 +42,10 @@ ctx annotate <name> --note "refactor planned"
 
 # Claude Code context injection (for SessionStart hook)
 ctx inject
+
+# Language override (default: auto-detect from LANG env)
+ctx --lang en scan
+ctx --lang ko bs
 ```
 
 ## Supported Languages
@@ -56,6 +60,31 @@ ctx inject
 | C | `.c` `.h` |
 | C++ | `.cpp` `.cxx` `.cc` `.hpp` |
 | C# | `.cs` |
+
+## Ignore Rules
+
+By default, ctx skips common non-project directories (`node_modules`, `.git`, `dist`, `build`, `target`, `vendor`, `docker`, etc.) and all hidden directories.
+
+### .ctxignore
+
+Create a `.ctxignore` file in your project root to exclude additional paths from both `scan` and `bs`:
+
+```gitignore
+# directories
+docker/
+legacy/
+subprojects/pykis/
+
+# prefix patterns
+build-*
+
+# path patterns
+tools/external/**
+```
+
+### Auto-detection
+
+ctx also reads your `.gitignore` for directory patterns, and auto-detects vendored subprojects (directories with their own `package.json`/`Cargo.toml`/etc. plus `node_modules`/`.venv`).
 
 ## BS Detector Rules
 
@@ -75,12 +104,7 @@ ctx inject
 
 ## i18n
 
-Supports English (`en`) and Korean (`ko`). Language is auto-detected from the `LANG` environment variable, or can be set explicitly:
-
-```bash
-ctx --lang en scan
-ctx --lang ko bs
-```
+Supports English (`en`) and Korean (`ko`). Language is auto-detected from the `LANG` environment variable, or set explicitly with `--lang`.
 
 ## Claude Code Integration
 
