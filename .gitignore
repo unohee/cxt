@@ -1,1 +1,22 @@
-target/
+node_modules/
+dist/
+trash/
+*.tsbuildinfo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Env / secrets
+.env
+.env.*
+
+# Build artifacts
+*.tgz
