@@ -29,6 +29,10 @@ export type { ScanResult, ExtractedEntity } from './registry/entityScanner.js';
 export { scanRepository as scanBs, scanFile as scanFileForBs, scanFileContent, aggregateResults } from './registry/bsDetector.js';
 export type { BsIssue, BsScanResult, BsSeverity } from './registry/bsDetector.js';
 
+// Ignore Rules
+export { buildIgnoreConfig, shouldSkipDir, BUILTIN_SKIP_DIRS } from './registry/ignoreRules.js';
+export type { IgnoreConfig } from './registry/ignoreRules.js';
+
 // i18n
 export { setLocale, getLocale, detectLocale, t } from './i18n.js';
 export type { Locale } from './i18n.js';

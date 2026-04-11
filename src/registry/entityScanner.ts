@@ -9,21 +9,10 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { join, extname, dirname } from 'node:path';
 import { getRegistryStore } from './sqliteStore.js';
+import { buildIgnoreConfig, shouldSkipDir } from './ignoreRules.js';
 import type { EntityKind, RiskLevel } from './schema.js';
 
 // ============ 상수 ============
-
-const SKIP_DIRS = new Set([
-  'node_modules', '.git', 'dist', 'build', '__pycache__',
-  '.next', '.venv', 'venv', '.tox', '.mypy_cache', '.pytest_cache',
-  'coverage', '.turbo', '.cache', '.parcel-cache',
-  '.venv-mcp', 'site-packages',
-  'trash', 'testing', 'vendor', 'third_party',
-  'target',    // Rust/Java
-  'bin', 'obj', // C#
-  'cmake-build-debug', 'cmake-build-release', // C/C++
-]);
-const SKIP_DIR_PREFIXES = ['.venv'];
 
 const MAX_FILE_SIZE = 512 * 1024;
 const MAX_DEPTH = 15;
@@ -552,6 +541,7 @@ export async function scanRepository(
   const timeoutMs = options?.timeoutMs ?? SCAN_TIMEOUT_MS;
   const verbose = options?.verbose ?? false;
   const store = getRegistryStore();
+  const ignoreConfig = buildIgnoreConfig(projectPath);
 
   const allExtracted: ExtractedEntity[] = [];
   const testFiles: TestFileInfo[] = [];
@@ -578,7 +568,7 @@ export async function scanRepository(
       const entryRelPath = relPath ? `${relPath}/${entry.name}` : entry.name;
 
       if (entry.isDirectory()) {
-        if (SKIP_DIRS.has(entry.name) || SKIP_DIR_PREFIXES.some(p => entry.name.startsWith(p))) continue;
+        if (shouldSkipDir(entry.name, relPath, ignoreConfig)) continue;
         await walk(fullPath, entryRelPath, depth + 1);
       } else if (entry.isFile()) {
         const ext = extname(entry.name);

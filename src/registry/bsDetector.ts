@@ -254,13 +254,7 @@ export function aggregateResults(issues: BsIssue[], filesScanned: number): BsSca
 
 import { readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-
-const SKIP_DIRS = new Set([
-  'node_modules', '.git', 'dist', 'build', '__pycache__',
-  '.next', '.venv', 'venv', 'coverage', '.turbo', '.cache',
-  'trash', 'testing', 'vendor', 'third_party', 'target',
-  'bin', 'obj',
-]);
+import { buildIgnoreConfig, shouldSkipDir } from './ignoreRules.js';
 
 const SOURCE_EXTENSIONS = new Set([
   '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs',
@@ -275,6 +269,7 @@ export async function scanRepository(
   options?: { verbose?: boolean },
 ): Promise<BsScanResult> {
   const verbose = options?.verbose ?? false;
+  const ignoreConfig = buildIgnoreConfig(projectPath);
   const allIssues: BsIssue[] = [];
   let filesScanned = 0;
 
@@ -289,7 +284,7 @@ export async function scanRepository(
       const entryRelPath = relPath ? `${relPath}/${entry.name}` : entry.name;
 
       if (entry.isDirectory()) {
-        if (SKIP_DIRS.has(entry.name)) continue;
+        if (shouldSkipDir(entry.name, relPath, ignoreConfig)) continue;
         await walk(fullPath, entryRelPath);
       } else if (entry.isFile()) {
         const ext = extname(entry.name);
