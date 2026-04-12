@@ -10,8 +10,10 @@ import { getRegistryStore, closeRegistryStore } from '../registry/sqliteStore.js
 import { scanRepository } from '../registry/entityScanner.js';
 import { t } from '../i18n.js';
 import type {
-  CodeEntity, EntityStatus, RiskLevel, WarningSeverity, WarningCategory,
+  CodeEntity, EntityKind, EntityStatus, RiskLevel, WarningSeverity, WarningCategory,
 } from '../registry/schema.js';
+
+const VALID_KINDS: EntityKind[] = ['function', 'class', 'module', 'type', 'constant'];
 
 /** package.json name → Cargo.toml → go.mod → 폴더명 순으로 프로젝트 ID 추론 */
 export function resolveProjectId(projectPath: string): string {
@@ -140,6 +142,8 @@ export async function handleCheck(
     verbose?: boolean;
     tree?: boolean;
     ci?: boolean;
+    dir?: string;
+    kind?: string;
   },
 ): Promise<void> {
   try {
@@ -253,10 +257,35 @@ export async function handleCheck(
       return;
     }
 
+    // --kind
+    if (opts.kind) {
+      if (!VALID_KINDS.includes(opts.kind as EntityKind)) {
+        console.error(`${c.red}Invalid kind: ${opts.kind}. Valid: ${VALID_KINDS.join(', ')}${c.reset}`);
+        process.exitCode = 1;
+        return;
+      }
+      const projectId = opts.project ?? resolveProjectId(process.cwd());
+      const { entities } = store.listEntities({
+        projectId,
+        kind: [opts.kind as EntityKind],
+        limit: 50000,
+        offset: 0,
+      });
+      const scoped = opts.dir ? entities.filter(e => e.filePath.startsWith(opts.dir!)) : entities;
+      console.log(`\n${c.bold}${opts.kind} entities${c.reset} (${scoped.length}${opts.dir ? ` under ${opts.dir}` : ''})\n`);
+      if (scoped.length === 0) {
+        console.log(`  ${c.dim}none${c.reset}\n`);
+      } else {
+        for (const e of scoped) console.log(formatEntityCompact(e));
+        console.log();
+      }
+      return;
+    }
+
     // --tree
     if (opts.tree) {
       const projectId = opts.project ?? resolveProjectId(process.cwd());
-      const scopePath = filePath || '';
+      const scopePath = opts.dir || filePath || '';
       const { entities } = store.listEntities({ projectId, limit: 50000, offset: 0 });
 
       const tree = new Map<string, Map<string, { total: number; untested: number; highRisk: number; deprecated: number; kinds: Map<string, number> }>>();

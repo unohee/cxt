@@ -56,6 +56,7 @@ ${c.bold}Examples:${c.reset}
   ${c.cyan}cxt annotate file::fn --deprecate "reason"${c.reset}
   ${c.cyan}cxt annotate file::fn --tag team=backend${c.reset}
   ${c.cyan}cxt inject${c.reset}                        ${m.helpInject}
+  ${c.cyan}cxt export -o .cxt/structure.gql${c.reset}  Export SDL snapshot for LLMs
 
 ${c.bold}${m.helpSupportedLangs}:${c.reset}
   TypeScript/JS  Python  Go  Rust  Java  C/C++  C#
@@ -79,6 +80,8 @@ program
   .option('--scan', 'Scan entire repository and sync to registry')
   .option('--bs', 'Scan for BS patterns (bad code smells)')
   .option('--tree', 'Display codebase tree with entity counts and risk')
+  .option('--dir <path>', 'Filter by directory prefix (combine with --tree or alone)')
+  .option('--kind <kind>', 'Filter by entity kind (function|class|module|type|constant)')
   .option('--ci', 'CI/CD mode: JSON output, exit 1 on critical issues')
   .option('-v, --verbose', 'Verbose output (with --scan)')
   .option('--project <id>', 'Filter by project ID')
@@ -169,11 +172,25 @@ program
     }
   });
 
+// ---- export ----
+program
+  .command('export')
+  .description('Export codebase structure as GraphQL-like SDL snapshot (LLM-friendly)')
+  .option('-o, --output <path>', 'Write to file (default: stdout)')
+  .option('--project <id>', 'Project ID override')
+  .option('--dir <path>', 'Limit to entities under this directory prefix')
+  .action(async (opts) => {
+    const { handleExport } = await import('./cli/exportHandler.js');
+    await handleExport(opts);
+  });
+
 // ---- init ----
 program
   .command('init')
-  .description('Inject cxt usage guide into ~/.claude/CLAUDE.md')
-  .option('--remove', 'Remove cxt section from CLAUDE.md')
+  .description('Inject cxt usage guide into AI agent instruction files (claude/codex/gemini)')
+  .option('--target <list>', 'Comma-separated targets: claude,codex,gemini,all (default: claude)')
+  .option('--path <file>', 'Custom file path (overrides --target)')
+  .option('--remove', 'Remove cxt section from target files')
   .option('--dry', 'Preview changes without writing')
   .action(async (opts) => {
     const { handleInit } = await import('./cli/initHandler.js');
