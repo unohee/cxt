@@ -18,7 +18,9 @@
     "build": "tsc",
     "dev": "node --import=tsx src/cli.ts",
     "lint": "tsc --noEmit",
-    "test": "node --experimental-vm-modules node_modules/vitest/vitest.mjs run"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "better-sqlite3": "^12.8.0",
@@ -29,6 +31,7 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.0.0",
+    "@vitest/coverage-v8": "^4.1.4",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"

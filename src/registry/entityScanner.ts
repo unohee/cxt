@@ -437,6 +437,16 @@ function resolveImportPath(fromFile: string, importPath: string): string | null 
   return resolved.replace(/^\.\//, '');
 }
 
+function stripTestSuffix(filePath: string): string {
+  return filePath
+    .replace(/\.test\.[^.]+$/, '')
+    .replace(/\.spec\.[^.]+$/, '')
+    .replace(/_test\.[^.]+$/, '')
+    .replace(/Test\.[^.]+$/, '')
+    .replace(/Tests\.[^.]+$/, '')
+    .replace(/IT\.[^.]+$/, '');
+}
+
 function buildTestMap(
   entities: ExtractedEntity[],
   testFiles: TestFileInfo[],
@@ -445,6 +455,10 @@ function buildTestMap(
 
   const entitiesByFile = new Map<string, ExtractedEntity[]>();
   const entityByName = new Map<string, ExtractedEntity[]>();
+  // Index source files by their basename (without extension) so we can find
+  // "foo.test.ts" → "foo.ts" matches even when the test lives in a parallel
+  // tests/ tree (e.g. src/registry/foo.ts ↔ tests/registry/foo.test.ts).
+  const entitiesByBasename = new Map<string, ExtractedEntity[]>();
 
   for (const e of entities) {
     const list = entitiesByFile.get(e.filePath) ?? [];
@@ -454,9 +468,35 @@ function buildTestMap(
     const nameList = entityByName.get(e.name) ?? [];
     nameList.push(e);
     entityByName.set(e.name, nameList);
+
+    const base = e.filePath.split('/').pop()?.replace(/\.[^.]+$/, '');
+    if (base) {
+      const baseList = entitiesByBasename.get(base) ?? [];
+      baseList.push(e);
+      entitiesByBasename.set(base, baseList);
+    }
   }
 
   for (const tf of testFiles) {
+    // Rule 0 (strongest): basename match.
+    // foo.test.ts is the de-facto unit test for foo.ts — mark every entity
+    // in any source file with that basename as tested. This catches the
+    // common parallel-tree layout (src/x/foo.ts ↔ tests/x/foo.test.ts) where
+    // tests exercise private helpers that the test file never names directly.
+    const testBasename = tf.testFilePath.split('/').pop();
+    if (testBasename) {
+      const sourceBasename = stripTestSuffix(testBasename).replace(/\.[^.]+$/, '');
+      const matchedEntities = entitiesByBasename.get(sourceBasename);
+      if (matchedEntities && sourceBasename.length > 0) {
+        for (const entity of matchedEntities) {
+          const qName = `${entity.filePath}::${entity.name}`;
+          if (!result.has(qName)) {
+            result.set(qName, { hasTests: true, testFile: tf.testFilePath });
+          }
+        }
+      }
+    }
+
     for (const [sourcePath, symbols] of tf.importedSymbols) {
       const candidates = [
         sourcePath + '.ts', sourcePath + '.tsx', sourcePath + '.js',

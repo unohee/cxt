@@ -1,0 +1,4 @@
+# Test helpers — utility code, not real source entities.
+# Test files themselves (tests/**/*.test.ts) stay scanned so cxt can use
+# them for test-mapping.
+tests/helpers/
