@@ -6,10 +6,24 @@
 // ============================================
 
 import { Command } from 'commander';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { getRegistryStore, closeRegistryStore } from './registry/sqliteStore.js';
 import { resolveProjectId } from './cli/checkHandler.js';
 import { t, setLocale, detectLocale } from './i18n.js';
 import type { Locale } from './i18n.js';
+
+// dist/cli.js → ../package.json (npm packs dist/ + package.json side by side)
+const PKG_VERSION = (() => {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const pkg = JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf-8')) as { version?: string };
+    return pkg.version ?? '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+})();
 
 const program = new Command();
 
@@ -25,7 +39,7 @@ const c = {
 
 program
   .name('cxt')
-  .version('0.1.0')
+  .version(PKG_VERSION)
   .description('Code context toolkit — entity registry, BS detector, and AI context injection')
   .option('--lang <locale>', 'Language: en, ko (default: auto-detect from LANG)')
   .hook('preAction', (thisCommand) => {
