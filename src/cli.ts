@@ -85,6 +85,7 @@ program
   .option('--ci', 'CI/CD mode: JSON output, exit 1 on critical issues')
   .option('-v, --verbose', 'Verbose output (with --scan)')
   .option('--project <id>', 'Filter by project ID')
+  .option('--global', 'With --stats: aggregate across all projects (default: current project only)')
   .action(async (filePath, opts) => {
     const { handleCheck } = await import('./cli/checkHandler.js');
     await handleCheck(filePath, opts);

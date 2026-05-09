@@ -39,6 +39,8 @@ interface Messages {
   andMore: (n: number) => string;
   registryStatus: string;
   registryStats: string;
+  statsScopeProject: (id: string) => string;
+  statsScopeGlobal: string;
   totalEntities: string;
   deprecated: string;
   untested: string;
@@ -144,6 +146,8 @@ const en: Messages = {
   andMore: (n) => `...and ${n} more`,
   registryStatus: 'Registry Status',
   registryStats: 'Registry Stats',
+  statsScopeProject: (id) => `scope: project "${id}"`,
+  statsScopeGlobal: 'scope: ALL projects (--global)',
   totalEntities: 'Total entities:',
   deprecated: 'Deprecated:',
   untested: 'Untested:',
@@ -249,6 +253,8 @@ const ko: Messages = {
   andMore: (n) => `...외 ${n}건`,
   registryStatus: '레지스트리 현황',
   registryStats: '레지스트리 통계',
+  statsScopeProject: (id) => `범위: 프로젝트 "${id}"`,
+  statsScopeGlobal: '범위: 전체 프로젝트 (--global)',
   totalEntities: '전체 엔티티:',
   deprecated: 'Deprecated:',
   untested: '테스트 없음:',

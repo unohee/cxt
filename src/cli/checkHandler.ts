@@ -144,6 +144,7 @@ export async function handleCheck(
     ci?: boolean;
     dir?: string;
     kind?: string;
+    global?: boolean;
   },
 ): Promise<void> {
   try {
@@ -383,8 +384,15 @@ export async function handleCheck(
     // --stats
     if (opts.stats) {
       const m = t();
-      const stats = store.getStats(opts.project);
+      // Default scope: current project. --global opts into cross-project aggregation.
+      // Explicit --project always wins. This keeps `--stats` consistent with
+      // `--tree`, `--untested`, etc., which are all project-scoped by default.
+      const scopeId = opts.global
+        ? undefined
+        : (opts.project ?? resolveProjectId(process.cwd()));
+      const stats = store.getStats(scopeId);
       console.log(`\n${c.bold}${m.registryStats}${c.reset}`);
+      console.log(`  ${c.dim}${scopeId ? m.statsScopeProject(scopeId) : m.statsScopeGlobal}${c.reset}`);
       console.log(`${'─'.repeat(40)}`);
       console.log(`  ${m.totalEntities.padEnd(18)}${c.bold}${stats.total}${c.reset}`);
       console.log(`  ${m.deprecated.padEnd(18)}${stats.deprecated > 0 ? c.red : c.green}${stats.deprecated}${c.reset}`);

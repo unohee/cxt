@@ -18,7 +18,8 @@ cxt scan
 cxt scan -v              # verbose output
 
 # Query registry
-cxt check --stats        # overall statistics
+cxt check --stats        # current project statistics
+cxt check --stats --global  # aggregate across ALL projects in registry
 cxt check <file>         # per-file entity listing
 cxt check --search <q>   # full-text search (FTS5)
 cxt check --untested     # entities without tests
