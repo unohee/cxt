@@ -152,4 +152,50 @@ describe('handleInit — target validation', () => {
   it('accepts "all" keyword in dry mode', async () => {
     await expect(handleInit({ target: 'all', dry: true })).resolves.toBeUndefined();
   });
+
+  it('accepts local-claude,local-agent,local-agents targets in dry mode', async () => {
+    await expect(
+      handleInit({ target: 'local-claude,local-agent,local-agents', dry: true }),
+    ).resolves.toBeUndefined();
+  });
+});
+
+describe('handleInit — local targets write to cwd', () => {
+  it('local-claude writes to CLAUDE.md in cwd', async () => {
+    const target = join(tmp.root, 'CLAUDE.md');
+    await handleInit({ target: 'local-claude', cwd: tmp.root });
+    expect(existsSync(target)).toBe(true);
+    const content = readFileSync(target, 'utf-8');
+    expect(content).toContain('<!-- cxt:start -->');
+    expect(content).toContain('cxt loc');
+  });
+
+  it('local-agent writes to AGENT.md in cwd', async () => {
+    const target = join(tmp.root, 'AGENT.md');
+    await handleInit({ target: 'local-agent', cwd: tmp.root });
+    expect(existsSync(target)).toBe(true);
+    expect(readFileSync(target, 'utf-8')).toContain('<!-- cxt:start -->');
+  });
+
+  it('local-agents writes to AGENTS.md in cwd', async () => {
+    const target = join(tmp.root, 'AGENTS.md');
+    await handleInit({ target: 'local-agents', cwd: tmp.root });
+    expect(existsSync(target)).toBe(true);
+    expect(readFileSync(target, 'utf-8')).toContain('<!-- cxt:start -->');
+  });
+
+  it('local targets are idempotent', async () => {
+    const target = join(tmp.root, 'CLAUDE.md');
+    await handleInit({ target: 'local-claude', cwd: tmp.root });
+    const first = readFileSync(target, 'utf-8');
+    await handleInit({ target: 'local-claude', cwd: tmp.root });
+    expect(readFileSync(target, 'utf-8')).toBe(first);
+  });
+
+  it('local targets can be removed', async () => {
+    const target = join(tmp.root, 'AGENT.md');
+    await handleInit({ target: 'local-agent', cwd: tmp.root });
+    await handleInit({ target: 'local-agent', cwd: tmp.root, remove: true });
+    expect(readFileSync(target, 'utf-8')).not.toContain('<!-- cxt:start -->');
+  });
 });

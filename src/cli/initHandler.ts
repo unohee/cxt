@@ -18,31 +18,53 @@ interface TargetSpec {
   label: string;
 }
 
-const TARGETS: Record<string, TargetSpec> = {
+// 전역 타겟: 모듈 로드 시 고정
+const GLOBAL_TARGETS: Record<string, TargetSpec> = {
   claude: {
     name: 'claude',
     path: join(homedir(), '.claude', 'CLAUDE.md'),
-    label: 'Claude Code',
+    label: 'Claude Code (global)',
   },
   codex: {
     name: 'codex',
     path: join(homedir(), '.codex', 'AGENTS.md'),
-    label: 'OpenAI Codex CLI',
+    label: 'OpenAI Codex CLI (global)',
   },
   gemini: {
     name: 'gemini',
     path: join(homedir(), '.gemini', 'GEMINI.md'),
-    label: 'Gemini CLI',
+    label: 'Gemini CLI (global)',
   },
 };
 
-const VALID_TARGET_NAMES = Object.keys(TARGETS);
+// 로컬 타겟: cwd 기준 (handleInit 호출 시점의 cwd 사용)
+function buildLocalTargets(cwd: string): Record<string, TargetSpec> {
+  return {
+    'local-claude': {
+      name: 'local-claude',
+      path: join(cwd, 'CLAUDE.md'),
+      label: 'Claude Code (local)',
+    },
+    'local-agent': {
+      name: 'local-agent',
+      path: join(cwd, 'AGENT.md'),
+      label: 'Agent (local)',
+    },
+    'local-agents': {
+      name: 'local-agents',
+      path: join(cwd, 'AGENTS.md'),
+      label: 'Agents (local)',
+    },
+  };
+}
+
+const VALID_TARGET_NAMES = [...Object.keys(GLOBAL_TARGETS), 'local-claude', 'local-agent', 'local-agents'];
 
 function getCxtSection(): string {
   return `${CXT_SECTION_START}
 ## cxt — Code eXploration Toolkit
 
-Codebase entity registry, BS detector, and AI context injection CLI.
+Codebase entity registry, BS detector, LOC reporter, and AI context injection CLI.
 Installed globally as \`cxt\`. Registry stored at \`~/.cxt/registry.db\`.
 
 ### SessionStart Hook
@@ -67,11 +89,16 @@ known entities.
 | \`cxt check --kind <kind>\` | Filter by entity kind (function/class/...) |
 | \`cxt check --ci\` | CI mode (JSON output, exit 1 on critical) |
 | \`cxt bs\` | Scan for bad code smells (BS patterns) |
+| \`cxt loc\` | File LOC report sorted by size |
+| \`cxt loc --dir <path>\` | LOC for a specific directory |
+| \`cxt loc --no-blank --no-comments\` | Code-only LOC (exclude blank/comment lines) |
+| \`cxt loc --entities\` | LOC with registered entity count per file |
 | \`cxt export\` | GraphQL-like SDL snapshot of codebase structure |
 | \`cxt export -o .cxt/structure.gql\` | Save snapshot to file (LLM-friendly) |
 | \`cxt annotate <name> --deprecate "reason"\` | Mark entity deprecated |
 | \`cxt annotate <name> --tag key=value\` | Tag entity |
 | \`cxt inject\` | Output registry summary (SessionStart hook) |
+| \`cxt init --target local-claude\` | Inject cxt guide into project CLAUDE.md |
 
 ### Ignore Rules
 
@@ -81,11 +108,12 @@ known entities.
 
 ### When to use cxt
 
-- **Before modifying code**: run \`cxt check <file>\` to see entity status, risk, test coverage
-- **Before exploring an unfamiliar repo**: run \`cxt export\` once and read the SDL — it replaces dozens of glob/grep calls
-- **After major changes**: run \`cxt scan\` to update the registry
-- **Code review**: run \`cxt bs\` to catch bad patterns before commit
-- **CI pipeline**: use \`cxt check --ci\` for automated quality gates
+- **Before modifying code**: \`cxt check <file>\` — entity status, risk, test coverage
+- **Before exploring an unfamiliar repo**: \`cxt export\` once — replaces dozens of glob/grep calls
+- **Understanding file sizes**: \`cxt loc\` — spot oversized files before reviewing
+- **After major changes**: \`cxt scan\` — update the registry
+- **Code review**: \`cxt bs\` — catch bad patterns before commit
+- **CI pipeline**: \`cxt check --ci\` — JSON output, exit 1 on critical issues
 ${CXT_SECTION_END}`;
 }
 
@@ -185,19 +213,21 @@ function applyToFile(
   return 'added';
 }
 
-function resolveTargets(targetOpt: string | undefined): TargetSpec[] {
+function resolveTargets(targetOpt: string | undefined, cwd: string): TargetSpec[] {
   const raw = (targetOpt ?? 'claude').split(',').map((s) => s.trim()).filter(Boolean);
+  const localTargets = buildLocalTargets(cwd);
+  const allTargets = { ...GLOBAL_TARGETS, ...localTargets };
   const out: TargetSpec[] = [];
   const invalid: string[] = [];
 
   for (const name of raw) {
     if (name === 'all') {
-      for (const t of Object.values(TARGETS)) {
+      for (const t of Object.values(allTargets)) {
         if (!out.find((x) => x.name === t.name)) out.push(t);
       }
       continue;
     }
-    const spec = TARGETS[name];
+    const spec = allTargets[name];
     if (!spec) {
       invalid.push(name);
       continue;
@@ -219,7 +249,9 @@ export async function handleInit(opts: {
   dry?: boolean;
   target?: string;
   path?: string;
+  cwd?: string;
 }): Promise<void> {
+  const cwd = opts.cwd ?? process.cwd();
   const cxtSection = getCxtSection();
 
   const specs: TargetSpec[] = [];
@@ -233,7 +265,7 @@ export async function handleInit(opts: {
       label: 'Custom',
     });
   } else {
-    specs.push(...resolveTargets(opts.target));
+    specs.push(...resolveTargets(opts.target, cwd));
   }
 
   console.log(`\n${c.bold}cxt init${c.reset} ${opts.remove ? '(remove)' : ''}${opts.dry ? ' [dry-run]' : ''}`);

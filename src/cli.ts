@@ -71,6 +71,8 @@ ${c.bold}Examples:${c.reset}
   ${c.cyan}cxt annotate file::fn --tag team=backend${c.reset}
   ${c.cyan}cxt inject${c.reset}                        ${m.helpInject}
   ${c.cyan}cxt export -o .cxt/structure.gql${c.reset}  Export SDL snapshot for LLMs
+  ${c.cyan}cxt loc${c.reset}                           File LOC report (sorted by size)
+  ${c.cyan}cxt loc --dir src --no-blank${c.reset}      LOC excluding blank lines
 
 ${c.bold}${m.helpSupportedLangs}:${c.reset}
   TypeScript/JS  Python  Go  Rust  Java  C/C++  C#
@@ -199,11 +201,33 @@ program
     await handleExport(opts);
   });
 
+// ---- loc ----
+program
+  .command('loc')
+  .description('Show LOC (lines of code) per file, sorted by size')
+  .option('--dir <path>', 'Limit to files under this directory prefix')
+  .option('--ext <exts>', 'Comma-separated extensions to include (e.g. ts,py)')
+  .option('--no-blank', 'Exclude blank lines from count')
+  .option('--no-comments', 'Exclude comment lines from count')
+  .option('--entities', 'Show registered entity count per file (requires prior scan)')
+  .option('--project <id>', 'Project ID override (used with --entities)')
+  .action(async (opts) => {
+    const { handleLoc } = await import('./cli/locHandler.js');
+    await handleLoc({
+      dir: opts.dir,
+      ext: opts.ext,
+      noBlank: opts.blank === false,
+      noComments: opts.comments === false,
+      entities: opts.entities,
+      project: opts.project,
+    });
+  });
+
 // ---- init ----
 program
   .command('init')
   .description('Inject cxt usage guide into AI agent instruction files (claude/codex/gemini)')
-  .option('--target <list>', 'Comma-separated targets: claude,codex,gemini,all (default: claude)')
+  .option('--target <list>', 'Targets: claude,codex,gemini,local-claude,local-agent,local-agents,all (default: claude)')
   .option('--path <file>', 'Custom file path (overrides --target)')
   .option('--remove', 'Remove cxt section from target files')
   .option('--dry', 'Preview changes without writing')
