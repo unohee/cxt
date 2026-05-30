@@ -18,6 +18,9 @@ import type { SqliteRegistryStore } from './sqliteStore.js';
 const MAX_FILE_SIZE = 512 * 1024;
 const MAX_DEPTH = 15;
 const SCAN_TIMEOUT_MS = 60_000;
+// 블록 끝 탐색 시 한 엔티티가 차지할 수 있는 최대 줄 수(무한루프 방지 backstop).
+// 큰 클래스/함수가 흔하므로 넉넉히. 파일 자체가 512KB로 제한돼 있어 안전.
+const MAX_BLOCK_SCAN = 5000;
 
 // ============ 언어 정의 ============
 
@@ -30,15 +33,32 @@ interface LanguageConfig {
   blockStyle: 'brace' | 'indent';
   skipIndented?: EntityKind[];
   commentPrefixes: string[];
+  // 클래스 본문 내 메서드 추출용 패턴 (정의된 언어만 메서드 추출 수행).
+  // match[1]=메서드명, match[sigGroup]=시그니처(괄호 포함).
+  methodPattern?: { pattern: RegExp; sigGroup?: number };
+  // 메서드로 오인하면 안 되는 키워드 (제어문 등).
+  methodExclude?: Set<string>;
 }
 
 // ---- TypeScript / JavaScript ----
+const METHOD_EXCLUDE = new Set([
+  'if', 'for', 'while', 'switch', 'catch', 'return', 'function', 'await',
+  'do', 'else', 'with', 'super', 'constructor', 'typeof', 'new', 'case',
+]);
+
 const TS_CONFIG: LanguageConfig = {
   extensions: ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'],
   testPatterns: [/\.test\.[tj]sx?$/, /\.spec\.[tj]sx?$/],
   blockStyle: 'brace',
   skipIndented: ['function'],
   commentPrefixes: ['//', '*', '/*'],
+  // 클래스 메서드: [접근제어자] [static] [async] [get/set] name(params)[: Ret] {
+  // 화살표 프로퍼티(name = () =>)는 별도. 여기선 메서드 문법만.
+  methodPattern: {
+    pattern: /^(?:public\s+|private\s+|protected\s+|static\s+|readonly\s+|async\s+|get\s+|set\s+|override\s+|abstract\s+)*([A-Za-z_]\w*)\s*(\([^)]*\)(?:\s*:\s*[^{;]+)?)\s*\{/,
+    sigGroup: 2,
+  },
+  methodExclude: METHOD_EXCLUDE,
   patterns: [
     { pattern: /^export\s+(?:async\s+)?function\s+(\w+)\s*(\([^)]*\)(?:\s*:\s*[^{]+)?)?\s*\{?/, kind: 'function', sigGroup: 2 },
     { pattern: /^export\s+(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)\s*(?::\s*\w[^=]*)?\s*=>|function)/, kind: 'function' },
@@ -281,6 +301,16 @@ export function extractEntities(
         paramCount: complexity.paramCount,
       });
 
+      // 클래스라면 본문 범위에서 직속 메서드를 추출한다 (methodPattern 정의 언어만).
+      if (kind === 'class' && lineEnd !== undefined && config.methodPattern) {
+        for (const method of extractMethods(lines, i, lineEnd, config, filePath, name)) {
+          const mkey = `${method.name}:${method.lineStart - 1}`;
+          if (seen.has(mkey)) continue;
+          seen.add(mkey);
+          entities.push(method);
+        }
+      }
+
       break;
     }
   }
@@ -289,6 +319,82 @@ export function extractEntities(
 }
 
 // ============ 블록 끝 추정 ============
+
+/**
+ * 클래스 본문(classStart..classEnd, 0-based) 범위에서 직속 메서드를 추출한다.
+ * 클래스 바로 다음 들여쓰기 단계(중첩 함수/객체 리터럴이 아닌)만 대상으로,
+ * 제어 키워드(if/for/...)와 constructor는 제외한다. brace 언어 전용.
+ * 메서드명은 `qualified` 형태로 클래스명을 prefix해 동명 메서드 충돌을 줄인다.
+ */
+function extractMethods(
+  lines: string[],
+  classStart: number,
+  classEnd: number,
+  config: LanguageConfig,
+  filePath: string,
+  className: string,
+): ExtractedEntity[] {
+  const mp = config.methodPattern;
+  if (!mp) return [];
+  const exclude = config.methodExclude ?? new Set<string>();
+  const methods: ExtractedEntity[] = [];
+
+  // 클래스 헤더 줄의 들여쓰기. 메서드는 그보다 한 단계 더 들어간 깊이여야 한다.
+  const classIndent = lines[classStart].length - lines[classStart].trimStart().length;
+
+  for (let i = classStart + 1; i < classEnd; i++) {
+    const raw = lines[i];
+    const trimmed = raw.trimStart();
+    if (!trimmed) continue;
+    if (config.commentPrefixes.some(p => trimmed.startsWith(p))) continue;
+
+    const indent = raw.length - trimmed.length;
+    // 클래스 직속만: 들여쓰기가 클래스 헤더보다 깊되, 중첩 블록(더 깊은 곳)은 제외.
+    // 본문 메서드는 보통 classIndent + 2(또는 +4). 깊이 차가 1~4칸인 줄만 후보.
+    const delta = indent - classIndent;
+    if (delta <= 0 || delta > 4) continue;
+
+    // 멀티라인 시그니처 메서드(예: name(\n  arg,\n): T {) 지원 — 본문 `{`가
+    // 나올 때까지(최대 8줄) 합쳐서 매칭 시도. 한 줄로 끝나면 그대로.
+    let probe = trimmed;
+    if (!/\{\s*$/.test(trimmed) && !trimmed.includes('{')) {
+      for (let j = 1; j <= 8 && i + j < classEnd; j++) {
+        probe += ' ' + lines[i + j].trim();
+        if (lines[i + j].includes('{')) break;
+      }
+    }
+    const m = probe.match(mp.pattern);
+    if (!m) continue;
+    const name = m[1];
+    if (!name || exclude.has(name)) continue;
+
+    const lineEnd = findBraceBlockEnd(lines, i);
+    if (lineEnd === undefined) continue;
+    // 클래스 범위를 벗어나면(파싱 오류) 스킵.
+    if (lineEnd > classEnd) continue;
+
+    const signature = mp.sigGroup ? m[mp.sigGroup]?.trim() : undefined;
+    const metrics = computeBlockMetrics(lines, i, lineEnd);
+
+    // 이름은 단순 메서드명(호출부 `.method(`와 매칭되도록). 동명 충돌은
+    // qualified_name(file::name)과 동일파일-우선 해소로 구분된다. 시그니처에
+    // 소속 클래스를 남겨 표시/디버깅에 활용.
+    methods.push({
+      kind: 'function',
+      name,
+      filePath,
+      lineStart: i + 1,
+      lineEnd: lineEnd + 1,
+      signature: signature ? `${signature}  // ${className}` : `// ${className}`,
+      isExported: false,
+      loc: metrics.loc,
+      nestingDepth: metrics.nestingDepth,
+      paramCount: metrics.paramCount,
+    });
+  }
+
+  return methods;
+}
 
 function findBraceBlockEnd(lines: string[], startIdx: number): number | undefined {
   // brace 카운팅으로 블록 끝을 찾는다. 핵심 함정: 멀티라인 시그니처의 타입 주석
@@ -301,7 +407,7 @@ function findBraceBlockEnd(lines: string[], startIdx: number): number | undefine
   // 시그니처가 끝나고 본문 `{`가 등장한 적이 있는지(한 줄 함수 판정용).
   let sawAnyBrace = false;
 
-  for (let i = startIdx; i < Math.min(startIdx + 500, lines.length); i++) {
+  for (let i = startIdx; i < Math.min(startIdx + MAX_BLOCK_SCAN, lines.length); i++) {
     for (const ch of lines[i]) {
       if (ch === '{') { depth++; sawAnyBrace = true; }
       if (ch === '}') depth--;
@@ -323,7 +429,7 @@ function findIndentBlockEnd(lines: string[], startIdx: number): number | undefin
   const startLine = lines[startIdx];
   const baseIndent = startLine.length - startLine.trimStart().length;
 
-  for (let i = startIdx + 1; i < Math.min(startIdx + 500, lines.length); i++) {
+  for (let i = startIdx + 1; i < Math.min(startIdx + MAX_BLOCK_SCAN, lines.length); i++) {
     const line = lines[i];
     if (line.trim().length === 0) continue;
     const currentIndent = line.length - line.trimStart().length;

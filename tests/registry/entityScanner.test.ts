@@ -59,6 +59,55 @@ describe('extractEntities — TypeScript', () => {
     expect(scan.loc).toBeGreaterThanOrEqual(7);
   });
 
+  it('extracts class methods as function entities (incl. multi-line signature), excluding control keywords', () => {
+    const src = [
+      'export class Store {',                       // 1
+      '  constructor() {}',                          // 2 — excluded
+      '  addItem(x: number): void {',                // 3 — method
+      '    if (x > 0) {',                            // 4 — `if` must NOT be a method
+      '      return;',                               // 5
+      '    }',                                       // 6
+      '  }',                                          // 7
+      '  query(',                                     // 8 — multi-line signature method
+      '    name: string,',                           // 9
+      '  ): string {',                                // 10
+      '    return name;',                            // 11
+      '  }',                                          // 12
+      '}',                                            // 13
+    ].join('\n');
+
+    const ents = extractEntities(src, 'src/store.ts', 'typescript');
+    const fnNames = ents.filter((e) => e.kind === 'function').map((e) => e.name);
+    expect(fnNames).toContain('addItem');
+    expect(fnNames).toContain('query');         // multi-line signature picked up
+    expect(fnNames).not.toContain('if');        // control keyword excluded
+    expect(fnNames).not.toContain('constructor'); // excluded
+    expect(fnNames).not.toContain('return');
+
+    const query = ents.find((e) => e.name === 'query')!;
+    expect(query.lineStart).toBe(8);
+    expect(query.lineEnd).toBe(12);
+  });
+
+  it('does not truncate a large class body at the old 500-line cap (MAX_BLOCK_SCAN)', () => {
+    // Build a class whose body exceeds 500 lines — the old cap reported lineEnd
+    // undefined, which silently dropped all its methods from the registry.
+    const body = Array.from({ length: 600 }, (_, k) => `    const v${k} = ${k};`);
+    const src = [
+      'export class Big {',
+      '  run(): number {',
+      ...body,
+      '    return 0;',
+      '  }',
+      '}',
+    ].join('\n');
+
+    const ents = extractEntities(src, 'src/big.ts', 'typescript');
+    const big = ents.find((e) => e.name === 'Big')!;
+    expect(big.lineEnd).toBeGreaterThan(600); // body fully spanned, not cut at 500
+    expect(ents.find((e) => e.name === 'run')).toBeDefined();
+  });
+
   it('handles a single-line function body on line 1 (lineEnd=0 must not collapse to undefined)', () => {
     // Regression: findBraceBlockEnd returns 0-based index; a single-line function
     // on line 1 ends at index 0. The caller `lineEnd ? lineEnd+1 : undefined`
