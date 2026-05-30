@@ -716,6 +716,147 @@ export class SqliteRegistryStore {
     }));
   }
 
+  // ============ 관계 그래프 (스캐너 적재 + 질의) ============
+
+  /**
+   * 한 프로젝트의 모든 관계를 일괄 삭제 후 새로 적재한다.
+   * 스캐너 2-pass에서 stale edge를 제거하기 위해 사용.
+   * source_id가 해당 프로젝트 엔티티인 edge만 정리한다.
+   */
+  replaceRelationsForProject(
+    projectId: string,
+    relations: Array<{ sourceId: string; targetId: string; relationType: RelationType }>,
+  ): number {
+    const deleteStale = this.db.prepare(`
+      DELETE FROM code_entity_relations
+      WHERE source_id IN (SELECT id FROM code_entities WHERE project_id = ?)
+    `);
+    const insert = this.db.prepare(
+      'INSERT OR IGNORE INTO code_entity_relations (source_id, target_id, relation_type) VALUES (?, ?, ?)'
+    );
+    const tx = this.db.transaction((rels: typeof relations) => {
+      deleteStale.run(projectId);
+      let n = 0;
+      for (const r of rels) {
+        const res = insert.run(r.sourceId, r.targetId, r.relationType);
+        n += res.changes;
+      }
+      return n;
+    });
+    return tx(relations);
+  }
+
+  /** 정방향: 이 엔티티가 호출/사용하는 대상 (callees). */
+  getOutgoingRelations(
+    entityId: string,
+    relationType?: RelationType,
+  ): Array<{ targetId: string; targetName: string; targetFile: string; relationType: RelationType }> {
+    const typeFilter = relationType ? 'AND r.relation_type = ?' : '';
+    const params = relationType ? [entityId, relationType] : [entityId];
+    return (this.db.prepare(`
+      SELECT r.target_id, e.name as target_name, e.file_path as target_file, r.relation_type
+      FROM code_entity_relations r
+      JOIN code_entities e ON e.id = r.target_id
+      WHERE r.source_id = ? ${typeFilter}
+    `).all(...params) as Array<RelationRow & { target_file: string }>).map(r => ({
+      targetId: r.target_id,
+      targetName: r.target_name,
+      targetFile: r.target_file,
+      relationType: r.relation_type as RelationType,
+    }));
+  }
+
+  /** 역방향: 이 엔티티를 호출/사용하는 주체 (callers). who-calls의 핵심. */
+  getIncomingRelations(
+    entityId: string,
+    relationType?: RelationType,
+  ): Array<{ sourceId: string; sourceName: string; sourceFile: string; relationType: RelationType }> {
+    const typeFilter = relationType ? 'AND r.relation_type = ?' : '';
+    const params = relationType ? [entityId, relationType] : [entityId];
+    return (this.db.prepare(`
+      SELECT r.source_id, e.name as source_name, e.file_path as source_file, r.relation_type
+      FROM code_entity_relations r
+      JOIN code_entities e ON e.id = r.source_id
+      WHERE r.target_id = ? ${typeFilter}
+    `).all(...params) as Array<{ source_id: string; source_name: string; source_file: string; relation_type: string }>).map(r => ({
+      sourceId: r.source_id,
+      sourceName: r.source_name,
+      sourceFile: r.source_file,
+      relationType: r.relation_type as RelationType,
+    }));
+  }
+
+  /**
+   * transitive 역방향 BFS — "X를 고치면 영향받는 엔티티 전체".
+   * depth별로 grouping해 반환. 사이클 안전.
+   */
+  getImpactSet(
+    rootEntityId: string,
+    maxDepth = 5,
+  ): Array<{ id: string; name: string; filePath: string; depth: number }> {
+    const visited = new Set<string>([rootEntityId]);
+    const result: Array<{ id: string; name: string; filePath: string; depth: number }> = [];
+    let frontier = [rootEntityId];
+    const stmt = this.db.prepare(`
+      SELECT DISTINCT r.source_id, e.name, e.file_path
+      FROM code_entity_relations r
+      JOIN code_entities e ON e.id = r.source_id
+      WHERE r.target_id = ?
+    `);
+    for (let depth = 1; depth <= maxDepth && frontier.length > 0; depth++) {
+      const next: string[] = [];
+      for (const id of frontier) {
+        const callers = stmt.all(id) as Array<{ source_id: string; name: string; file_path: string }>;
+        for (const c of callers) {
+          if (visited.has(c.source_id)) continue;
+          visited.add(c.source_id);
+          result.push({ id: c.source_id, name: c.name, filePath: c.file_path, depth });
+          next.push(c.source_id);
+        }
+      }
+      frontier = next;
+    }
+    return result;
+  }
+
+  /** 프로젝트 전체 정방향 edge를 source_id별로 그룹핑해 일괄 반환 (export N+1 방지). */
+  getAllOutgoingRelations(projectId: string): Map<string, Array<{ name: string; type: RelationType }>> {
+    const rows = this.db.prepare(`
+      SELECT r.source_id, t.name as target_name, r.relation_type
+      FROM code_entity_relations r
+      JOIN code_entities s ON s.id = r.source_id
+      JOIN code_entities t ON t.id = r.target_id
+      WHERE s.project_id = ?
+    `).all(projectId) as Array<{ source_id: string; target_name: string; relation_type: string }>;
+    const map = new Map<string, Array<{ name: string; type: RelationType }>>();
+    for (const r of rows) {
+      const arr = map.get(r.source_id) ?? [];
+      arr.push({ name: r.target_name, type: r.relation_type as RelationType });
+      map.set(r.source_id, arr);
+    }
+    return map;
+  }
+
+  /** 이름(정확 일치)으로 active 엔티티 조회 — 관계 질의 진입점. */
+  findEntitiesByName(name: string, projectId?: string): CodeEntity[] {
+    const projFilter = projectId ? 'AND project_id = ?' : '';
+    const params = projectId ? [name, projectId] : [name];
+    const rows = this.db.prepare(`
+      SELECT * FROM code_entities
+      WHERE name = ? AND status != 'broken' ${projFilter}
+    `).all(...params) as EntityRow[];
+    return rows.map(r => this.rowToEntity(r));
+  }
+
+  /** 프로젝트 전체 relation 수 (검증/통계용). */
+  countRelations(projectId: string): number {
+    const row = this.db.prepare(`
+      SELECT COUNT(*) as cnt FROM code_entity_relations r
+      WHERE r.source_id IN (SELECT id FROM code_entities WHERE project_id = ?)
+    `).get(projectId) as CountRow;
+    return row.cnt;
+  }
+
   // ============ 이슈 연결 ============
 
   linkIssue(entityId: string, issueId: string): void {
@@ -861,15 +1002,20 @@ export class SqliteRegistryStore {
     return this.rowsToEntities(rows);
   }
 
-  searchEntities(query: string, limit = 20): CodeEntity[] {
+  searchEntities(query: string, limit = 20, projectId?: string): CodeEntity[] {
+    // projectId가 주어지면 해당 프로젝트로 스코프를 좁힌다. 미지정 시 전역 검색.
+    const projClause = projectId ? 'AND e.project_id = ?' : '';
+    const projClausePlain = projectId ? 'AND project_id = ?' : '';
+
     let ftsRows: EntityRow[] = [];
     try {
+      const ftsParams: unknown[] = projectId ? [query, projectId, limit] : [query, limit];
       ftsRows = this.db.prepare(`
         SELECT e.* FROM code_entities e
         INNER JOIN code_entities_fts ON code_entities_fts.rowid = e.rowid
-        WHERE code_entities_fts MATCH ?
+        WHERE code_entities_fts MATCH ? ${projClause}
         LIMIT ?
-      `).all(query, limit) as EntityRow[];
+      `).all(...ftsParams) as EntityRow[];
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (!msg.includes('fts5') && !msg.includes('MATCH')) {
@@ -883,11 +1029,14 @@ export class SqliteRegistryStore {
       const escapedQuery = query.replace(/[%_]/g, ch => `\\${ch}`);
       const likePattern = `%${escapedQuery}%`;
       const existingIds = new Set(results.map(e => e.id));
+      const likeParams: unknown[] = [likePattern, likePattern, likePattern, likePattern, likePattern];
+      if (projectId) likeParams.push(projectId);
+      likeParams.push(limit);
       const fallbackRows = this.db.prepare(`
         SELECT * FROM code_entities
-        WHERE (name LIKE ? ESCAPE '\\' OR qualified_name LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR notes LIKE ? ESCAPE '\\' OR signature LIKE ? ESCAPE '\\')
+        WHERE (name LIKE ? ESCAPE '\\' OR qualified_name LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR notes LIKE ? ESCAPE '\\' OR signature LIKE ? ESCAPE '\\') ${projClausePlain}
         LIMIT ?
-      `).all(likePattern, likePattern, likePattern, likePattern, likePattern, limit) as EntityRow[];
+      `).all(...likeParams) as EntityRow[];
       const fallback = this.rowsToEntities(fallbackRows)
         .filter(e => !existingIds.has(e.id));
 

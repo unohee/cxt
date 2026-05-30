@@ -165,6 +165,14 @@ program
       console.log(`  Untested:        ${stats.untested}`);
       console.log(`  High risk:       ${stats.highRisk}`);
 
+      // 관계 그래프 가용성 — LLM에게 who-calls/impact 사용 가능 여부를 알린다.
+      const relCount = store.countRelations(projectId);
+      if (relCount > 0) {
+        console.log(`  Call graph:      ${relCount} edges — use \`cxt who-calls <name>\` / \`cxt impact <name>\` instead of grep`);
+      } else if (stats.total > 0) {
+        console.log(`  Call graph:      none — run \`cxt scan\` to enable who-calls/impact relation queries`);
+      }
+
       if (stats.byKind.length > 0) {
         console.log(`  By kind:`);
         for (const { kind, count } of stats.byKind) {
@@ -234,6 +242,44 @@ program
   .action(async (opts) => {
     const { handleInit } = await import('./cli/initHandler.js');
     await handleInit(opts);
+  });
+
+// ---- who-calls (역방향 관계) ----
+program
+  .command('who-calls <name>')
+  .alias('callers')
+  .description('Show entities that reference (call/extend) the given entity')
+  .option('--project <id>', 'Project ID override')
+  .option('--type <type>', 'Filter by relation type: calls | extends | implements')
+  .option('--json', 'JSON output')
+  .action(async (name, opts) => {
+    const { handleWhoCalls } = await import('./cli/relationHandler.js');
+    await handleWhoCalls(name, opts);
+  });
+
+// ---- calls (정방향 관계) ----
+program
+  .command('calls <name>')
+  .alias('callees')
+  .description('Show entities referenced (called/extended) by the given entity')
+  .option('--project <id>', 'Project ID override')
+  .option('--type <type>', 'Filter by relation type: calls | extends | implements')
+  .option('--json', 'JSON output')
+  .action(async (name, opts) => {
+    const { handleCalls } = await import('./cli/relationHandler.js');
+    await handleCalls(name, opts);
+  });
+
+// ---- impact (transitive 역방향) ----
+program
+  .command('impact <name>')
+  .description('Transitive impact analysis: all entities affected if <name> changes')
+  .option('--project <id>', 'Project ID override')
+  .option('--depth <n>', 'Max BFS depth (default: 5)')
+  .option('--json', 'JSON output')
+  .action(async (name, opts) => {
+    const { handleImpact } = await import('./cli/relationHandler.js');
+    await handleImpact(name, opts);
   });
 
 program.parse();

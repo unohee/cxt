@@ -10,7 +10,8 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { join, extname, dirname } from 'node:path';
 import { getRegistryStore } from './sqliteStore.js';
 import { buildIgnoreConfig, shouldSkipDir } from './ignoreRules.js';
-import type { EntityKind, RiskLevel } from './schema.js';
+import type { EntityKind, RiskLevel, RelationType } from './schema.js';
+import type { SqliteRegistryStore } from './sqliteStore.js';
 
 // ============ 상수 ============
 
@@ -271,7 +272,8 @@ export function extractEntities(
         name,
         filePath,
         lineStart: i + 1,
-        lineEnd: lineEnd ? lineEnd + 1 : undefined,
+        // lineEnd가 0(파일 첫 줄에서 끝나는 블록)일 때 falsy로 삼켜지지 않도록 명시 비교.
+        lineEnd: lineEnd !== undefined ? lineEnd + 1 : undefined,
         signature,
         isExported,
         loc: complexity.loc,
@@ -289,15 +291,30 @@ export function extractEntities(
 // ============ 블록 끝 추정 ============
 
 function findBraceBlockEnd(lines: string[], startIdx: number): number | undefined {
+  // brace 카운팅으로 블록 끝을 찾는다. 핵심 함정: 멀티라인 시그니처의 타입 주석
+  // (예: `options?: { a?: number },`)은 같은 줄에서 `{`와 `}`가 균형을 이루므로
+  // '줄 끝 depth'가 0으로 유지된다. 본문은 `) {` 처럼 열린 `{`가 줄 끝까지 남아
+  // '줄 끝 depth > 0'가 되는 순간 시작된다. 따라서 본문 시작은 "줄을 끝냈을 때
+  // depth가 양수로 남은 첫 줄"로 판정하고, 그 이후 depth가 0으로 닫히면 종료한다.
   let depth = 0;
-  let started = false;
+  let bodyStarted = false;
+  // 시그니처가 끝나고 본문 `{`가 등장한 적이 있는지(한 줄 함수 판정용).
+  let sawAnyBrace = false;
 
   for (let i = startIdx; i < Math.min(startIdx + 500, lines.length); i++) {
     for (const ch of lines[i]) {
-      if (ch === '{') { depth++; started = true; }
+      if (ch === '{') { depth++; sawAnyBrace = true; }
       if (ch === '}') depth--;
     }
-    if (started && depth <= 0) return i;
+    if (!bodyStarted) {
+      // 줄 끝에 열린 brace가 남으면 본문 시작 — inline 균형 {}는 여기서 걸러진다.
+      if (depth > 0) { bodyStarted = true; continue; }
+      // 한 줄 함수: 이 줄에서 본문 여는 `) {` / `=> {`가 열렸다 닫혔다면 그 줄이 끝.
+      // (시그니처의 inline 타입 주석 `{ ... }`은 이 패턴에 안 걸려 제외된다.)
+      if (sawAnyBrace && depth <= 0 && /(\)|=>)\s*\{/.test(lines[i])) return i;
+      continue;
+    }
+    if (depth <= 0) return i;
   }
   return undefined;
 }
@@ -369,6 +386,118 @@ function computeRisk(complexityScore: number, hasTests: boolean): RiskLevel {
   return 'low';
 }
 
+// ============ 참조 추출 (관계 그래프) ============
+//
+// 각 엔티티의 본문 라인 범위를 스캔해 호출(callee)·상속 대상 식별자를 수집하고,
+// 파일 단위 import 경로를 추출한다. 2-pass 스캔에서 식별자 → entityId로 해소.
+// AST가 아니므로 동명이인 오지는 동일 프로젝트 슬롯 + 노이즈 필터로 완화한다.
+
+export interface ReferenceSet {
+  /** 본문에서 호출된 식별자 (callee 후보). */
+  callNames: Set<string>;
+  /** extends/implements 대상 식별자. */
+  baseNames: Set<string>;
+  /** import한 모듈 경로 (상대경로만, 동일 프로젝트 파일 해소용). */
+  importPaths: Set<string>;
+}
+
+// 호출식: `foo(` 또는 `Bar.foo(` 의 마지막 식별자. 선언 자체(def/function 등)는 별도 제외.
+const CALL_PATTERN = /(?:^|[^.\w])([A-Za-z_]\w*)\s*\(/g;
+// 멤버 호출: `x.method(` 의 method 도 후보로 (메서드 매칭용).
+const MEMBER_CALL_PATTERN = /\.([A-Za-z_]\w*)\s*\(/g;
+
+// 언어별 상속/구현 추출 패턴.
+const BASE_PATTERNS: Partial<Record<Language, RegExp[]>> = {
+  typescript: [/\bextends\s+([A-Za-z_]\w*)/g, /\bimplements\s+([A-Za-z_][\w,\s]*)/g],
+  python: [/^\s*class\s+\w+\s*\(([^)]*)\)/],
+  java: [/\bextends\s+([A-Za-z_]\w*)/g, /\bimplements\s+([A-Za-z_][\w,\s.]*)/g],
+  csharp: [/:\s*([A-Za-z_][\w,\s<>.]*)\s*[{]/],
+  go: [],
+  rust: [/\bimpl(?:<[^>]*>)?\s+(\w+)\s+for\s+(\w+)/g],
+  c: [],
+  cpp: [/(?:class|struct)\s+\w+\s*:\s*(?:public|private|protected)?\s*([A-Za-z_][\w:]*)/g],
+};
+
+// 언어별 import/use 경로 추출 (상대경로만 관심).
+const IMPORT_PATTERNS: Partial<Record<Language, RegExp[]>> = {
+  typescript: [/(?:import|export)\s+.*?\s+from\s+['"](\.[^'"]+)['"]/g, /require\(\s*['"](\.[^'"]+)['"]\s*\)/g],
+  python: [/^\s*from\s+(\.[.\w]*)\s+import\b/gm, /^\s*import\s+([.\w]+)/gm],
+  go: [/^\s*"([^"]+)"/gm],
+  rust: [/^\s*use\s+(crate::[\w:]+|self::[\w:]+|super::[\w:]+)/gm],
+  java: [/^\s*import\s+([\w.]+);/gm],
+  c: [/^\s*#include\s+"([^"]+)"/gm],
+  cpp: [/^\s*#include\s+"([^"]+)"/gm],
+  csharp: [/^\s*using\s+([\w.]+);/gm],
+};
+
+/**
+ * 한 파일에서 엔티티별 참조 집합을 추출한다.
+ * entities는 이 파일에서 추출된 엔티티 목록 (라인 범위 보유).
+ * 반환: 엔티티 lineStart → ReferenceSet 맵.
+ */
+export function extractReferences(
+  content: string,
+  entities: ExtractedEntity[],
+  language: Language,
+): Map<number, ReferenceSet> {
+  const lines = content.split('\n');
+  const result = new Map<number, ReferenceSet>();
+
+  // 파일 단위 import 경로 (모든 엔티티가 공유).
+  const fileImports = new Set<string>();
+  for (const re of IMPORT_PATTERNS[language] ?? []) {
+    re.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(content)) !== null) {
+      if (m[1]) fileImports.add(m[1].trim());
+    }
+  }
+
+  const basePatterns = BASE_PATTERNS[language] ?? [];
+
+  for (const ent of entities) {
+    if (ent.kind !== 'function' && ent.kind !== 'class') continue;
+    const start = ent.lineStart - 1;
+    const end = (ent.lineEnd ?? ent.lineStart) - 1;
+    const body = lines.slice(start, end + 1).join('\n');
+
+    const callNames = new Set<string>();
+    for (const re of [CALL_PATTERN, MEMBER_CALL_PATTERN]) {
+      re.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(body)) !== null) {
+        const name = m[1];
+        if (!name || RESERVED_NAMES.has(name)) continue;
+        if (name === ent.name) continue; // 자기 선언/재귀 제외
+        callNames.add(name);
+      }
+    }
+
+    const baseNames = new Set<string>();
+    const head = lines.slice(start, Math.min(start + 3, end + 1)).join('\n');
+    for (const re of basePatterns) {
+      re.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(head)) !== null) {
+        // 콤마 구분(implements A, B) 분해.
+        for (const tok of (m[1] ?? '').split(/[,\s<>(){}:]+/)) {
+          const t = tok.trim();
+          if (t && /^[A-Z]/.test(t) && !RESERVED_NAMES.has(t)) baseNames.add(t);
+        }
+        if (m[2]) {
+          const t = m[2].trim();
+          if (t && /^[A-Z]/.test(t)) baseNames.add(t);
+        }
+        if (!re.global) break;
+      }
+    }
+
+    result.set(ent.lineStart, { callNames, baseNames, importPaths: fileImports });
+  }
+
+  return result;
+}
+
 // ============ 테스트 매핑 ============
 
 interface TestFileInfo {
@@ -393,6 +522,12 @@ const RESERVED_NAMES = new Set([
   'assert_eq', 'assert_ne', 'assert', 'panic', 'println',
   'assertEquals', 'assertNotNull', 'assertThrows', 'assertTrue',
   'Assert', 'Fact', 'Theory',
+  // i18n / 공통 유틸 — 호출 그래프 노이즈 방지.
+  't', 'log', 'warn', 'error', 'info', 'debug', 'print', 'printf',
+  'sprintf', 'format', 'String', 'Number', 'parseInt', 'parseFloat',
+  'keys', 'values', 'entries', 'from', 'of', 'all', 'race', 'has', 'get', 'set',
+  'add', 'delete', 'clear', 'replace', 'match', 'test', 'exec', 'startsWith',
+  'endsWith', 'padEnd', 'padStart', 'toString', 'valueOf', 'call', 'apply', 'bind',
 ]);
 
 function parseTestFile(content: string, testFilePath: string, language: Language): TestFileInfo {
@@ -563,6 +698,7 @@ export interface ScanResult {
   registered: number;
   updated: number;
   removed: number;
+  relationsLoaded: number;
   testsMapped: number;
   errors: string[];
   durationMs: number;
@@ -584,6 +720,8 @@ export async function scanRepository(
   const ignoreConfig = buildIgnoreConfig(projectPath);
 
   const allExtracted: ExtractedEntity[] = [];
+  // 엔티티 qualifiedName → 참조 집합 (2-pass 관계 해소용).
+  const refsByQName = new Map<string, ReferenceSet>();
   const testFiles: TestFileInfo[] = [];
   const errors: string[] = [];
   const languageBreakdown: Record<string, number> = {};
@@ -633,6 +771,14 @@ export async function scanRepository(
           } else {
             const entities = extractEntities(content, entryRelPath, language);
             allExtracted.push(...entities);
+
+            // 참조 추출 (관계 그래프 2-pass용).
+            const refs = extractReferences(content, entities, language);
+            for (const ent of entities) {
+              const r = refs.get(ent.lineStart);
+              if (r) refsByQName.set(`${entryRelPath}::${ent.name}`, r);
+            }
+
             scannedFiles++;
             languageBreakdown[language] = (languageBreakdown[language] ?? 0) + 1;
 
@@ -732,15 +878,100 @@ export async function scanRepository(
     }
   }
 
+  // ============ 관계 그래프 적재 (2-pass) ============
+  const relations = resolveRelations(store, projectId, refsByQName);
+  const relationsLoaded = store.replaceRelationsForProject(projectId, relations);
+  if (verbose) {
+    console.log(`  [relations] ${relationsLoaded} edges loaded (${refsByQName.size} entities scanned for refs)`);
+  }
+
   return {
     scanned: scannedFiles,
     extracted: allExtracted.length,
     registered,
     updated,
     removed,
+    relationsLoaded,
     testsMapped,
     errors,
     durationMs: Date.now() - startTime,
     languageBreakdown,
   };
+}
+
+// ============ 관계 해소 ============
+//
+// 참조 집합(이름)을 실제 entityId edge로 변환한다. 동일 프로젝트 내부만.
+// 동명이인 오지 완화: (1) 같은 파일 후보 우선, (2) 그래도 모호하면 단일 후보일 때만 연결.
+
+interface RelResolveEntity {
+  id: string;
+  name: string;
+  kind: EntityKind;
+  filePath: string;
+}
+
+export function resolveRelations(
+  store: SqliteRegistryStore,
+  projectId: string,
+  refsByQName: Map<string, ReferenceSet>,
+): Array<{ sourceId: string; targetId: string; relationType: RelationType }> {
+  // 최신 active 엔티티 목록을 조회해 인덱스 구축.
+  const { entities } = store.listEntities({ projectId, limit: 200_000, offset: 0 });
+  const byName = new Map<string, RelResolveEntity[]>();
+  const byQName = new Map<string, RelResolveEntity>();
+  for (const e of entities) {
+    if (e.status === 'broken') continue;
+    const re: RelResolveEntity = { id: e.id, name: e.name, kind: e.kind, filePath: e.filePath };
+    byQName.set(e.qualifiedName, re);
+    const arr = byName.get(e.name);
+    if (arr) arr.push(re);
+    else byName.set(e.name, [re]);
+  }
+
+  // 이름 → 가장 적절한 후보 선택 (소스 파일 우선, 단일 후보면 그대로, 모호하면 null).
+  function resolve(name: string, sourceFile: string, kindFilter?: EntityKind): RelResolveEntity | null {
+    let candidates = byName.get(name);
+    if (!candidates || candidates.length === 0) return null;
+    if (kindFilter) {
+      const filtered = candidates.filter(c => c.kind === kindFilter);
+      if (filtered.length > 0) candidates = filtered;
+    }
+    if (candidates.length === 1) return candidates[0];
+    // 같은 파일 후보 우선 (지역 호출).
+    const sameFile = candidates.filter(c => c.filePath === sourceFile);
+    if (sameFile.length === 1) return sameFile[0];
+    // 여전히 모호 → 오지 방지 위해 스킵.
+    return null;
+  }
+
+  const edges: Array<{ sourceId: string; targetId: string; relationType: RelationType }> = [];
+  const seen = new Set<string>();
+
+  for (const [qName, refs] of refsByQName) {
+    const source = byQName.get(qName);
+    if (!source) continue;
+
+    for (const callName of refs.callNames) {
+      const target = resolve(callName, source.filePath);
+      if (!target || target.id === source.id) continue;
+      const key = `${source.id}|${target.id}|calls`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      edges.push({ sourceId: source.id, targetId: target.id, relationType: 'calls' });
+    }
+
+    for (const baseName of refs.baseNames) {
+      const target = resolve(baseName, source.filePath);
+      if (!target || target.id === source.id) continue;
+      // 인터페이스/타입이면 implements, 클래스면 extends.
+      const relType: RelationType = target.kind === 'type' ? 'implements' : 'extends';
+      const key = `${source.id}|${target.id}|${relType}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      edges.push({ sourceId: source.id, targetId: target.id, relationType: relType });
+    }
+  }
+
+  return edges;
 }

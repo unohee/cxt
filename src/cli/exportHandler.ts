@@ -74,7 +74,10 @@ function entityAttrs(e: CodeEntity): string {
   return attrs.join(', ');
 }
 
-function renderEntity(e: CodeEntity, indent: string): string[] {
+/** entityId → 정방향 관계 요약 (export edge 렌더링용). */
+type EdgeMap = Map<string, Array<{ name: string; type: string }>>;
+
+function renderEntity(e: CodeEntity, indent: string, edges?: EdgeMap): string[] {
   const lines: string[] = [];
   const sig = e.signature ? ` ${escapeString(e.signature)}` : '';
   const head = `${indent}${e.kind} ${e.name}${sig} [${entityAttrs(e)}]`;
@@ -89,6 +92,13 @@ function renderEntity(e: CodeEntity, indent: string): string[] {
   const unresolvedWarnings = (e.warnings ?? []).filter((w) => !w.resolved);
   for (const w of unresolvedWarnings) {
     inner.push(`${indent}  warning [${w.severity}/${w.category}]: "${escapeString(w.message)}"`);
+  }
+  const outEdges = edges?.get(e.id);
+  if (outEdges && outEdges.length > 0) {
+    const calls = outEdges.filter((r) => r.type === 'calls').map((r) => r.name);
+    const inherits = outEdges.filter((r) => r.type !== 'calls').map((r) => `${r.type}:${r.name}`);
+    if (calls.length > 0) inner.push(`${indent}  calls: ${calls.join(', ')}`);
+    if (inherits.length > 0) inner.push(`${indent}  ${inherits.join(', ')}`);
   }
 
   if (inner.length === 0) {
@@ -128,7 +138,7 @@ function aggregate(node: DirNode): DirAgg {
   return agg;
 }
 
-function renderDir(node: DirNode, indent: string): string[] {
+function renderDir(node: DirNode, indent: string, edges?: EdgeMap): string[] {
   const lines: string[] = [];
   const agg = aggregate(node);
   const flags: string[] = [
@@ -145,7 +155,7 @@ function renderDir(node: DirNode, indent: string): string[] {
 
   const sortedChildren = [...node.children.values()].sort((a, b) => a.name.localeCompare(b.name));
   for (const child of sortedChildren) {
-    lines.push(...renderDir(child, childIndent));
+    lines.push(...renderDir(child, childIndent, edges));
   }
 
   const sortedFiles = [...node.files.values()].sort((a, b) => a.fileName.localeCompare(b.fileName));
@@ -163,7 +173,7 @@ function renderDir(node: DirNode, indent: string): string[] {
 
     lines.push(`${childIndent}file "${file.fileName}" [${fileFlags.join(', ')}] {`);
     for (const e of ents) {
-      lines.push(...renderEntity(e, childIndent + '  '));
+      lines.push(...renderEntity(e, childIndent + '  ', edges));
     }
     lines.push(`${childIndent}}`);
   }
@@ -207,11 +217,13 @@ export async function handleExport(opts: ExportOptions): Promise<void> {
       `# stats: deprecated=${stats.deprecated}, untested=${stats.untested}, high_risk=${stats.highRisk}, with_warnings=${stats.withWarnings}`,
       `#`,
       `# Format: GraphQL-inspired tree. Each entity carries [status, risk, tested, lines].`,
-      `# Read this file instead of running glob/grep — it is the authoritative structure map.`,
+      `# Edges: 'calls:' lists callees; 'extends/implements:' list base types (same-project only).`,
+      `# Read this file instead of running glob/grep — it is the authoritative structure + call graph.`,
       ``,
     ];
 
-    const body = renderDir(root, '');
+    const edges = store.getAllOutgoingRelations(projectId);
+    const body = renderDir(root, '', edges);
     const out = header.concat(body).join('\n') + '\n';
 
     if (opts.output) {

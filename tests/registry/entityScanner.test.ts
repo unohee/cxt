@@ -34,6 +34,42 @@ describe('extractEntities — TypeScript', () => {
     expect(add.paramCount).toBe(2);
   });
 
+  it('does NOT truncate body end at a multi-line signature with inline-brace type annotation (findBraceBlockEnd regression)', () => {
+    // Regression: a type annotation like `opts?: { a?: number }` balances its
+    // own braces on one line, so a naive brace counter mistakes the signature
+    // for the body end and reports lineEnd at the signature line (e.g. 4 instead
+    // of 8). This truncates LOC/complexity AND drops call-graph edges.
+    const src = [
+      'export function scan(',          // 1
+      '  path: string,',                // 2
+      '  opts?: { depth?: number; verbose?: boolean },', // 3 — inline {} must NOT end the block
+      '): number {',                    // 4 — real body opens here
+      '  const x = path.length;',       // 5
+      '  if (opts?.verbose) return 0;',  // 6
+      '  return x;',                    // 7
+      '}',                              // 8 — real body end
+    ].join('\n');
+
+    const ents = extractEntities(src, 'src/scan.ts', 'typescript');
+    const scan = ents.find((e) => e.name === 'scan')!;
+    expect(scan).toBeDefined();
+    expect(scan.lineStart).toBe(1);
+    // Before the fix this was 4 (truncated at the signature). Must reach the real }.
+    expect(scan.lineEnd).toBe(8);
+    expect(scan.loc).toBeGreaterThanOrEqual(7);
+  });
+
+  it('handles a single-line function body on line 1 (lineEnd=0 must not collapse to undefined)', () => {
+    // Regression: findBraceBlockEnd returns 0-based index; a single-line function
+    // on line 1 ends at index 0. The caller `lineEnd ? lineEnd+1 : undefined`
+    // swallowed 0 as falsy → lineEnd undefined. Must report lineEnd=1.
+    const src = 'export function one() { return 1; }';
+    const ents = extractEntities(src, 'src/one.ts', 'typescript');
+    const one = ents.find((e) => e.name === 'one')!;
+    expect(one.lineStart).toBe(1);
+    expect(one.lineEnd).toBe(1);
+  });
+
   it('extracts class, type, interface, enum, constant', () => {
     const src = [
       'export class Foo {}',
