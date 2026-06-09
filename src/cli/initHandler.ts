@@ -89,6 +89,8 @@ known entities.
 | \`cxt check --kind <kind>\` | Filter by entity kind (function/class/...) |
 | \`cxt check --ci\` | CI mode (JSON output, exit 1 on critical) |
 | \`cxt bs\` | Scan for bad code smells (BS patterns) |
+| \`cxt audit\` | Audit: BS scan + registry integrity (untested/high-risk/deprecated), exit 1 on critical |
+| \`cxt audit --json\` | Audit in CI mode (JSON output) |
 | \`cxt loc\` | File LOC report sorted by size |
 | \`cxt loc --dir <path>\` | LOC for a specific directory |
 | \`cxt loc --no-blank --no-comments\` | Code-only LOC (exclude blank/comment lines) |
@@ -106,6 +108,22 @@ known entities.
 - \`.cxtignore\`: project-specific exclusions (same syntax as .gitignore)
 - Auto-detects vendored subprojects with own package.json + node_modules
 
+### Suppressing BS false positives
+
+When \`cxt bs\`/\`cxt audit\` flags a line you know is fine, suppress it inline
+(works in any comment syntax — \`//\`, \`#\`, \`/* */\`). Suppressed issues vanish
+from the report entirely, like \`eslint-disable\`:
+
+- \`// cxt-ignore\` — suppress every pattern on the same line
+- \`// cxt-ignore: type_safety,fake_execution\` — suppress only those categories
+- \`// cxt-ignore-next-line[: cats]\` — apply to the next line instead
+
+The marker must be in a comment; \`"cxt-ignore"\` in a string literal does nothing.
+Categories: \`type_safety\`, \`fake_execution\`, \`fake_data\`, \`panic_risk\`,
+\`error_swallow\`, \`exception_hiding\`, \`incomplete\`, \`debug_leftover\`,
+\`hardcoded_secret\`, \`security\`, \`magic_number\`, \`readability\`.
+Prefer a category-scoped ignore over a blanket one so other BS still surfaces.
+
 ### When to use cxt
 
 - **Before modifying code**: \`cxt check <file>\` — entity status, risk, test coverage
@@ -113,7 +131,8 @@ known entities.
 - **Understanding file sizes**: \`cxt loc\` — spot oversized files before reviewing
 - **After major changes**: \`cxt scan\` — update the registry
 - **Code review**: \`cxt bs\` — catch bad patterns before commit
-- **CI pipeline**: \`cxt check --ci\` — JSON output, exit 1 on critical issues
+- **Before commit / gate**: \`cxt audit\` — BS + registry integrity in one pass, exit 1 on critical
+- **CI pipeline**: \`cxt check --ci\` or \`cxt audit --json\` — JSON output, exit 1 on critical issues
 ${CXT_SECTION_END}`;
 }
 
