@@ -175,6 +175,90 @@ describe('bsDetector — language scoping', () => {
   });
 });
 
+// ── /audit 이관으로 추가된 신규 패턴 (Rust panic/incomplete/error_swallow, fake_success, fake_data) ──
+describe('bsDetector — Rust panic risk (unwrap/expect)', () => {
+  it('flags production unwrap()/expect() as critical', () => {
+    const issues = scanFileContent('let x = foo.unwrap();', 'src/lib.rs', 'rust');
+    expect(issues.find((i) => i.category === 'panic_risk' && i.severity === 'critical')).toBeDefined();
+  });
+  it('excludes unwrap() in tests/ dir', () => {
+    const issues = scanFileContent('let x = foo.unwrap();', 'tests/integration.rs', 'rust');
+    expect(issues.find((i) => i.category === 'panic_risk')).toBeUndefined();
+  });
+  it('excludes partial_cmp().unwrap() (NaN guard) and unwrap_or', () => {
+    const a = scanFileContent('arr.sort_by(|x, y| x.partial_cmp(y).unwrap());', 'src/dsp.rs', 'rust');
+    const b = scanFileContent('let x = foo.unwrap_or(0);', 'src/lib.rs', 'rust');
+    expect(a.find((i) => i.category === 'panic_risk')).toBeUndefined();
+    expect(b.find((i) => i.category === 'panic_risk')).toBeUndefined();
+  });
+  it('excludes unwrap() justified by // SAFETY comment', () => {
+    const issues = scanFileContent('let x = v.unwrap(); // SAFETY: len checked', 'src/lib.rs', 'rust');
+    expect(issues.find((i) => i.category === 'panic_risk')).toBeUndefined();
+  });
+  it('does not apply to non-Rust files', () => {
+    const issues = scanFileContent('foo.unwrap()', 'src/x.ts', 'typescript');
+    expect(issues.find((i) => i.category === 'panic_risk')).toBeUndefined();
+  });
+});
+
+describe('bsDetector — Rust incomplete macros', () => {
+  it('flags todo!()/unimplemented!()/panic!("TODO") as critical', () => {
+    for (const src of ['fn f() { todo!() }', 'fn f() { unimplemented!() }', 'panic!("TODO: x");']) {
+      const issues = scanFileContent(src, 'src/lib.rs', 'rust');
+      expect(issues.find((i) => i.category === 'incomplete' && i.severity === 'critical')).toBeDefined();
+    }
+  });
+});
+
+describe('bsDetector — Rust silent error swallow', () => {
+  it('flags let _ = fallible() and .ok(); as warning', () => {
+    const a = scanFileContent('let _ = write_file(path);', 'src/io.rs', 'rust');
+    const b = scanFileContent('do_thing().ok();', 'src/io.rs', 'rust');
+    expect(a.find((i) => i.category === 'error_swallow' && i.severity === 'warning')).toBeDefined();
+    expect(b.find((i) => i.category === 'error_swallow')).toBeDefined();
+  });
+  it('excludes when justified by // reason: comment', () => {
+    const issues = scanFileContent('let _ = cleanup(); // reason: best-effort', 'src/io.rs', 'rust');
+    expect(issues.find((i) => i.category === 'error_swallow')).toBeUndefined();
+  });
+});
+
+describe('bsDetector — fake success report', () => {
+  it('flags console.log/print of 완료/성공/done/success as critical', () => {
+    const cases: Array<[string, string, string]> = [
+      ['console.log("✅ 완료");', 'src/run.ts', 'typescript'],
+      ['print("성공")', 'src/run.py', 'python'],
+      ['console.log("done")', 'src/run.ts', 'typescript'],
+      ['print(f"테스트 성공")', 'src/run.py', 'python'],
+    ];
+    for (const [src, fp, lang] of cases) {
+      const issues = scanFileContent(src, fp, lang);
+      expect(issues.find((i) => i.category === 'fake_execution' && i.severity === 'critical')).toBeDefined();
+    }
+  });
+  it('does not flag normal logging or 성공률/완료된 (substring guard)', () => {
+    const a = scanFileContent('console.log(data)', 'src/run.ts', 'typescript');
+    const b = scanFileContent('console.log("성공률 계산 완료된 뒤")', 'src/run.ts', 'typescript');
+    expect(a.find((i) => i.category === 'fake_execution')).toBeUndefined();
+    expect(b.find((i) => i.category === 'fake_execution')).toBeUndefined();
+  });
+});
+
+describe('bsDetector — fake data (Python np.random/faker)', () => {
+  it('flags np.random/faker in production as critical', () => {
+    const a = scanFileContent('data = np.random.rand(100)', 'src/model.py', 'python');
+    const b = scanFileContent('name = faker.name()', 'src/seed.py', 'python');
+    expect(a.find((i) => i.category === 'fake_data' && i.severity === 'critical')).toBeDefined();
+    expect(b.find((i) => i.category === 'fake_data')).toBeDefined();
+  });
+  it('excludes np.random.seed (deterministic) and test files', () => {
+    const a = scanFileContent('np.random.seed(42)', 'src/model.py', 'python');
+    const b = scanFileContent('data = np.random.rand(100)', 'tests/test_model.py', 'python');
+    expect(a.find((i) => i.category === 'fake_data')).toBeUndefined();
+    expect(b.find((i) => i.category === 'fake_data')).toBeUndefined();
+  });
+});
+
 describe('bsDetector — aggregateResults', () => {
   it('counts severities and computes BS score', () => {
     const issues = [

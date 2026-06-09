@@ -33,6 +33,12 @@ cxt check --ci           # CI/CD mode (JSON output, exit 1 on critical)
 cxt bs                   # scan for BS patterns
 cxt bs -v                # verbose per-file output
 
+# Code audit (BS scan + registry integrity)
+cxt audit                # BS patterns + untested/high-risk/deprecated, exit 1 on critical
+cxt audit --json         # CI mode (JSON output)
+cxt audit --quick        # BS patterns only (skip registry stats)
+cxt audit --dir src      # limit to a directory prefix
+
 # Entity annotation
 cxt annotate <name> --deprecate "reason"
 cxt annotate <name> --tag "team=backend"
@@ -89,19 +95,26 @@ cxt also reads your `.gitignore` for directory patterns, and auto-detects vendor
 
 ## BS Detector Rules
 
-| Severity | Pattern | Description |
-|----------|---------|-------------|
-| CRITICAL | Empty catch/except | Exception silencing |
-| CRITICAL | Hardcoded secrets | password/api_key/secret/token |
-| CRITICAL | debugger | Leftover debugger statement |
-| CRITICAL | Fake success return | `return true // always` |
-| WARNING | eval() | Code injection risk |
-| WARNING | TODO/FIXME | Leftover TODOs |
-| WARNING | console.log | Debug output in production |
-| WARNING | `any` type | TypeScript type safety bypass |
-| WARNING | example.com | Fake URL hardcoded |
-| MINOR | Magic numbers | Unclear hardcoded values |
-| MINOR | 200+ char lines | Poor readability |
+| Severity | Pattern | Lang | Description |
+|----------|---------|------|-------------|
+| CRITICAL | Empty catch/except | all | Exception silencing |
+| CRITICAL | Hardcoded secrets | all | password/api_key/secret/token |
+| CRITICAL | debugger | TS/JS | Leftover debugger statement |
+| CRITICAL | Fake success return | all | `return true // always` |
+| CRITICAL | Fake success print | TS/JS/Py | `console.log("완료")` / `print("성공")` — claimed without verification |
+| CRITICAL | unwrap()/expect() | Rust | Production panic risk (excludes `partial_cmp`, `unwrap_or`, `// SAFETY:`) |
+| CRITICAL | todo!()/unimplemented!() | Rust | Incomplete, must not ship |
+| CRITICAL | np.random/faker | Python | Fabricated data in production (excludes `seed`, tests) |
+| WARNING | eval() | all | Code injection risk |
+| WARNING | TODO/FIXME | all | Leftover TODOs |
+| WARNING | console.log | TS/JS | Debug output in production |
+| WARNING | `any` type | TS | TypeScript type safety bypass |
+| WARNING | example.com | all | Fake URL hardcoded |
+| WARNING | `let _ = ` / `.ok();` | Rust | Silent error swallow (excludes `// reason:`) |
+| MINOR | Magic numbers | all | Unclear hardcoded values |
+| MINOR | 200+ char lines | all | Poor readability |
+
+Production vs test/example separation: Rust patterns exclude `tests/`, `examples/`, `benches/`, `/bin/`, and `build.rs`; fake-data/fake-success patterns exclude test paths.
 
 ## i18n
 

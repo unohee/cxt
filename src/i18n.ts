@@ -89,6 +89,11 @@ interface Messages {
   bsFakeUrl: string;
   bsMagicNumber: string;
   bsLongLine: string;
+  bsRustUnwrap: string;
+  bsRustTodo: string;
+  bsFakeSuccess: string;
+  bsFakeData: string;
+  bsRustSilentError: string;
 
   // ── Annotate ──
   annotating: string;
@@ -111,6 +116,10 @@ interface Messages {
   // ── Inject ──
   injectHeader: (name: string) => string;
   highRiskHeader: string;
+
+  // ── Audit ──
+  auditHeader: string;
+  auditTracks: string;
 }
 
 const en: Messages = {
@@ -196,6 +205,11 @@ const en: Messages = {
   bsFakeUrl: 'Fake URL (example.com, localhost) — not production-ready',
   bsMagicNumber: 'Magic number — unclear hardcoded value',
   bsLongLine: 'Line over 200 chars — poor readability',
+  bsRustUnwrap: 'unwrap()/expect() in production — runtime panic risk',
+  bsRustTodo: 'todo!()/unimplemented!() — incomplete, must not ship',
+  bsFakeSuccess: 'Fake success print — claims done without real verification',
+  bsFakeData: 'np.random/faker in production — fabricated data',
+  bsRustSilentError: 'Silent error swallow (let _ = / .ok();) — error ignored',
 
   // Annotate
   annotating: 'Annotating:',
@@ -218,6 +232,10 @@ const en: Messages = {
   // Inject
   injectHeader: (name) => `[Code Registry] ${name} — skip exploratory Read/Grep, use this map`,
   highRiskHeader: 'High-risk (untested + complex):',
+
+  // Audit
+  auditHeader: 'Code Audit',
+  auditTracks: 'Tracks:',
 };
 
 const ko: Messages = {
@@ -303,6 +321,11 @@ const ko: Messages = {
   bsFakeUrl: 'example.com 등 가짜 URL — 실 운영 불가',
   bsMagicNumber: '매직 넘버 — 의미 불명확한 하드코딩 숫자',
   bsLongLine: '200자 이상 긴 줄 — 가독성 저하',
+  bsRustUnwrap: 'production unwrap()/expect() — runtime panic 위험',
+  bsRustTodo: 'todo!()/unimplemented!() — 미완성, release 금지',
+  bsFakeSuccess: '가짜 성공 출력 — 실제 검증 없이 완료 선언',
+  bsFakeData: 'np.random/faker로 위장 데이터 생성 (production)',
+  bsRustSilentError: '에러 silent 무시 (let _ = / .ok();) — 예외 은폐',
 
   // Annotate
   annotating: '어노테이션:',
@@ -325,6 +348,10 @@ const ko: Messages = {
   // Inject
   injectHeader: (name) => `[Code Registry] ${name} — skip exploratory Read/Grep, use this map`,
   highRiskHeader: 'High-risk (untested + complex):',
+
+  // Audit
+  auditHeader: '코드 감사',
+  auditTracks: '트랙:',
 };
 
 const locales: Record<Locale, Messages> = { en, ko };

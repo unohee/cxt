@@ -45,6 +45,16 @@ function isTestPath(filePath: string): boolean {
   return /\.test\.|\.spec\.|_test\.|test_|__tests__/.test(filePath);
 }
 
+/**
+ * Rust 트랙에서 unwrap/expect/panic 류를 production 으로 볼지 판정.
+ * tests 모듈/통합 테스트/examples/bin 은 정당하므로 제외.
+ */
+function isRustNonProd(filePath: string): boolean {
+  return isTestPath(filePath)
+    || /(?:^|\/)(?:tests|examples|benches|bin)\//.test(filePath)
+    || /(?:^|\/)build\.rs$/.test(filePath);
+}
+
 function isI18nPath(filePath: string): boolean {
   return /i18n\.[tj]sx?$|locale|messages|translations/i.test(filePath);
 }
@@ -77,6 +87,7 @@ const BS_PATTERN_DEFS: BsPatternDef[] = [
     category: 'fake_execution',
     messageKey: 'bsFakeReturn',
     pattern: /return\s+(?:true|'ok'|"ok"|'success'|"success")\s*;?\s*\/\/\s*(?:always|todo|fixme|hack)/i,
+    excludeIf: (_line, fp) => isTestPath(fp),
   },
   {
     severity: 'critical',
@@ -91,6 +102,51 @@ const BS_PATTERN_DEFS: BsPatternDef[] = [
     messageKey: 'bsDebugger',
     pattern: /^\s*debugger\s*;?\s*$/,
     languages: ['typescript', 'javascript'],
+  },
+  {
+    // Rust: production unwrap()/expect() — runtime panic 가능
+    severity: 'critical',
+    category: 'panic_risk',
+    messageKey: 'bsRustUnwrap',
+    pattern: /\.(?:unwrap|expect)\s*\(/,
+    languages: ['rust'],
+    excludeIf: (line, fp) =>
+      isRustNonProd(fp) ||
+      // NaN guard / len-checked index 등 invariant 가 명백한 정당 패턴
+      /partial_cmp|unwrap_or|unwrap_err|expect_err|\.last\(\)\.unwrap|\.first\(\)\.unwrap/.test(line) ||
+      // SAFETY: 주석으로 invariant 를 정당화한 경우
+      /\/\/\s*SAFETY:|\/\/\s*invariant/i.test(line),
+  },
+  {
+    // Rust: 미완성 매크로 — release 금지
+    severity: 'critical',
+    category: 'incomplete',
+    messageKey: 'bsRustTodo',
+    pattern: /\b(?:todo!|unimplemented!)\s*\(|panic!\s*\(\s*"(?:TODO|FIXME)/i,
+    languages: ['rust'],
+    excludeIf: (_line, fp) => isRustNonProd(fp),
+  },
+  {
+    // TS/JS/Python: 가짜 성공 보고 — 실제 검증 없이 완료 선언.
+    // 한글 키워드는 \b 가 작동하지 않으므로 (?![가-힣]) 로 단어 경계 대용 (성공률/완료된 제외).
+    severity: 'critical',
+    category: 'fake_execution',
+    messageKey: 'bsFakeSuccess',
+    pattern: /(?:console\.log|print)\s*\(\s*f?['"`][^'"`]*?(?:(?:완료|성공)(?![가-힣])|\b(?:done|finished|success|passed)\b)/i,
+    languages: ['typescript', 'javascript', 'python'],
+    excludeIf: (line, fp) => isTestPath(fp) || /scripts\//.test(fp),
+  },
+  {
+    // Python: production 위장 데이터 생성 (np.random / faker)
+    severity: 'critical',
+    category: 'fake_data',
+    messageKey: 'bsFakeData',
+    pattern: /\b(?:np\.random\.|numpy\.random\.|faker\.|Faker\(\)|fake\.\w+\(\))/,
+    languages: ['python'],
+    excludeIf: (line, fp) =>
+      isTestPath(fp) ||
+      /seed|random_state|RandomState|default_rng|conftest|fixture/.test(line) ||
+      /\/(?:test|tests|fixtures|mock|mocks|examples?)\//.test(fp),
   },
 
   // ============ WARNING ============
@@ -148,6 +204,18 @@ const BS_PATTERN_DEFS: BsPatternDef[] = [
     messageKey: 'bsEval',
     pattern: /\beval\s*\(/,
     excludeIf: (_line, fp) => isTestPath(fp),
+  },
+  {
+    // Rust: 에러 silently 무시 (let _ = fallible(); 또는 .ok();)
+    severity: 'warning',
+    category: 'error_swallow',
+    messageKey: 'bsRustSilentError',
+    pattern: /let\s+_\s*=\s*[\w.]+\([^)]*\)\s*[?;]|\.ok\(\)\s*;/,
+    languages: ['rust'],
+    excludeIf: (line, fp) =>
+      isRustNonProd(fp) ||
+      // 의도적 무시를 // reason: 으로 정당화한 경우
+      /\/\/\s*(?:reason|intentional|ignore)/i.test(line),
   },
   {
     severity: 'warning',

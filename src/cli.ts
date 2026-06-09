@@ -67,6 +67,8 @@ ${c.bold}Examples:${c.reset}
   ${c.cyan}cxt check --ci${c.reset}                    ${m.helpCheckCi}
   ${c.cyan}cxt bs${c.reset}                            ${m.helpBs}
   ${c.cyan}cxt bs -v${c.reset}                         ${m.helpBsVerbose}
+  ${c.cyan}cxt audit${c.reset}                         BS scan + registry integrity audit
+  ${c.cyan}cxt audit --json${c.reset}                  Audit in CI mode (exit 1 on critical)
   ${c.cyan}cxt annotate file::fn --deprecate "reason"${c.reset}
   ${c.cyan}cxt annotate file::fn --tag team=backend${c.reset}
   ${c.cyan}cxt inject${c.reset}                        ${m.helpInject}
@@ -280,6 +282,20 @@ program
   .action(async (name, opts) => {
     const { handleImpact } = await import('./cli/relationHandler.js');
     await handleImpact(name, opts);
+  });
+
+// ---- audit (BS + registry 종합 감사) ----
+program
+  .command('audit')
+  .description('Code audit: BS pattern scan + registry integrity (untested/high-risk/deprecated)')
+  .option('--json', 'JSON output, exit 1 on critical (CI mode)')
+  .option('--quick', 'BS patterns only — skip registry stats')
+  .option('--dir <path>', 'Limit to a directory prefix')
+  .option('--project <id>', 'Project ID override')
+  .option('-v, --verbose', 'Per-file issue detail')
+  .action(async (opts) => {
+    const { handleAudit } = await import('./cli/auditHandler.js');
+    await handleAudit(opts);
   });
 
 program.parse();
