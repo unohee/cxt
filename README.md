@@ -116,6 +116,28 @@ cxt also reads your `.gitignore` for directory patterns, and auto-detects vendor
 
 Production vs test/example separation: Rust patterns exclude `tests/`, `examples/`, `benches/`, `/bin/`, and `build.rs`; fake-data/fake-success patterns exclude test paths.
 
+### Suppressing false positives
+
+When a pattern fires on code you know is fine, suppress it inline with a comment (works in any language's comment syntax — `//`, `#`, `/* */`, etc.). Suppressed issues are removed from the report entirely (like `eslint-disable`).
+
+```ts
+const x = legacy as any;        // cxt-ignore
+const y = legacy as any;        // cxt-ignore: type_safety   (only this category)
+foo.unwrap();                   // cxt-ignore -- with a trailing note
+
+// cxt-ignore-next-line
+const z = legacy as any;        // suppresses the line below
+
+// cxt-ignore-next-line: fake_execution
+print("완료")                    # category-scoped, next line only
+```
+
+- `cxt-ignore` — suppress every pattern on the same line.
+- `cxt-ignore: cat1,cat2` — suppress only those categories on the same line (others still report).
+- `cxt-ignore-next-line[: cats]` — same, but applies to the next line.
+
+The marker must be in a comment; `"cxt-ignore"` inside a string literal does nothing. Categories are the BS category names (e.g. `type_safety`, `fake_execution`, `panic_risk`, `error_swallow`, `exception_hiding`, `incomplete`, `debug_leftover`).
+
 ## i18n
 
 Supports English (`en`) and Korean (`ko`). Language is auto-detected from the `LANG` environment variable, or set explicitly with `--lang`.

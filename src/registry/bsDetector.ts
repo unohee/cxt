@@ -55,6 +55,36 @@ function isRustNonProd(filePath: string): boolean {
     || /(?:^|\/)build\.rs$/.test(filePath);
 }
 
+/**
+ * Inline suppression 주석 파싱.
+ * 주석 마커(// # /* * -- ;) 뒤의 cxt-ignore[-next-line] 만 인정 — 문자열 리터럴 속 우연 매치 배제.
+ * 형식:
+ *   cxt-ignore                  → 같은 줄 전체 억제
+ *   cxt-ignore: cat1,cat2       → 같은 줄에서 해당 category 만 억제
+ *   cxt-ignore-next-line[: cat] → 다음 줄 억제
+ * 반환: null=억제 없음, '*'=전체 억제, Set<category>=특정 카테고리만 억제.
+ */
+function parseSuppression(line: string, kind: 'same' | 'next'): '*' | Set<string> | null {
+  const token = kind === 'same' ? 'cxt-ignore' : 'cxt-ignore-next-line';
+  // 주석 컨텍스트에서 토큰 + (선택) ": 카테고리 목록" 캡처.
+  // same 줄 매칭 시 cxt-ignore-next-line 까지 같이 잡히지 않도록, same 은 -next-line 이 아닌 경우만 인정.
+  const re = kind === 'same'
+    ? /(?:\/\/|#|\/\*|\*|--|;)\s*cxt-ignore(?!-next-line)\b\s*(?::\s*([\w,\s]+))?/
+    : /(?:\/\/|#|\/\*|\*|--|;)\s*cxt-ignore-next-line\b\s*(?::\s*([\w,\s]+))?/;
+  const m = line.match(re);
+  if (!m) return null;
+  if (!m[1]) return '*';
+  const cats = m[1].split(',').map(s => s.trim()).filter(Boolean);
+  return cats.length ? new Set(cats) : '*';
+}
+
+/** suppression 규칙이 주어진 category 를 억제하는가. */
+function suppresses(rule: '*' | Set<string> | null, category: string): boolean {
+  if (rule === null) return false;
+  if (rule === '*') return true;
+  return rule.has(category);
+}
+
 function isI18nPath(filePath: string): boolean {
   return /i18n\.[tj]sx?$|locale|messages|translations/i.test(filePath);
 }
@@ -272,6 +302,10 @@ export function scanFileContent(
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
+    // Inline suppression: 같은 줄의 cxt-ignore + 이전 줄의 cxt-ignore-next-line
+    const sameLineRule = parseSuppression(line, 'same');
+    const prevLineRule = i > 0 ? parseSuppression(lines[i - 1], 'next') : null;
+
     for (const bp of BS_PATTERN_DEFS) {
       if (bp.languages && !bp.languages.includes(language)) continue;
 
@@ -279,6 +313,9 @@ export function scanFileContent(
       if (!match) continue;
 
       if (bp.excludeIf && bp.excludeIf(line, filePath)) continue;
+
+      // suppression 주석으로 이 category 가 억제되면 스킵 (리포트에서 완전 제외)
+      if (suppresses(sameLineRule, bp.category) || suppresses(prevLineRule, bp.category)) continue;
 
       issues.push({
         severity: bp.severity,

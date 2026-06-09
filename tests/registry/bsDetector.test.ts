@@ -83,7 +83,7 @@ describe('bsDetector — CRITICAL patterns', () => {
 
 describe('bsDetector — WARNING patterns', () => {
   it('detects TODO/FIXME', () => {
-    const src = '// TODO: implement this properly';
+    const src = '// TODO: implement this properly'; // cxt-ignore: incomplete -- fixture string, not real debt
     const issues = scanFileContent(src, 'src/x.ts', 'typescript');
     expect(issues.find((i) => i.category === 'incomplete')).toBeDefined();
   });
@@ -172,6 +172,39 @@ describe('bsDetector — language scoping', () => {
     const src = 'x = 1  # debugger';
     const issues = scanFileContent(src, 'src/x.py', 'python');
     expect(issues.find((i) => i.category === 'debug_leftover' && i.severity === 'critical')).toBeUndefined();
+  });
+});
+
+describe('bsDetector — inline suppression (cxt-ignore)', () => {
+  it('same-line // cxt-ignore suppresses all issues on that line', () => {
+    const issues = scanFileContent('const x = y as any; // cxt-ignore', 'src/a.ts', 'typescript');
+    expect(issues).toHaveLength(0);
+  });
+  it('# cxt-ignore works for Python', () => {
+    const issues = scanFileContent('x = np.random.rand(3)  # cxt-ignore', 'src/m.py', 'python');
+    expect(issues).toHaveLength(0);
+  });
+  it('// cxt-ignore: <category> suppresses only that category', () => {
+    const matched = scanFileContent('const x = y as any; // cxt-ignore: type_safety', 'src/a.ts', 'typescript');
+    expect(matched.find((i) => i.category === 'type_safety')).toBeUndefined();
+    // 카테고리 불일치면 억제 안 됨
+    const notMatched = scanFileContent('const x = y as any; // cxt-ignore: security', 'src/a.ts', 'typescript');
+    expect(notMatched.find((i) => i.category === 'type_safety')).toBeDefined();
+  });
+  it('// cxt-ignore-next-line suppresses the following line only', () => {
+    const suppressed = scanFileContent('// cxt-ignore-next-line\nconst x = y as any;', 'src/a.ts', 'typescript');
+    expect(suppressed.find((i) => i.category === 'type_safety')).toBeUndefined();
+    // 한 줄만 적용 — 두 줄 뒤는 계속 잡힘
+    const twoBelow = scanFileContent('// cxt-ignore-next-line\nconst ok = 1;\nconst x = y as any;', 'src/a.ts', 'typescript');
+    expect(twoBelow.find((i) => i.category === 'type_safety')).toBeDefined();
+  });
+  it('cxt-ignore inside a string literal does not suppress (needs comment marker)', () => {
+    const issues = scanFileContent('const s = "cxt-ignore"; const x = y as any;', 'src/a.ts', 'typescript');
+    expect(issues.find((i) => i.category === 'type_safety')).toBeDefined();
+  });
+  it('same-line rule does not mistake cxt-ignore-next-line for cxt-ignore', () => {
+    const issues = scanFileContent('const x = y as any; // cxt-ignore-next-line', 'src/a.ts', 'typescript');
+    expect(issues.find((i) => i.category === 'type_safety')).toBeDefined();
   });
 });
 
