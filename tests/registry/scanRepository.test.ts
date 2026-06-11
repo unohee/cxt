@@ -247,3 +247,53 @@ export function user() { return 99; }
     expect(store.countRelations('rel-6')).toBe(0);
   });
 });
+
+describe('scanRepository — broken zombie restore (INT-1477)', () => {
+  it('restores scanner-authored broken entities to active when rediscovered, reviving relations and name lookup', async () => {
+    const store = getRegistryStore();
+    const code = 'export function alpha() { return 1; }\nexport function beta() { return alpha(); }';
+
+    // 1차 스캔: alpha/beta 등록 + beta→alpha edge
+    write('src/a.ts', code);
+    await scanRepository(projectDir, 'tproj-restore');
+    expect(store.getEntityByName('src/a.ts::beta')?.status).toBe('active');
+    expect(store.countRelations('tproj-restore')).toBeGreaterThanOrEqual(1);
+
+    // beta 삭제 → broken + edge 소멸 + 이름 검색에서 제외
+    write('src/a.ts', 'export function alpha() { return 1; }');
+    await scanRepository(projectDir, 'tproj-restore');
+    expect(store.getEntityByName('src/a.ts::beta')?.status).toBe('broken');
+    expect(store.findEntitiesByName('beta', 'tproj-restore')).toHaveLength(0);
+    expect(store.countRelations('tproj-restore')).toBe(0);
+
+    // beta 복구 → active 복원 + edge 부활 + 이름 검색 복귀
+    write('src/a.ts', code);
+    const r3 = await scanRepository(projectDir, 'tproj-restore');
+    expect(r3.registered).toBe(0); // 새 등록이 아니라 기존 행 복원이어야 함
+    const beta = store.getEntityByName('src/a.ts::beta');
+    expect(beta?.status).toBe('active');
+    expect(store.findEntitiesByName('beta', 'tproj-restore')).toHaveLength(1);
+
+    const alpha = store.findEntitiesByName('alpha', 'tproj-restore')[0];
+    const callers = store.getIncomingRelations(alpha.id, 'calls');
+    expect(callers.some(r => r.sourceName === 'beta')).toBe(true);
+  });
+
+  it('does not restore broken entities that were not authored by the scanner', async () => {
+    const store = getRegistryStore();
+    const manual = store.registerEntity({
+      projectId: 'tproj-manual',
+      kind: 'function',
+      name: 'gamma',
+      filePath: 'src/m.ts',
+      status: 'active',
+      author: 'human',
+    });
+    store.changeEntityStatus(manual.id, 'broken');
+
+    write('src/m.ts', 'export function gamma() { return 3; }');
+    await scanRepository(projectDir, 'tproj-manual');
+
+    expect(store.getEntity(manual.id)?.status).toBe('broken');
+  });
+});

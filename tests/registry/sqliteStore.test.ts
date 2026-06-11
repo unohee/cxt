@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import Database from 'better-sqlite3';
+import { join } from 'node:path';
 import { createTmpStore, type TmpDbHandle } from '../helpers/tmpDb.js';
+import { SqliteRegistryStore } from '../../src/registry/sqliteStore.js';
 import type { RegisterEntityInput } from '../../src/registry/sqliteStore.js';
 
 let h: TmpDbHandle;
@@ -301,5 +304,109 @@ describe('SqliteRegistryStore — events', () => {
     const types = events.map((e) => e.type);
     expect(types).toContain('created');
     expect(types).toContain('deprecated');
+  });
+});
+
+describe('SqliteRegistryStore — schema version + FTS rebuild guard (INT-1478)', () => {
+  it('stamps user_version on first migrate and keeps FTS working across reopen', () => {
+    const dbPath = join(h.dir, 'registry.db');
+    h.store.registerEntity(baseEntity({ name: 'alphaFn', filePath: 'src/a.ts' }));
+    h.store.close();
+
+    const raw = new Database(dbPath);
+    const version = raw.pragma('user_version', { simple: true }) as number;
+    raw.close();
+    expect(version).toBeGreaterThanOrEqual(2);
+
+    // 재오픈 — rebuild는 스킵되어야 하고, 트리거/인덱스는 그대로 동작해야 함
+    const store2 = new SqliteRegistryStore(dbPath);
+    store2.registerEntity(baseEntity({ name: 'betaFn', filePath: 'src/b.ts' }));
+    expect(store2.searchEntities('betaFn', 10).some(e => e.name === 'betaFn')).toBe(true);
+    expect(store2.searchEntities('alphaFn', 10).some(e => e.name === 'alphaFn')).toBe(true);
+    store2.close();
+  });
+
+  it('re-runs FTS rebuild when user_version is reset (legacy DB path)', () => {
+    const dbPath = join(h.dir, 'registry.db');
+    h.store.registerEntity(baseEntity({ name: 'legacyFn', filePath: 'src/l.ts' }));
+    h.store.close();
+
+    // 레거시 DB 시뮬레이션: 버전 0으로 강등
+    const raw = new Database(dbPath);
+    raw.pragma('user_version = 0');
+    raw.close();
+
+    const store2 = new SqliteRegistryStore(dbPath);
+    expect(store2.searchEntities('legacyFn', 10).some(e => e.name === 'legacyFn')).toBe(true);
+    store2.close();
+
+    const raw2 = new Database(dbPath);
+    const version = raw2.pragma('user_version', { simple: true }) as number;
+    raw2.close();
+    expect(version).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('SqliteRegistryStore — registry hygiene (INT-1476/1479)', () => {
+  it('listProjects aggregates entity and broken counts per project', () => {
+    h.store.registerEntity(baseEntity({ projectId: 'p1', name: 'a', filePath: 'src/a.ts' }));
+    const b = h.store.registerEntity(baseEntity({ projectId: 'p1', name: 'b', filePath: 'src/b.ts' }));
+    h.store.registerEntity(baseEntity({ projectId: 'p2', name: 'c', filePath: 'src/c.ts' }));
+    h.store.changeEntityStatus(b.id, 'broken');
+
+    const projects = h.store.listProjects();
+    const p1 = projects.find(p => p.projectId === 'p1');
+    expect(p1?.entityCount).toBe(2);
+    expect(p1?.brokenCount).toBe(1);
+    expect(projects.find(p => p.projectId === 'p2')?.entityCount).toBe(1);
+  });
+
+  it('deleteProject removes entities and their relations', () => {
+    const a = h.store.registerEntity(baseEntity({ projectId: 'p1', name: 'a', filePath: 'src/a.ts' }));
+    const b = h.store.registerEntity(baseEntity({ projectId: 'p1', name: 'b', filePath: 'src/b.ts' }));
+    h.store.addRelation(a.id, b.id, 'calls');
+    expect(h.store.countRelations('p1')).toBe(1);
+
+    const removed = h.store.deleteProject('p1');
+    expect(removed).toBe(2);
+    expect(h.store.listProjects().find(p => p.projectId === 'p1')).toBeUndefined();
+    expect(h.store.countRelations('p1')).toBe(0);
+  });
+
+  it('pruneBroken deletes only broken entities, scoped by project', () => {
+    const a = h.store.registerEntity(baseEntity({ projectId: 'p1', name: 'a', filePath: 'src/a.ts' }));
+    const b = h.store.registerEntity(baseEntity({ projectId: 'p2', name: 'b', filePath: 'src/b.ts' }));
+    h.store.registerEntity(baseEntity({ projectId: 'p1', name: 'alive', filePath: 'src/ok.ts' }));
+    h.store.changeEntityStatus(a.id, 'broken');
+    h.store.changeEntityStatus(b.id, 'broken');
+
+    expect(h.store.pruneBroken('p1')).toBe(1);
+    expect(h.store.getEntity(a.id)).toBeNull();
+    expect(h.store.getEntity(b.id)).not.toBeNull();
+    expect(h.store.pruneBroken()).toBe(1); // 나머지 전역 정리
+    expect(h.store.listProjects().find(p => p.projectId === 'p1')?.entityCount).toBe(1);
+  });
+
+  it('pruneEvents deletes events older than cutoff and returns the count', () => {
+    const ent = h.store.registerEntity(baseEntity());
+    expect(h.store.getEvents(ent.id).length).toBeGreaterThanOrEqual(1);
+
+    // 이벤트를 40일 전으로 백데이트
+    const raw = new Database(join(h.dir, 'registry.db'));
+    raw.prepare('UPDATE code_entity_events SET created_at = ?')
+      .run(new Date(Date.now() - 40 * 86_400_000).toISOString());
+    raw.close();
+
+    expect(h.store.pruneEvents(30)).toBeGreaterThanOrEqual(1);
+    expect(h.store.getEvents(ent.id)).toHaveLength(0);
+    // 새 이벤트는 살아남는다
+    h.store.addEvent(ent.id, 'updated', { content: 'fresh' });
+    expect(h.store.pruneEvents(30)).toBe(0);
+    expect(h.store.getEvents(ent.id)).toHaveLength(1);
+  });
+
+  it('vacuum runs without error', () => {
+    h.store.registerEntity(baseEntity());
+    expect(() => h.store.vacuum()).not.toThrow();
   });
 });

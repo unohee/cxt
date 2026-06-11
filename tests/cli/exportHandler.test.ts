@@ -183,3 +183,34 @@ describe('handleExport — empty registry', () => {
     process.exitCode = prevExit;
   });
 });
+
+describe('handleExport — broken exclusion (INT-1476)', () => {
+  it('excludes broken (zombie) entities from the snapshot', async () => {
+    const store = getRegistryStore();
+    const zombie = store.registerEntity({
+      projectId: 'tproj',
+      kind: 'function',
+      name: 'ghostFn',
+      filePath: 'src/ghost.ts',
+      lineStart: 1,
+      lineEnd: 2,
+    });
+    store.changeEntityStatus(zombie.id, 'broken');
+
+    const writes: string[] = [];
+    const writeSpy = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
+      writes.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf-8'));
+      return true;
+    });
+    try {
+      await handleExport({ project: 'tproj' });
+    } finally {
+      writeSpy.mockRestore();
+    }
+
+    const out = writes.join('');
+    expect(out).not.toContain('ghostFn');          // 좀비는 스냅샷에서 제외
+    expect(out).toContain('function helper');      // 정상 엔티티는 유지
+    expect(out).toContain('# entities: 3/3');      // 카운트도 broken 제외 기준
+  });
+});

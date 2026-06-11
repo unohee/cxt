@@ -344,3 +344,56 @@ describe('extractEntities — complexity metrics', () => {
     expect(ent.paramCount).toBe(0);
   });
 });
+
+describe('extractEntities — Python class methods (INT-1480)', () => {
+  it('extracts class-body methods as function entities, skipping nested defs and keeping top-level defs', () => {
+    const code = [
+      'class Service:',
+      '    def __init__(self, db):',
+      '        self.db = db',
+      '',
+      '    async def fetch(self, key: str) -> str:',
+      '        def local_helper():',
+      '            return 1',
+      '        return local_helper()',
+      '',
+      'def top_level():',
+      '    pass',
+    ].join('\n');
+
+    const entities = extractEntities(code, 'svc.py', 'python');
+    const names = entities.map(e => e.name);
+
+    expect(names).toContain('Service');
+    expect(names).toContain('__init__');
+    expect(names).toContain('fetch');
+    expect(names).toContain('top_level');
+    expect(names).not.toContain('local_helper'); // 중첩 함수는 메서드가 아님
+
+    const fetch = entities.find(e => e.name === 'fetch')!;
+    expect(fetch.kind).toBe('function');
+    expect(fetch.signature).toContain('Service'); // 소속 클래스가 시그니처에 표기됨
+    expect(fetch.lineStart).toBe(5);
+  });
+
+  it('does not treat control-flow keywords or class-level assignments as methods', () => {
+    const code = [
+      'class Config:',
+      '    DEFAULT = 10',
+      '',
+      '    def load(self):',
+      '        if self.path:',
+      '            return self.path',
+      '        for x in range(3):',
+      '            pass',
+      '        return None',
+    ].join('\n');
+
+    const entities = extractEntities(code, 'cfg.py', 'python');
+    const names = entities.map(e => e.name);
+    expect(names).toContain('Config');
+    expect(names).toContain('load');
+    expect(names).not.toContain('if');
+    expect(names).not.toContain('for');
+  });
+});
