@@ -121,13 +121,16 @@ program
   });
 
 // ---- bs (shortcut) ----
+// INT-1485: --json/--dir 옵션 추가
 program
   .command('bs')
   .description('Scan for BS patterns (bad code smells)')
   .option('-v, --verbose', 'Verbose output')
+  .option('--json', 'JSON output (machine-readable)')
+  .option('--dir <path>', 'Limit scan to a directory prefix')
   .action(async (opts) => {
-    const { handleCheck } = await import('./cli/checkHandler.js');
-    await handleCheck(undefined, { bs: true, verbose: opts.verbose });
+    const { handleBs } = await import('./cli/bsHandler.js');
+    await handleBs({ verbose: opts.verbose, json: opts.json, dir: opts.dir });
   });
 
 // ---- annotate ----
@@ -282,6 +285,47 @@ program
   .action(async (name, opts) => {
     const { handleImpact } = await import('./cli/relationHandler.js');
     await handleImpact(name, opts);
+  });
+
+// ---- project (위생 명령, INT-1479) ----
+const projectCmd = program
+  .command('project')
+  .description('Project registry management (list / rm / prune / vacuum)');
+
+projectCmd
+  .command('list')
+  .description('List registered projects with entity counts')
+  .action(async () => {
+    const { handleProjectList } = await import('./cli/projectHandler.js');
+    await handleProjectList();
+  });
+
+projectCmd
+  .command('rm <projectId>')
+  .description('Remove a project and all its entities from the registry')
+  .option('--yes', 'Skip confirmation prompt')
+  .action(async (projectId: string, opts: { yes?: boolean }) => {
+    const { handleProjectRm } = await import('./cli/projectHandler.js');
+    await handleProjectRm(projectId, opts);
+  });
+
+projectCmd
+  .command('prune')
+  .description('Delete all broken (zombie) entities from the registry')
+  .option('--project <id>', 'Limit to a specific project')
+  .option('--yes', 'Skip confirmation prompt')
+  .action(async (opts: { project?: string; yes?: boolean }) => {
+    const { handleProjectPrune } = await import('./cli/projectHandler.js');
+    await handleProjectPrune(opts);
+  });
+
+projectCmd
+  .command('vacuum')
+  .description('Compact registry DB and clean up old events')
+  .option('--keep-days <n>', 'Keep events newer than N days (default: 30)', '30')
+  .action(async (opts: { keepDays?: string }) => {
+    const { handleProjectVacuum } = await import('./cli/projectHandler.js');
+    await handleProjectVacuum(opts);
   });
 
 // ---- audit (BS + registry 종합 감사) ----

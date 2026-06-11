@@ -8,6 +8,7 @@
 
 import { getRegistryStore, closeRegistryStore } from '../registry/sqliteStore.js';
 import { resolveProjectId } from './checkHandler.js';
+import { t } from '../i18n.js';
 import type { CodeEntity } from '../registry/schema.js';
 
 const c = {
@@ -28,19 +29,21 @@ export interface RelationOptions {
  * 단일이면 그 엔티티 반환.
  */
 function resolveTarget(name: string, projectId: string, json: boolean): CodeEntity | null {
+  const m = t();
   const store = getRegistryStore();
   const matches = store.findEntitiesByName(name, projectId);
   if (matches.length === 0) {
     if (json) console.log(JSON.stringify({ error: 'not_found', name }));
-    else console.log(`${c.red}✗${c.reset} 엔티티 '${name}' 를 레지스트리에서 찾을 수 없습니다. ${c.dim}(cxt scan 먼저 실행?)${c.reset}`);
+    else console.log(`${c.red}${m.relNotFound(name)}${c.reset}`);
     return null;
   }
   if (matches.length > 1) {
     if (json) {
       console.log(JSON.stringify({ error: 'ambiguous', name, candidates: matches.map(m => m.qualifiedName) }));
     } else {
-      console.log(`${c.yellow}⚠${c.reset} '${name}' 동명 엔티티 ${matches.length}개 — qualified name으로 지정하세요:`);
-      for (const m of matches) console.log(`    ${c.cyan}${m.qualifiedName}${c.reset} ${c.dim}[${m.kind}] ${m.filePath}:${m.lineStart}${c.reset}`);
+      console.log(`${c.yellow}${m.relAmbiguous(name, matches.length)}${c.reset}`);
+      for (const match of matches) console.log(`    ${c.cyan}${match.qualifiedName}${c.reset} ${c.dim}[${match.kind}] ${match.filePath}:${match.lineStart}${c.reset}`);
+      console.log(`  ${c.dim}${m.relUseQualified}${c.reset}`);
     }
     return null;
   }
@@ -49,13 +52,14 @@ function resolveTarget(name: string, projectId: string, json: boolean): CodeEnti
 
 /** qualifiedName(`file::name`) 또는 단순 name 모두 허용. */
 function lookup(nameOrQualified: string, projectId: string, json: boolean): CodeEntity | null {
+  const m = t();
   const store = getRegistryStore();
   if (nameOrQualified.includes('::')) {
     const { entities } = store.listEntities({ projectId, limit: 200_000, offset: 0 });
     const hit = entities.find(e => e.qualifiedName === nameOrQualified && e.status !== 'broken');
     if (!hit) {
       if (json) console.log(JSON.stringify({ error: 'not_found', name: nameOrQualified }));
-      else console.log(`${c.red}✗${c.reset} '${nameOrQualified}' 없음.`);
+      else console.log(`${c.red}${m.relNotFoundQualified(nameOrQualified)}${c.reset}`);
       return null;
     }
     return hit;
@@ -65,6 +69,7 @@ function lookup(nameOrQualified: string, projectId: string, json: boolean): Code
 
 /** cxt who-calls <name> — 역방향 (이 엔티티를 호출하는 주체들). */
 export async function handleWhoCalls(name: string, opts: RelationOptions): Promise<void> {
+  const m = t();
   const projectId = opts.project ?? resolveProjectId(process.cwd());
   const store = getRegistryStore();
   try {
@@ -82,15 +87,15 @@ export async function handleWhoCalls(name: string, opts: RelationOptions): Promi
       return;
     }
 
-    console.log(`\n${c.bold}${target.name}${c.reset} ${c.dim}(${target.filePath}:${target.lineStart})${c.reset} 를 참조하는 엔티티:`);
+    console.log(`${c.bold}${m.relWhoCalls(target.name, target.filePath, target.lineStart)}${c.reset}`);
     if (callers.length === 0) {
-      console.log(`  ${c.dim}(없음 — 진입점이거나 외부에서만 호출)${c.reset}\n`);
+      console.log(`  ${c.dim}${m.relNone}${c.reset}\n`);
       return;
     }
     for (const r of callers) {
       console.log(`  ${c.gray}←${c.reset} ${c.cyan}${r.sourceName}${c.reset} ${c.dim}[${r.relationType}] ${r.sourceFile}${c.reset}`);
     }
-    console.log(`  ${c.dim}총 ${callers.length}개${c.reset}\n`);
+    console.log(`  ${c.dim}${m.relTotal(callers.length)}${c.reset}\n`);
   } finally {
     closeRegistryStore();
   }
@@ -98,6 +103,7 @@ export async function handleWhoCalls(name: string, opts: RelationOptions): Promi
 
 /** cxt calls <name> — 정방향 (이 엔티티가 호출하는 대상들). */
 export async function handleCalls(name: string, opts: RelationOptions): Promise<void> {
+  const m = t();
   const projectId = opts.project ?? resolveProjectId(process.cwd());
   const store = getRegistryStore();
   try {
@@ -115,15 +121,15 @@ export async function handleCalls(name: string, opts: RelationOptions): Promise<
       return;
     }
 
-    console.log(`\n${c.bold}${target.name}${c.reset} ${c.dim}(${target.filePath}:${target.lineStart})${c.reset} 가 참조하는 엔티티:`);
+    console.log(`${c.bold}${m.relCalls(target.name, target.filePath, target.lineStart)}${c.reset}`);
     if (callees.length === 0) {
-      console.log(`  ${c.dim}(없음 — leaf 함수)${c.reset}\n`);
+      console.log(`  ${c.dim}${m.relCallsNone}${c.reset}\n`);
       return;
     }
     for (const r of callees) {
       console.log(`  ${c.gray}→${c.reset} ${c.cyan}${r.targetName}${c.reset} ${c.dim}[${r.relationType}] ${r.targetFile}${c.reset}`);
     }
-    console.log(`  ${c.dim}총 ${callees.length}개${c.reset}\n`);
+    console.log(`  ${c.dim}${m.relTotal(callees.length)}${c.reset}\n`);
   } finally {
     closeRegistryStore();
   }
@@ -131,6 +137,7 @@ export async function handleCalls(name: string, opts: RelationOptions): Promise<
 
 /** cxt impact <name> — transitive 역방향 (고치면 영향받는 전체). */
 export async function handleImpact(name: string, opts: RelationOptions): Promise<void> {
+  const m = t();
   const projectId = opts.project ?? resolveProjectId(process.cwd());
   const store = getRegistryStore();
   try {
@@ -150,9 +157,9 @@ export async function handleImpact(name: string, opts: RelationOptions): Promise
       return;
     }
 
-    console.log(`\n${c.bold}영향 분석${c.reset}: ${c.cyan}${target.name}${c.reset} ${c.dim}(${target.filePath}:${target.lineStart})${c.reset} 를 변경하면 —`);
+    console.log(`${c.bold}${m.relImpact(target.name, target.filePath, target.lineStart)}${c.reset}`);
     if (impacted.length === 0) {
-      console.log(`  ${c.green}✓${c.reset} 영향받는 엔티티 없음 ${c.dim}(아무도 참조하지 않음)${c.reset}\n`);
+      console.log(`  ${c.green}${m.relImpactNone}${c.reset}\n`);
       return;
     }
     const byDepth = new Map<number, typeof impacted>();
@@ -164,13 +171,15 @@ export async function handleImpact(name: string, opts: RelationOptions): Promise
     for (const depth of [...byDepth.keys()].sort((a, b) => a - b)) {
       const items = byDepth.get(depth)!;
       const indent = '  '.repeat(depth);
-      const tag = depth === 1 ? `${c.red}직접${c.reset}` : `${c.yellow}간접(${depth}홉)${c.reset}`;
+      const tag = depth === 1
+        ? `${c.red}${m.relImpactDirect}${c.reset}`
+        : `${c.yellow}${m.relImpactIndirect(depth)}${c.reset}`;
       console.log(`  ${c.dim}─ ${tag}${c.reset}`);
       for (const i of items) {
         console.log(`  ${indent}${c.gray}↑${c.reset} ${i.name} ${c.dim}${i.filePath}${c.reset}`);
       }
     }
-    console.log(`\n  ${c.bold}총 ${impacted.length}개 엔티티가 영향권${c.reset}\n`);
+    console.log(`\n  ${c.bold}${m.relImpactTotal(impacted.length)}${c.reset}\n`);
   } finally {
     closeRegistryStore();
   }

@@ -120,6 +120,27 @@ interface Messages {
   // ── Audit ──
   auditHeader: string;
   auditTracks: string;
+
+  // ── Relation (who-calls / calls / impact) ──
+  relNotFound: (name: string) => string;
+  relScanFirst: string;
+  relAmbiguous: (name: string, n: number) => string;
+  relUseQualified: string;
+  relNotFoundQualified: (name: string) => string;
+  relWhoCalls: (name: string, file: string, line?: number) => string;
+  relNone: string;
+  relTotal: (n: number) => string;
+  relCalls: (name: string, file: string, line?: number) => string;
+  relCallsNone: string;
+  relImpact: (name: string, file: string, line?: number) => string;
+  relImpactNone: string;
+  relImpactDirect: string;
+  relImpactIndirect: (depth: number) => string;
+  relImpactTotal: (n: number) => string;
+
+  // ── Project hygiene ──
+  projNoProjects: string;
+  projHeader: (n: number) => string;
 }
 
 const en: Messages = {
@@ -236,6 +257,27 @@ const en: Messages = {
   // Audit
   auditHeader: 'Code Audit',
   auditTracks: 'Tracks:',
+
+  // Relation
+  relNotFound: (name) => `✗ Entity '${name}' not found in registry. (Run cxt scan first?)`,
+  relScanFirst: '(run `cxt scan` first?)',
+  relAmbiguous: (name, n) => `⚠ '${name}' matches ${n} entities — use qualified name:`,
+  relUseQualified: 'Specify with file::name format.',
+  relNotFoundQualified: (name) => `✗ '${name}' not found.`,
+  relWhoCalls: (name, file, line) => `\n${name} (${file}${line ? ':' + line : ''}) referenced by:`,
+  relNone: '(none — entry point or called only from outside)',
+  relTotal: (n) => `total ${n}`,
+  relCalls: (name, file, line) => `\n${name} (${file}${line ? ':' + line : ''}) references:`,
+  relCallsNone: '(none — leaf function)',
+  relImpact: (name, file, line) => `\nImpact analysis: ${name} (${file}${line ? ':' + line : ''}) — if changed:`,
+  relImpactNone: '✓ No impacted entities (nobody references this)',
+  relImpactDirect: 'direct',
+  relImpactIndirect: (depth) => `indirect (${depth} hops)`,
+  relImpactTotal: (n) => `${n} entities in impact set`,
+
+  // Project hygiene
+  projNoProjects: '(registry is empty)',
+  projHeader: (n) => `Registered projects (${n})`,
 };
 
 const ko: Messages = {
@@ -352,6 +394,27 @@ const ko: Messages = {
   // Audit
   auditHeader: '코드 감사',
   auditTracks: '트랙:',
+
+  // Relation
+  relNotFound: (name) => `✗ 엔티티 '${name}' 를 레지스트리에서 찾을 수 없습니다. (cxt scan 먼저 실행?)`,
+  relScanFirst: '(cxt scan 먼저 실행?)',
+  relAmbiguous: (name, n) => `⚠ '${name}' 동명 엔티티 ${n}개 — qualified name으로 지정하세요:`,
+  relUseQualified: 'file::name 형식으로 지정하세요.',
+  relNotFoundQualified: (name) => `✗ '${name}' 없음.`,
+  relWhoCalls: (name, file, line) => `\n${name} (${file}${line ? ':' + line : ''}) 를 참조하는 엔티티:`,
+  relNone: '(없음 — 진입점이거나 외부에서만 호출)',
+  relTotal: (n) => `총 ${n}개`,
+  relCalls: (name, file, line) => `\n${name} (${file}${line ? ':' + line : ''}) 가 참조하는 엔티티:`,
+  relCallsNone: '(없음 — leaf 함수)',
+  relImpact: (name, file, line) => `\n영향 분석: ${name} (${file}${line ? ':' + line : ''}) 를 변경하면 —`,
+  relImpactNone: '✓ 영향받는 엔티티 없음 (아무도 참조하지 않음)',
+  relImpactDirect: '직접',
+  relImpactIndirect: (depth) => `간접(${depth}홉)`,
+  relImpactTotal: (n) => `총 ${n}개 엔티티가 영향권`,
+
+  // Project hygiene
+  projNoProjects: '(레지스트리가 비어 있습니다)',
+  projHeader: (n) => `등록 프로젝트 (${n}개)`,
 };
 
 const locales: Record<Locale, Messages> = { en, ko };

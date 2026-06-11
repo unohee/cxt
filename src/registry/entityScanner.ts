@@ -72,11 +72,24 @@ const TS_CONFIG: LanguageConfig = {
 };
 
 // ---- Python ----
+const PY_METHOD_EXCLUDE = new Set([
+  'if', 'for', 'while', 'with', 'try', 'except', 'finally', 'else', 'elif',
+  'return', 'yield', 'raise', 'assert', 'pass', 'break', 'continue',
+]);
+
 const PY_CONFIG: LanguageConfig = {
   extensions: ['.py', '.pyw'],
   testPatterns: [/_test\.py$/, /test_.*\.py$/, /\.test\.py$/],
   blockStyle: 'indent',
   commentPrefixes: ['#'],
+  // INT-1480: Python 클래스 내 메서드 추출 — def로 시작하는 들여쓰기된 줄.
+  // indent 블록 스타일에서는 extractMethods 대신 여기서 직접 패턴 정의.
+  // brace 언어용 extractMethods는 블록 끝을 brace로 찾으므로 Python에는 미사용.
+  methodPattern: {
+    pattern: /^(?:async\s+)?def\s+(\w+)\s*(\([^)]*\)(?:\s*->\s*[^:]+)?)?\s*:/,
+    sigGroup: 2,
+  },
+  methodExclude: PY_METHOD_EXCLUDE,
   patterns: [
     { pattern: /^(?:async\s+)?def\s+(\w+)\s*(\([^)]*\)(?:\s*->\s*[^:]+)?)?\s*:/, kind: 'function', sigGroup: 2 },
     { pattern: /^class\s+(\w+)/, kind: 'class' },
@@ -303,7 +316,10 @@ export function extractEntities(
 
       // 클래스라면 본문 범위에서 직속 메서드를 추출한다 (methodPattern 정의 언어만).
       if (kind === 'class' && lineEnd !== undefined && config.methodPattern) {
-        for (const method of extractMethods(lines, i, lineEnd, config, filePath, name)) {
+        const methodExtractor = config.blockStyle === 'indent'
+          ? extractIndentMethods  // INT-1480: Python 등 indent 스타일
+          : extractMethods;       // brace 스타일 (TS/JS/Go/...)
+        for (const method of methodExtractor(lines, i, lineEnd, config, filePath, name)) {
           const mkey = `${method.name}:${method.lineStart - 1}`;
           if (seen.has(mkey)) continue;
           seen.add(mkey);
@@ -319,6 +335,72 @@ export function extractEntities(
 }
 
 // ============ 블록 끝 추정 ============
+
+/**
+ * INT-1480: Python(indent 스타일) 클래스 본문 직속 메서드 추출.
+ * classStart..classEnd(0-based) 범위 내에서 클래스보다 정확히 한 들여쓰기 단계
+ * 더 들어간 `def`/`async def` 줄만 추출한다. 중첩 클래스·로컬 함수는 delta가
+ * 2단계 이상이므로 자동으로 제외된다.
+ */
+function extractIndentMethods(
+  lines: string[],
+  classStart: number,
+  classEnd: number,
+  config: LanguageConfig,
+  filePath: string,
+  className: string,
+): ExtractedEntity[] {
+  const mp = config.methodPattern;
+  if (!mp) return [];
+  const exclude = config.methodExclude ?? new Set<string>();
+  const methods: ExtractedEntity[] = [];
+
+  const classIndent = lines[classStart].length - lines[classStart].trimStart().length;
+  // Python 관례: 클래스 바디는 classIndent + 4(또는 +2 혼합). 정확한 단계는 첫 줄에서 결정.
+  let methodIndent = -1;
+
+  for (let i = classStart + 1; i <= classEnd; i++) {
+    const raw = lines[i];
+    if (raw === undefined) break;
+    const trimmed = raw.trimStart();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+
+    const indent = raw.length - trimmed.length;
+    if (indent <= classIndent) break; // 클래스 본문 종료
+
+    // 첫 실질 줄로 methodIndent 확정
+    if (methodIndent === -1) methodIndent = indent;
+    // 직속 단계가 아닌 줄(중첩)은 스킵
+    if (indent !== methodIndent) continue;
+
+    const m = trimmed.match(mp.pattern);
+    if (!m) continue;
+    const name = m[1];
+    if (!name || exclude.has(name)) continue;
+
+    const lineEnd = findIndentBlockEnd(lines, i);
+    const signature = mp.sigGroup ? m[mp.sigGroup]?.trim() : undefined;
+    const metrics = computeBlockMetrics(lines, i, lineEnd);
+
+    methods.push({
+      kind: 'function',
+      name,
+      filePath,
+      lineStart: i + 1,
+      lineEnd: lineEnd !== undefined ? lineEnd + 1 : undefined,
+      signature: signature ? `${signature}  // ${className}` : `// ${className}`,
+      isExported: false,
+      loc: metrics.loc,
+      nestingDepth: metrics.nestingDepth,
+      paramCount: metrics.paramCount,
+    });
+
+    // 메서드 본문을 건너뛰어 다음 직속 줄로 이동
+    if (lineEnd !== undefined && lineEnd > i) i = lineEnd;
+  }
+
+  return methods;
+}
 
 /**
  * 클래스 본문(classStart..classEnd, 0-based) 범위에서 직속 메서드를 추출한다.
@@ -903,7 +985,7 @@ export async function scanRepository(
 
   const testMap = buildTestMap(allExtracted, testFiles);
   if (verbose && testMap.size > 0) {
-    console.log(`  [test-map] ${testMap.size} entities mapped to tests`);
+    console.log(`  [test-map] ${testMap.size} entities mapped to tests`); // cxt-ignore: debug_leftover
   }
 
   const existing = store.listEntities({ projectId, limit: 100_000, offset: 0 });
@@ -952,6 +1034,13 @@ export async function scanRepository(
         }
       }
     } else {
+      // INT-1477: broken 엔티티를 재발견했으면 active로 복원.
+      // scanner가 broken으로 전환했던 엔티티만 대상(수동 annotate 제외).
+      if (existingEntity.status === 'broken' && existingEntity.author === 'scanner') {
+        store.changeEntityStatus(existingEntity.id, 'active', 'scanner');
+        updated++;
+      }
+
       const needsUpdate =
         existingEntity.lineStart !== ext.lineStart ||
         existingEntity.lineEnd !== ext.lineEnd ||
@@ -971,7 +1060,7 @@ export async function scanRepository(
           complexityScore: score,
           riskLevel,
         }, 'scanner');
-        updated++;
+        if (existingEntity.status !== 'broken') updated++;
       }
     }
   }
@@ -1022,12 +1111,13 @@ export function resolveRelations(
   projectId: string,
   refsByQName: Map<string, ReferenceSet>,
 ): Array<{ sourceId: string; targetId: string; relationType: RelationType }> {
-  // 최신 active 엔티티 목록을 조회해 인덱스 구축.
+  // active/experimental/deprecated 엔티티로 인덱스 구축.
+  // broken은 제외 — 해당 파일이 사라진 것이므로 관계 해소 대상 아님.
   const { entities } = store.listEntities({ projectId, limit: 200_000, offset: 0 });
   const byName = new Map<string, RelResolveEntity[]>();
   const byQName = new Map<string, RelResolveEntity>();
   for (const e of entities) {
-    if (e.status === 'broken') continue;
+    if (e.status === 'broken') continue; // cxt-ignore: incomplete
     const re: RelResolveEntity = { id: e.id, name: e.name, kind: e.kind, filePath: e.filePath };
     byQName.set(e.qualifiedName, re);
     const arr = byName.get(e.name);
@@ -1061,17 +1151,28 @@ export function resolveRelations(
     for (const callName of refs.callNames) {
       const target = resolve(callName, source.filePath);
       if (!target || target.id === source.id) continue;
-      const key = `${source.id}|${target.id}|calls`;
+      // INT-1481: constant/type 참조는 'uses', 함수/클래스 호출은 'calls'.
+      const relType: RelationType =
+        (target.kind === 'constant' || target.kind === 'type') ? 'uses' : 'calls';
+      const key = `${source.id}|${target.id}|${relType}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      edges.push({ sourceId: source.id, targetId: target.id, relationType: 'calls' });
+      edges.push({ sourceId: source.id, targetId: target.id, relationType: relType });
     }
 
     for (const baseName of refs.baseNames) {
       const target = resolve(baseName, source.filePath);
       if (!target || target.id === source.id) continue;
       // 인터페이스/타입이면 implements, 클래스면 extends.
-      const relType: RelationType = target.kind === 'type' ? 'implements' : 'extends';
+      // overrides: 함수 엔티티가 다른 함수와 같은 이름을 상속 관계로 참조하는 경우.
+      let relType: RelationType;
+      if (target.kind === 'type') {
+        relType = 'implements';
+      } else if (target.kind === 'class') {
+        relType = source.kind === 'function' ? 'overrides' : 'extends';
+      } else {
+        relType = 'extends';
+      }
       const key = `${source.id}|${target.id}|${relType}`;
       if (seen.has(key)) continue;
       seen.add(key);

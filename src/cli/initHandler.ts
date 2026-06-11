@@ -97,10 +97,43 @@ known entities.
 | \`cxt loc --entities\` | LOC with registered entity count per file |
 | \`cxt export\` | GraphQL-like SDL snapshot of codebase structure |
 | \`cxt export -o .cxt/structure.gql\` | Save snapshot to file (LLM-friendly) |
+| \`cxt who-calls <name>\` | Show entities that reference (call/extend/implement) \`<name>\` |
+| \`cxt calls <name>\` | Show entities that \`<name>\` calls/extends/implements |
+| \`cxt impact <name>\` | Transitive callers — all entities affected if \`<name>\` changes |
+| \`cxt who-calls <name> --json\` | Machine-readable JSON output |
+| \`cxt impact <name> --depth 3\` | Limit BFS depth (default: 5) |
+| \`cxt project list\` | List registered projects with entity counts |
+| \`cxt project rm <id>\` | Remove a project and all its entities |
+| \`cxt project prune\` | Delete all broken (zombie) entities |
+| \`cxt project vacuum\` | Compact registry DB and clean up old events |
+| \`cxt bs --json\` | BS scan with JSON output (CI-friendly) |
+| \`cxt bs --dir src/api\` | BS scan limited to a directory |
 | \`cxt annotate <name> --deprecate "reason"\` | Mark entity deprecated |
 | \`cxt annotate <name> --tag key=value\` | Tag entity |
 | \`cxt inject\` | Output registry summary (SessionStart hook) |
 | \`cxt init --target local-claude\` | Inject cxt guide into project CLAUDE.md |
+
+### Call Graph (who-calls / calls / impact)
+
+After \`cxt scan\`, relation queries replace grep for understanding code flow:
+
+\`\`\`
+cxt who-calls rowsToEntities       # who depends on this function?
+cxt calls handleCheck              # what does this call?
+cxt impact SqliteRegistryStore     # if I change this class, what breaks?
+cxt impact migrate --depth 2       # limit transitive depth
+\`\`\`
+
+Use \`--json\` for machine-readable output in scripts. Use \`--type calls|extends|implements\` to filter relation type.
+
+### Project Hygiene
+
+\`\`\`
+cxt project list                   # see all registered projects + entity counts
+cxt project rm old-project         # remove stale project
+cxt project prune                  # delete broken (zombie) entities
+cxt project vacuum --keep-days 7   # compact DB, drop events older than 7 days
+\`\`\`
 
 ### Ignore Rules
 

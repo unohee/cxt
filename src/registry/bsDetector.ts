@@ -371,9 +371,12 @@ const MAX_FILE_SIZE = 512 * 1024;
 
 export async function scanRepository(
   projectPath: string,
-  options?: { verbose?: boolean },
+  // INT-1485: --json/--dir 옵션 추가
+  options?: { verbose?: boolean; dir?: string },
 ): Promise<BsScanResult> {
   const verbose = options?.verbose ?? false;
+  // dir 옵션이 있으면 그 하위만 스캔 (정규화하여 trailing slash 통일)
+  const dirFilter = options?.dir ? options.dir.replace(/\/$/, '') : undefined;
   const ignoreConfig = buildIgnoreConfig(projectPath);
   const allIssues: BsIssue[] = [];
   let filesScanned = 0;
@@ -390,8 +393,15 @@ export async function scanRepository(
 
       if (entry.isDirectory()) {
         if (shouldSkipDir(entry.name, relPath, ignoreConfig)) continue;
+        // --dir 필터: 대상 디렉터리 외부는 스킵 (단, 대상의 상위는 순회해야 도달 가능).
+        if (dirFilter &&
+            !entryRelPath.startsWith(dirFilter) &&
+            !dirFilter.startsWith(entryRelPath)) continue;
         await walk(fullPath, entryRelPath);
       } else if (entry.isFile()) {
+        if (dirFilter && !entryRelPath.startsWith(dirFilter + '/') &&
+            entryRelPath !== dirFilter) continue;
+
         const ext = extname(entry.name);
         if (!SOURCE_EXTENSIONS.has(ext)) continue;
 

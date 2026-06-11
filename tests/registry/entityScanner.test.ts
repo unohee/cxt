@@ -189,8 +189,11 @@ describe('extractEntities — Python', () => {
     expect(names).toContain('foo');
     expect(names).toContain('Bar');
     expect(names).toContain('MAX_VALUE');
-    // method is indented → should NOT be top-level
-    expect(names).not.toContain('method');
+    // INT-1480: Python class methods are now extracted (method is a child of Bar)
+    expect(names).toContain('method');
+    // method should be tagged as function kind
+    const methodEnt = ents.find((e) => e.name === 'method');
+    expect(methodEnt?.kind).toBe('function');
   });
 
   it('detects indent-based block end for top-level def', () => {
