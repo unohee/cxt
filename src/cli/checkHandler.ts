@@ -24,7 +24,7 @@ export function resolveProjectId(projectPath: string): string {
       if (pkg.name && typeof pkg.name === 'string') {
         return pkg.name.replace(/^@[^/]+\//, '');
       }
-    } catch { /* ignore */ }
+    } catch { /* ignore */ } // cxt-ignore: exception_hiding — package.json 파싱 실패 시 다음 fallback(Cargo.toml)으로 진행
   }
 
   const cargoPath = join(projectPath, 'Cargo.toml');
@@ -33,7 +33,7 @@ export function resolveProjectId(projectPath: string): string {
       const cargo = readFileSync(cargoPath, 'utf-8');
       const nameMatch = cargo.match(/^\s*name\s*=\s*"([^"]+)"/m);
       if (nameMatch) return nameMatch[1];
-    } catch { /* ignore */ }
+    } catch { /* ignore */ } // cxt-ignore: exception_hiding — Cargo.toml 파싱 실패 시 다음 fallback(go.mod)으로 진행
   }
 
   const goModPath = join(projectPath, 'go.mod');
@@ -45,7 +45,7 @@ export function resolveProjectId(projectPath: string): string {
         const lastSegment = modMatch[1].split('/').pop();
         if (lastSegment) return lastSegment;
       }
-    } catch { /* ignore */ }
+    } catch { /* ignore */ } // cxt-ignore: exception_hiding — go.mod 파싱 실패 시 폴더명 fallback으로 진행
   }
 
   return projectPath.split('/').pop() ?? 'unknown';

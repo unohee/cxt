@@ -922,7 +922,7 @@ export async function scanRepository(
     let entries;
     try {
       entries = await readdir(dirPath, { withFileTypes: true });
-    } catch (err) {
+    } catch (err) { // cxt-ignore: exception_hiding — 디렉터리 접근 실패 시 해당 디렉터리 스킵 (verbose 로깅)
       if (verbose) console.log(`  [scan] skip dir ${relPath}: ${err instanceof Error ? err.message : 'access denied'}`);
       return;
     }
@@ -946,7 +946,7 @@ export async function scanRepository(
         try {
           const fileStat = await stat(fullPath);
           if (fileStat.size > MAX_FILE_SIZE) continue;
-        } catch (err) {
+        } catch (err) { // cxt-ignore: exception_hiding — stat 실패 시 해당 파일 스킵 (verbose 로깅)
           if (verbose) console.log(`  [scan] skip stat ${entryRelPath}: ${err instanceof Error ? err.message : 'access denied'}`);
           continue;
         }
@@ -974,7 +974,7 @@ export async function scanRepository(
               console.log(`  [scan] ${entryRelPath}: ${entities.length} entities (${language})`);
             }
           }
-        } catch (err) {
+        } catch (err) { // cxt-ignore: exception_hiding — err는 errors[]에 수집되어 ScanResult로 보고됨
           errors.push(`${entryRelPath}: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
@@ -1028,7 +1028,7 @@ export async function scanRepository(
           author: 'scanner',
         });
         registered++;
-      } catch (err) {
+      } catch (err) { // cxt-ignore: exception_hiding — UNIQUE 충돌은 의도적 무시, 그 외 err는 errors[]에 수집됨
         if (!(err instanceof Error && err.message.includes('UNIQUE'))) {
           errors.push(`register ${qualifiedName}: ${err instanceof Error ? err.message : String(err)}`);
         }

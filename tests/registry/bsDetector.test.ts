@@ -26,15 +26,58 @@ afterEach(() => {
 });
 
 describe('bsDetector — CRITICAL patterns', () => {
-  it('detects empty catch block', () => {
+  it('detects empty catch block (now warning, INT-1486)', () => {
     const src = 'try { foo(); } catch (e) {}';
     const issues = scanFileContent(src, 'src/x.ts', 'typescript');
-    expect(issues.find((i) => i.severity === 'critical' && i.category === 'exception_hiding')).toBeDefined();
+    expect(issues.find((i) => i.category === 'exception_hiding')).toBeDefined();
   });
 
   it('skips empty catch in test files', () => {
     const src = 'try { foo(); } catch (e) {}';
     const issues = scanFileContent(src, 'src/x.test.ts', 'typescript');
+    expect(issues.find((i) => i.category === 'exception_hiding')).toBeUndefined();
+  });
+
+  // INT-1486: 빈 catch 너머의 삼킴 형태들
+  it('detects catch that swallows with only a comment', () => {
+    const src = 'try { foo(); } catch { /* ignore */ }';
+    const issues = scanFileContent(src, 'src/x.ts', 'typescript');
+    expect(issues.find((i) => i.category === 'exception_hiding')).toBeDefined();
+  });
+
+  it('detects catch that swallows by returning null', () => {
+    const src = 'try {\n  foo();\n} catch (e) {\n  return null;\n}';
+    const issues = scanFileContent(src, 'src/x.ts', 'typescript');
+    expect(issues.find((i) => i.category === 'exception_hiding')).toBeDefined();
+  });
+
+  it('detects catch that only logs (debug swallow)', () => {
+    const src = 'try {\n  foo();\n} catch (e) {\n  logger.debug(e);\n}';
+    const issues = scanFileContent(src, 'src/x.ts', 'typescript');
+    expect(issues.find((i) => i.category === 'exception_hiding')).toBeDefined();
+  });
+
+  it('does NOT flag catch that rethrows', () => {
+    const src = 'try {\n  foo();\n} catch (e) {\n  throw new Error("wrap: " + e);\n}';
+    const issues = scanFileContent(src, 'src/x.ts', 'typescript');
+    expect(issues.find((i) => i.category === 'exception_hiding')).toBeUndefined();
+  });
+
+  it('does NOT flag catch that rejects a promise', () => {
+    const src = 'try {\n  foo();\n} catch (e) {\n  return Promise.reject(e);\n}';
+    const issues = scanFileContent(src, 'src/x.ts', 'typescript');
+    expect(issues.find((i) => i.category === 'exception_hiding')).toBeUndefined();
+  });
+
+  it('does NOT count throw inside a comment as handling', () => {
+    const src = 'try {\n  foo();\n} catch (e) {\n  // we could throw here but we do not\n  return;\n}';
+    const issues = scanFileContent(src, 'src/x.ts', 'typescript');
+    expect(issues.find((i) => i.category === 'exception_hiding')).toBeDefined();
+  });
+
+  it('respects cxt-ignore: exception_hiding on the catch line', () => {
+    const src = 'try { foo(); } catch { /* ok */ } // cxt-ignore: exception_hiding';
+    const issues = scanFileContent(src, 'src/x.ts', 'typescript');
     expect(issues.find((i) => i.category === 'exception_hiding')).toBeUndefined();
   });
 

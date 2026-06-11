@@ -20,7 +20,7 @@ const PKG_VERSION = (() => {
     const here = dirname(fileURLToPath(import.meta.url));
     const pkg = JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf-8')) as { version?: string };
     return pkg.version ?? '0.0.0';
-  } catch {
+  } catch { // cxt-ignore: exception_hiding — package.json 읽기/파싱 실패 시 기본 버전으로 fallback
     return '0.0.0';
   }
 })();

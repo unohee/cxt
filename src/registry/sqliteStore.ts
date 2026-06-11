@@ -409,7 +409,7 @@ export class SqliteRegistryStore {
     if (needsFtsRebuild) {
       try {
         this.db.exec("INSERT INTO code_entities_fts(code_entities_fts) VALUES('rebuild')");
-      } catch {
+      } catch { // cxt-ignore: exception_hiding — 빈 테이블 rebuild 실패는 무시(인덱싱 불필요)
         // 빈 테이블은 rebuild 불필요
       }
     }
@@ -1092,7 +1092,7 @@ export class SqliteRegistryStore {
         WHERE code_entities_fts MATCH ? ${projClause}
         LIMIT ?
       `).all(...ftsParams) as EntityRow[];
-    } catch (err) {
+    } catch (err) { // cxt-ignore: exception_hiding — FTS5 미지원/MATCH 오류 시 LIKE fallback으로 진행
       const msg = err instanceof Error ? err.message : String(err);
       if (!msg.includes('fts5') && !msg.includes('MATCH')) {
         console.warn('[Registry] searchEntities FTS error:', msg);

@@ -94,6 +94,7 @@ interface Messages {
   bsFakeSuccess: string;
   bsFakeData: string;
   bsRustSilentError: string;
+  bsCatchSwallow: string;
 
   // ── Annotate ──
   annotating: string;
@@ -231,6 +232,7 @@ const en: Messages = {
   bsFakeSuccess: 'Fake success print — claims done without real verification',
   bsFakeData: 'np.random/faker in production — fabricated data',
   bsRustSilentError: 'Silent error swallow (let _ = / .ok();) — error ignored',
+  bsCatchSwallow: 'catch block swallows exception (no throw/reject) — make it explicit or cxt-ignore',
 
   // Annotate
   annotating: 'Annotating:',
@@ -368,6 +370,7 @@ const ko: Messages = {
   bsFakeSuccess: '가짜 성공 출력 — 실제 검증 없이 완료 선언',
   bsFakeData: 'np.random/faker로 위장 데이터 생성 (production)',
   bsRustSilentError: '에러 silent 무시 (let _ = / .ok();) — 예외 은폐',
+  bsCatchSwallow: 'catch 블록이 예외를 삼킴 (throw/reject 없음) — 명시하거나 cxt-ignore',
 
   // Annotate
   annotating: '어노테이션:',

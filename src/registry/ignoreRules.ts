@@ -96,7 +96,7 @@ function loadIgnoreFile(
   let content: string;
   try {
     content = readFileSync(filePath, 'utf-8');
-  } catch {
+  } catch { // cxt-ignore: exception_hiding — ignore 파일 읽기 실패 시 무시하고 진행
     return;
   }
 
@@ -130,7 +130,7 @@ function loadIgnoreFile(
           .replace(/\*\*/g, '.*')
           .replace(/\*/g, '[^/]*');
         skipPathPatterns.push(new RegExp(`^${regexStr}`));
-      } catch {
+      } catch { // cxt-ignore: exception_hiding — invalid glob 패턴은 스킵
         // invalid pattern — skip
       }
     } else if (!cleaned.includes('.')) {
@@ -155,7 +155,7 @@ function detectSubprojectDirs(projectRoot: string, skipDirs: Set<string>): void 
     entries = fs.readdirSync(projectRoot, { withFileTypes: true })
       .filter((e: { isDirectory: () => boolean }) => e.isDirectory())
       .map((e: { name: string }) => e.name);
-  } catch {
+  } catch { // cxt-ignore: exception_hiding — readdir 실패 시 subproject 탐지 건너뜀
     return;
   }
 
@@ -174,7 +174,7 @@ function detectSubprojectDirs(projectRoot: string, skipDirs: Set<string>): void 
           const files = fs.readdirSync(dirPath) as string[];
           const ext = manifest.replace('*', '');
           return files.some((f: string) => f.endsWith(ext));
-        } catch {
+        } catch { // cxt-ignore: exception_hiding — readdir 실패 시 manifest 없음으로 간주
           return false;
         }
       }

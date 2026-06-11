@@ -98,8 +98,8 @@ describe('handleAudit — JSON mode', () => {
   });
 
   it('sets pass=false and exitCode 1 when a critical BS issue exists', async () => {
-    // 빈 catch 블록 → critical
-    write('src/dirty.ts', 'try { foo(); } catch (e) {}\n');
+    // 하드코딩된 시크릿 → critical (빈 catch는 INT-1486 이후 warning)
+    write('src/dirty.ts', 'const apiKey = "sk_live_abcdef1234567890";\n');
     captureLogs();
 
     await handleAudit({ json: true });
@@ -141,8 +141,8 @@ describe('handleAudit — human report', () => {
 
 describe('handleAudit — dir filter', () => {
   it('restricts BS issues to the given directory prefix', async () => {
-    write('src/keep/dirty.ts', 'try { foo(); } catch (e) {}\n');
-    write('other/also-dirty.ts', 'try { bar(); } catch (e) {}\n');
+    write('src/keep/dirty.ts', 'const apiKey = "sk_live_abcdef1234567890";\n');
+    write('other/also-dirty.ts', 'const token = "ghp_zzzzzzzzzzzzzzzzzzzz";\n');
     captureLogs();
 
     await handleAudit({ json: true, dir: 'src/keep' });

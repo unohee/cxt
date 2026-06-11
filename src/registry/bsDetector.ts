@@ -91,13 +91,8 @@ function isI18nPath(filePath: string): boolean {
 
 const BS_PATTERN_DEFS: BsPatternDef[] = [
   // ============ CRITICAL ============
-  {
-    severity: 'critical',
-    category: 'exception_hiding',
-    messageKey: 'bsEmptyCatch',
-    pattern: /catch\s*(?:\([^)]*\))?\s*\{\s*\}/,
-    excludeIf: (_line, fp) => isTestPath(fp),
-  },
+  // 빈 catch / throw 없는 catch 본문 탐지는 줄 단위로 불가능 →
+  // scanCatchSwallow()에서 brace 매칭으로 멀티라인 분석 (INT-1486).
   {
     severity: 'critical',
     category: 'exception_hiding',
@@ -288,6 +283,64 @@ function detectLanguageForBs(ext: string): string | null {
 
 // ============ 단일 파일 스캔 ============
 
+// catch 블록 본문에 예외를 "처리"하는 흔적이 있는지 — 없으면 삼킴(exception_hiding).
+// 처리로 인정: 재던지기(throw), Promise reject, 프로세스 종료, 부모로 전파(return Promise.reject 등).
+// 단순 return/continue/break/로그만 있으면 삼킴으로 본다 (INT-1486).
+const CATCH_HANDLED_RE = /\bthrow\b|\breject\s*\(|process\.exit\s*\(|\.reject\s*\(|return\s+(?:Promise\.reject|reject\()/;
+
+// JS/TS catch 블록을 brace 매칭으로 분석해 throw 없는 삼킴을 찾는다.
+// 줄 단위 패턴으로는 멀티라인 catch 본문을 못 봐서 별도 처리.
+function scanCatchSwallow(
+  lines: string[],
+  filePath: string,
+  msgs: ReturnType<typeof t>,
+): Array<{ line: number; matchedText: string }> {
+  const found: Array<{ line: number; matchedText: string }> = [];
+  // catch (...) { 또는 catch { 의 여는 brace 위치를 찾는다.
+  const catchRe = /\bcatch\s*(?:\([^)]*\))?\s*\{/;
+
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(catchRe);
+    if (!m) continue;
+
+    // 여는 { 위치(매치 끝)부터 brace 카운팅으로 블록 끝을 찾는다.
+    const braceStartCol = m.index! + m[0].length - 1;
+    let depth = 0;
+    let bodyChars = '';
+    let endLine = i;
+    let closed = false;
+
+    for (let j = i; j < lines.length && j < i + 200; j++) {
+      const startCol = j === i ? braceStartCol : 0;
+      const text = lines[j];
+      for (let k = startCol; k < text.length; k++) {
+        const ch = text[k];
+        if (ch === '{') depth++;
+        else if (ch === '}') {
+          depth--;
+          if (depth === 0) { endLine = j; closed = true; break; }
+        } else if (depth >= 1) {
+          bodyChars += ch;
+        }
+      }
+      if (closed) break;
+      if (j > i) bodyChars += '\n';
+    }
+    if (!closed) continue;
+
+    // 본문에서 주석을 제거해 throw가 주석 안에 있는 경우 오인하지 않게 한다.
+    const bodyNoComments = bodyChars
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/[^\n]*/g, '');
+
+    if (CATCH_HANDLED_RE.test(bodyNoComments)) continue; // 정당하게 처리함
+
+    found.push({ line: i + 1, matchedText: lines[i].trim().slice(0, 80) });
+  }
+
+  return found;
+}
+
 export function scanFileContent(
   content: string,
   filePath: string,
@@ -325,6 +378,27 @@ export function scanFileContent(
         line: i + 1,
         matchedText: match[0].slice(0, 80),
       });
+    }
+  }
+
+  // 멀티라인 catch 삼킴 분석 (JS/TS만 — Python은 except:pass 줄 패턴으로 충분) (INT-1486).
+  if (language === 'typescript' || language === 'javascript') {
+    if (!isTestPath(filePath)) {
+      for (const hit of scanCatchSwallow(lines, filePath, msgs)) {
+        const idx = hit.line - 1;
+        const sameLineRule = parseSuppression(lines[idx], 'same');
+        const prevLineRule = idx > 0 ? parseSuppression(lines[idx - 1], 'next') : null;
+        if (suppresses(sameLineRule, 'exception_hiding') || suppresses(prevLineRule, 'exception_hiding')) continue;
+
+        issues.push({
+          severity: 'warning',
+          category: 'exception_hiding',
+          message: msgs.bsCatchSwallow,
+          filePath,
+          line: hit.line,
+          matchedText: hit.matchedText,
+        });
+      }
     }
   }
 
@@ -385,7 +459,7 @@ export async function scanRepository(
     let entries;
     try {
       entries = await readdir(dirPath, { withFileTypes: true });
-    } catch { return; }
+    } catch { return; } // cxt-ignore: exception_hiding — readdir 실패 시 해당 디렉터리 스킵
 
     for (const entry of entries) {
       const fullPath = join(dirPath, entry.name);
@@ -411,7 +485,7 @@ export async function scanRepository(
         try {
           const fileStat = await stat(fullPath);
           if (fileStat.size > MAX_FILE_SIZE) continue;
-        } catch { continue; }
+        } catch { continue; } // cxt-ignore: exception_hiding — stat 실패(권한/심볼릭 링크) 시 파일 스킵
 
         try {
           const content = await readFile(fullPath, 'utf-8');
@@ -422,7 +496,7 @@ export async function scanRepository(
           if (verbose && issues.length > 0) {
             console.log(`  [bs] ${entryRelPath}: ${issues.length} issues`);
           }
-        } catch { continue; }
+        } catch { continue; } // cxt-ignore: exception_hiding — readFile/스캔 실패 시 해당 파일 스킵
       }
     }
   }

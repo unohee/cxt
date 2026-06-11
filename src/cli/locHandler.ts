@@ -106,7 +106,7 @@ async function collectFiles(
   let entries: Dirent[];
   try {
     entries = await readdir(dir, { withFileTypes: true }) as Dirent[];
-  } catch {
+  } catch { // cxt-ignore: exception_hiding — 디렉터리 접근 실패 시 빈 목록으로 스킵
     return [];
   }
 
@@ -130,7 +130,7 @@ async function collectFiles(
       try {
         const s = await stat(fullPath);
         if (s.size > 512 * 1024) continue; // skip oversized files
-      } catch {
+      } catch { // cxt-ignore: exception_hiding — stat 실패 시 해당 파일 스킵
         continue;
       }
 
@@ -185,7 +185,7 @@ export async function handleLoc(opts: LocOpts): Promise<void> {
     let content: string;
     try {
       content = await readFile(join(projectRoot, relPath), 'utf-8');
-    } catch {
+    } catch { // cxt-ignore: exception_hiding — 파일 읽기 실패 시 해당 파일 스킵
       continue;
     }
 
@@ -221,7 +221,7 @@ export async function handleLoc(opts: LocOpts): Promise<void> {
       for (const r of results) {
         r.entityCount = entityCountByFile.get(r.filePath) ?? 0;
       }
-    } catch {
+    } catch { // cxt-ignore: exception_hiding — 레지스트리 미scan이면 엔티티 수 없이 진행
       // scan 안 됐어도 그냥 진행
     } finally {
       closeRegistryStore();
