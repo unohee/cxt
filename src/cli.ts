@@ -75,6 +75,14 @@ ${c.bold}Examples:${c.reset}
   ${c.cyan}cxt export -o .cxt/structure.gql${c.reset}  Export SDL snapshot for LLMs
   ${c.cyan}cxt loc${c.reset}                           File LOC report (sorted by size)
   ${c.cyan}cxt loc --dir src --no-blank${c.reset}      LOC excluding blank lines
+  ${c.cyan}cxt who-calls <name>${c.reset}              Entities that call/extend <name>
+  ${c.cyan}cxt calls <name>${c.reset}                  Entities that <name> calls/extends
+  ${c.cyan}cxt impact <name>${c.reset}                 Transitive callers (change impact)
+  ${c.cyan}cxt projects${c.reset}                      List registered projects
+  ${c.cyan}cxt project rm <id|path>${c.reset}          Remove a project from the registry
+  ${c.cyan}cxt prune${c.reset}                         Delete broken (zombie) entities
+  ${c.cyan}cxt prune --events --days 7${c.reset}       Delete events older than 7 days
+  ${c.cyan}cxt vacuum${c.reset}                        Compact registry DB (VACUUM)
 
 ${c.bold}${m.helpSupportedLangs}:${c.reset}
   TypeScript/JS  Python  Go  Rust  Java  C/C++  C#
@@ -287,7 +295,38 @@ program
     await handleImpact(name, opts);
   });
 
-// ---- project (위생 명령, INT-1479) ----
+// ---- 레지스트리 위생 명령 (INT-1476/1479) ----
+// 스펙 명칭 top-level: projects / prune / vacuum. project 그룹은 호환 유지.
+
+program
+  .command('projects')
+  .description('List registered projects with entity counts')
+  .action(async () => {
+    const { handleProjectList } = await import('./cli/projectHandler.js');
+    await handleProjectList();
+  });
+
+program
+  .command('prune')
+  .description('Prune registry: broken (zombie) entities by default, old events with --events')
+  .option('--events', 'Prune old events instead of broken entities')
+  .option('--days <n>', 'With --events: delete events older than N days (default: 30)', '30')
+  .option('--project <id>', 'Limit broken-entity prune to a specific project')
+  .option('--yes', 'Skip confirmation prompt')
+  .action(async (opts: { events?: boolean; days?: string; project?: string; yes?: boolean }) => {
+    const { handleProjectPrune } = await import('./cli/projectHandler.js');
+    await handleProjectPrune(opts);
+  });
+
+program
+  .command('vacuum')
+  .description('Compact registry DB (SQLite VACUUM)')
+  .option('--keep-days <n>', 'Also prune events older than N days before VACUUM')
+  .action(async (opts: { keepDays?: string }) => {
+    const { handleProjectVacuum } = await import('./cli/projectHandler.js');
+    await handleProjectVacuum(opts);
+  });
+
 const projectCmd = program
   .command('project')
   .description('Project registry management (list / rm / prune / vacuum)');
@@ -301,12 +340,12 @@ projectCmd
   });
 
 projectCmd
-  .command('rm <projectId>')
-  .description('Remove a project and all its entities from the registry')
+  .command('rm <projectIdOrPath>')
+  .description('Remove a project (by ID or directory path) and all its entities')
   .option('--yes', 'Skip confirmation prompt')
-  .action(async (projectId: string, opts: { yes?: boolean }) => {
+  .action(async (projectIdOrPath: string, opts: { yes?: boolean }) => {
     const { handleProjectRm } = await import('./cli/projectHandler.js');
-    await handleProjectRm(projectId, opts);
+    await handleProjectRm(projectIdOrPath, opts);
   });
 
 projectCmd

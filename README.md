@@ -29,9 +29,31 @@ cxt check --tag <tag>    # filter by tag
 cxt check --tree         # directory tree view
 cxt check --ci           # CI/CD mode (JSON output, exit 1 on critical)
 
+# Call-graph queries (after cxt scan)
+cxt who-calls <name>     # entities that call/extend/implement <name>
+cxt calls <name>         # entities that <name> calls/extends/implements
+cxt impact <name>        # transitive callers — everything affected if <name> changes
+cxt impact <name> --depth 3   # limit BFS depth (default: 5)
+cxt who-calls <name> --json   # machine-readable output (also: calls/impact)
+
+# Registry hygiene
+cxt projects             # list registered projects with entity counts
+cxt project rm <id|path> # remove a project and all its entities (asks unless --yes)
+cxt prune                # delete broken (zombie) entities (asks unless --yes)
+cxt prune --events --days 7   # delete events older than 7 days
+cxt vacuum               # compact registry DB (SQLite VACUUM)
+
+# Structure snapshot / LOC
+cxt export               # GraphQL-like SDL snapshot (stdout)
+cxt export -o .cxt/structure.gql  # write snapshot to file (LLM-friendly)
+cxt loc                  # per-file LOC report sorted by size
+cxt loc --dir src --no-blank --no-comments  # code-only LOC for a directory
+
 # Bad Smell detection
 cxt bs                   # scan for BS patterns
 cxt bs -v                # verbose per-file output
+cxt bs --json            # JSON output, exit 1 on critical (CI-friendly)
+cxt bs --dir src/api     # limit scan to a directory prefix
 
 # Code audit (BS scan + registry integrity)
 cxt audit                # BS patterns + untested/high-risk/deprecated, exit 1 on critical
@@ -54,6 +76,33 @@ cxt inject
 cxt --lang en scan
 cxt --lang ko bs
 ```
+
+## Call Graph (who-calls / calls / impact)
+
+`cxt scan` builds a same-project relation graph (`calls`, `uses`, `extends`, `implements`, `overrides`) from regex-extracted references. After a scan, relation queries replace grep for understanding code flow:
+
+```bash
+cxt who-calls rowsToEntities       # who depends on this function?
+cxt calls handleCheck              # what does this call?
+cxt impact SqliteRegistryStore     # if I change this class, what breaks?
+```
+
+Ambiguous names are rejected with candidate suggestions — disambiguate with the qualified name (`src/file.ts::name`). Use `--type calls|extends|implements` to filter, `--json` for scripts.
+
+## Registry Hygiene
+
+The registry at `~/.cxt/registry.db` accumulates projects and event history over time:
+
+```bash
+cxt projects                   # see all registered projects + entity/broken counts
+cxt project rm old-project     # remove a stale project (also accepts a directory path)
+cxt prune                      # delete broken (zombie) entities — files that disappeared
+cxt prune --events --days 7    # trim event history older than 7 days
+cxt vacuum                     # reclaim disk space (VACUUM)
+cxt vacuum --keep-days 7       # prune old events, then VACUUM
+```
+
+Entities marked `broken` (source file deleted) are auto-restored to `active` if a later scan rediscovers them — only scanner-managed entities are touched, manual annotations stay.
 
 ## Supported Languages
 

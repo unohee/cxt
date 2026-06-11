@@ -1,13 +1,17 @@
 // ============================================
 // cxt - CLI Project Handler
 // Created: 2026-06-11
-// Purpose: 프로젝트 위생 명령 — list / rm / prune / vacuum (INT-1479)
-// Dependencies: registry/sqliteStore
+// Purpose: 레지스트리 위생 명령 — projects(list) / project rm / prune / vacuum (INT-1476/1479)
+// Dependencies: registry/sqliteStore, i18n
 // ============================================
 
 import * as readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
+import { existsSync, statSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { getRegistryStore, closeRegistryStore } from '../registry/sqliteStore.js';
+import { resolveProjectId } from './checkHandler.js';
+import { t } from '../i18n.js';
 
 const c = {
   reset: '\x1b[0m', bold: '\x1b[1m', dim: '\x1b[2m',
@@ -22,15 +26,32 @@ async function confirm(message: string): Promise<boolean> {
   return answer.trim().toLowerCase() === 'y';
 }
 
+/**
+ * `cxt project rm <id|path>` — 인자가 존재하는 디렉터리 경로면
+ * 프로젝트 ID로 해석(package.json name 등), 아니면 ID 그대로 사용.
+ */
+function resolveProjectArg(idOrPath: string): string {
+  if (idOrPath.includes('/') || idOrPath === '.' || idOrPath === '..') {
+    const abs = resolve(idOrPath);
+    try {
+      if (existsSync(abs) && statSync(abs).isDirectory()) {
+        return resolveProjectId(abs);
+      }
+    } catch { /* 경로 해석 실패 시 ID로 취급 */ } // cxt-ignore: exception_hiding
+  }
+  return idOrPath;
+}
+
 export async function handleProjectList(): Promise<void> {
+  const m = t();
   const store = getRegistryStore();
   try {
     const projects = store.listProjects();
     if (projects.length === 0) {
-      console.log(`${c.dim}(레지스트리가 비어 있습니다)${c.reset}`);
+      console.log(`${c.dim}${m.projNoProjects}${c.reset}`);
       return;
     }
-    console.log(`\n${c.bold}등록 프로젝트 (${projects.length}개)${c.reset}\n`);
+    console.log(`\n${c.bold}${m.projHeader(projects.length)}${c.reset}\n`);
     for (const p of projects) {
       const brokenStr = p.brokenCount > 0
         ? ` ${c.yellow}broken:${p.brokenCount}${c.reset}`
@@ -47,70 +68,91 @@ export async function handleProjectList(): Promise<void> {
 }
 
 export async function handleProjectRm(
-  projectId: string,
+  idOrPath: string,
   opts: { yes?: boolean },
 ): Promise<void> {
+  const m = t();
   const store = getRegistryStore();
   try {
+    const projectId = resolveProjectArg(idOrPath);
     const projects = store.listProjects();
     const target = projects.find(p => p.projectId === projectId);
     if (!target) {
-      console.log(`${c.red}✗${c.reset} 프로젝트 '${projectId}'를 찾을 수 없습니다.`);
+      console.log(`${c.red}${m.projNotFound(projectId)}${c.reset}`);
       process.exitCode = 1;
       return;
     }
 
     if (!opts.yes) {
       const ok = await confirm(
-        `${c.yellow}⚠${c.reset} '${projectId}' 프로젝트의 엔티티 ${target.entityCount}개를 삭제합니다. 계속?`
+        `${c.yellow}${m.projRmConfirm(projectId, target.entityCount)}${c.reset}`
       );
-      if (!ok) { console.log('취소됨.'); return; }
+      if (!ok) { console.log(m.projCancelled); return; }
     }
 
     const removed = store.deleteProject(projectId);
-    console.log(`${c.green}✓${c.reset} '${projectId}' 제거 완료 (${removed}개 삭제됨)`);
+    console.log(`${c.green}${m.projRmDone(projectId, removed)}${c.reset}`);
   } finally {
     closeRegistryStore();
   }
 }
 
 export async function handleProjectPrune(
-  opts: { project?: string; yes?: boolean },
+  opts: { project?: string; events?: boolean; days?: string; yes?: boolean },
 ): Promise<void> {
+  const m = t();
   const store = getRegistryStore();
   try {
+    // ── 모드 1: 오래된 events 정리 (cxt prune --events [--days N]) ──
+    if (opts.events) {
+      const days = Math.max(0, parseInt(opts.days ?? '30', 10) || 30);
+      const removed = store.pruneEvents(days);
+      console.log(`${c.green}${m.projPruneEventsDone(removed, days)}${c.reset}`);
+      return;
+    }
+
+    // ── 모드 2 (기본): broken(좀비) 엔티티 정리 ──
     const projects = store.listProjects();
     const totalBroken = opts.project
       ? (projects.find(p => p.projectId === opts.project)?.brokenCount ?? 0)
       : projects.reduce((s, p) => s + p.brokenCount, 0);
 
     if (totalBroken === 0) {
-      console.log(`${c.green}✓${c.reset} broken 엔티티 없음 — 정리 불필요`);
+      console.log(`${c.green}${m.projPruneNone}${c.reset}`);
       return;
     }
 
     if (!opts.yes) {
-      const scope = opts.project ? `'${opts.project}'` : '전체 프로젝트';
+      const scope = opts.project ? `'${opts.project}'` : m.projAllScope;
       const ok = await confirm(
-        `${c.yellow}⚠${c.reset} ${scope}의 broken 엔티티 ${totalBroken}개를 삭제합니다. 계속?`
+        `${c.yellow}${m.projPruneConfirm(scope, totalBroken)}${c.reset}`
       );
-      if (!ok) { console.log('취소됨.'); return; }
+      if (!ok) { console.log(m.projCancelled); return; }
     }
 
     const removed = store.pruneBroken(opts.project);
-    console.log(`${c.green}✓${c.reset} broken 엔티티 ${removed}개 정리 완료`); // cxt-ignore: fake_execution
+    console.log(`${c.green}${m.projPruneDone(removed)}${c.reset}`); // cxt-ignore: fake_execution
   } finally {
     closeRegistryStore();
   }
 }
 
-export async function handleProjectVacuum(opts: { keepDays?: string }): Promise<void> {
+export async function handleProjectVacuum(
+  opts: { keepDays?: string; eventsOnly?: boolean },
+): Promise<void> {
+  const m = t();
   const store = getRegistryStore();
   try {
-    const days = parseInt(opts.keepDays ?? '30', 10);
-    console.log(`${c.dim}이벤트 정리 (${days}일 이전) + DB VACUUM 중...${c.reset}`);
-    store.vacuum(days);
-    console.log(`${c.green}✓${c.reset} vacuum 완료`); // cxt-ignore: fake_execution
+    // keepDays가 주어지면 이벤트 정리 동반, 아니면 순수 VACUUM.
+    if (opts.keepDays !== undefined) {
+      const days = Math.max(0, parseInt(opts.keepDays, 10) || 30);
+      console.log(`${c.dim}${m.projVacuumEventsRunning(days)}${c.reset}`);
+      store.pruneEvents(days);
+    } else {
+      console.log(`${c.dim}${m.projVacuumRunning}${c.reset}`);
+    }
+    store.vacuum();
+    console.log(`${c.green}${m.projVacuumDone}${c.reset}`); // cxt-ignore: fake_execution
   } finally {
     closeRegistryStore();
   }

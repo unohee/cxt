@@ -1205,12 +1205,17 @@ export class SqliteRegistryStore {
     return result.changes;
   }
 
-  /** events 테이블을 프로젝트별로 지정 기간 이전 항목 정리 + VACUUM. */
-  vacuum(keepEventsDays = 30): void {
-    const cutoff = new Date(Date.now() - keepEventsDays * 86_400_000).toISOString();
-    this.db.prepare(
+  /** 지정 일수보다 오래된 events 정리. 삭제된 행 수를 반환한다. */
+  pruneEvents(olderThanDays = 30): number {
+    const cutoff = new Date(Date.now() - olderThanDays * 86_400_000).toISOString();
+    const result = this.db.prepare(
       "DELETE FROM code_entity_events WHERE created_at < ?"
     ).run(cutoff);
+    return result.changes;
+  }
+
+  /** DB 파일 압축 (SQLite VACUUM). */
+  vacuum(): void {
     this.db.exec('VACUUM');
   }
 

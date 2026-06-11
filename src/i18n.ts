@@ -142,6 +142,18 @@ interface Messages {
   // ── Project hygiene ──
   projNoProjects: string;
   projHeader: (n: number) => string;
+  projNotFound: (id: string) => string;
+  projRmConfirm: (id: string, n: number) => string;
+  projRmDone: (id: string, n: number) => string;
+  projCancelled: string;
+  projAllScope: string;
+  projPruneNone: string;
+  projPruneConfirm: (scope: string, n: number) => string;
+  projPruneDone: (n: number) => string;
+  projPruneEventsDone: (n: number, days: number) => string;
+  projVacuumRunning: string;
+  projVacuumEventsRunning: (days: number) => string;
+  projVacuumDone: string;
 }
 
 const en: Messages = {
@@ -280,6 +292,18 @@ const en: Messages = {
   // Project hygiene
   projNoProjects: '(registry is empty)',
   projHeader: (n) => `Registered projects (${n})`,
+  projNotFound: (id) => `✗ Project '${id}' not found in registry.`,
+  projRmConfirm: (id, n) => `⚠ This deletes ${n} entities of project '${id}'. Continue?`,
+  projRmDone: (id, n) => `✓ Removed '${id}' (${n} entities deleted)`,
+  projCancelled: 'Cancelled.',
+  projAllScope: 'all projects',
+  projPruneNone: '✓ No broken entities — nothing to prune',
+  projPruneConfirm: (scope, n) => `⚠ This deletes ${n} broken entities in ${scope}. Continue?`,
+  projPruneDone: (n) => `✓ Pruned ${n} broken entities`,
+  projPruneEventsDone: (n, days) => `✓ Pruned ${n} events older than ${days} days`,
+  projVacuumRunning: 'Running VACUUM...',
+  projVacuumEventsRunning: (days) => `Pruning events older than ${days} days + VACUUM...`,
+  projVacuumDone: '✓ vacuum complete',
 };
 
 const ko: Messages = {
@@ -418,6 +442,18 @@ const ko: Messages = {
   // Project hygiene
   projNoProjects: '(레지스트리가 비어 있습니다)',
   projHeader: (n) => `등록 프로젝트 (${n}개)`,
+  projNotFound: (id) => `✗ 프로젝트 '${id}'를 찾을 수 없습니다.`,
+  projRmConfirm: (id, n) => `⚠ '${id}' 프로젝트의 엔티티 ${n}개를 삭제합니다. 계속?`,
+  projRmDone: (id, n) => `✓ '${id}' 제거 완료 (${n}개 삭제됨)`,
+  projCancelled: '취소됨.',
+  projAllScope: '전체 프로젝트',
+  projPruneNone: '✓ broken 엔티티 없음 — 정리 불필요',
+  projPruneConfirm: (scope, n) => `⚠ ${scope}의 broken 엔티티 ${n}개를 삭제합니다. 계속?`,
+  projPruneDone: (n) => `✓ broken 엔티티 ${n}개 정리 완료`,
+  projPruneEventsDone: (n, days) => `✓ ${days}일 이전 이벤트 ${n}개 정리 완료`,
+  projVacuumRunning: 'DB VACUUM 실행 중...',
+  projVacuumEventsRunning: (days) => `이벤트 정리 (${days}일 이전) + DB VACUUM 중...`,
+  projVacuumDone: '✓ vacuum 완료',
 };
 
 const locales: Record<Locale, Messages> = { en, ko };

@@ -102,10 +102,11 @@ known entities.
 | \`cxt impact <name>\` | Transitive callers — all entities affected if \`<name>\` changes |
 | \`cxt who-calls <name> --json\` | Machine-readable JSON output |
 | \`cxt impact <name> --depth 3\` | Limit BFS depth (default: 5) |
-| \`cxt project list\` | List registered projects with entity counts |
-| \`cxt project rm <id>\` | Remove a project and all its entities |
-| \`cxt project prune\` | Delete all broken (zombie) entities |
-| \`cxt project vacuum\` | Compact registry DB and clean up old events |
+| \`cxt projects\` | List registered projects with entity counts |
+| \`cxt project rm <id or path>\` | Remove a project and all its entities |
+| \`cxt prune\` | Delete all broken (zombie) entities |
+| \`cxt prune --events --days 7\` | Trim event history older than 7 days |
+| \`cxt vacuum\` | Compact registry DB (SQLite VACUUM) |
 | \`cxt bs --json\` | BS scan with JSON output (CI-friendly) |
 | \`cxt bs --dir src/api\` | BS scan limited to a directory |
 | \`cxt annotate <name> --deprecate "reason"\` | Mark entity deprecated |
@@ -129,10 +130,11 @@ Use \`--json\` for machine-readable output in scripts. Use \`--type calls|extend
 ### Project Hygiene
 
 \`\`\`
-cxt project list                   # see all registered projects + entity counts
-cxt project rm old-project         # remove stale project
-cxt project prune                  # delete broken (zombie) entities
-cxt project vacuum --keep-days 7   # compact DB, drop events older than 7 days
+cxt projects                       # see all registered projects + entity counts
+cxt project rm old-project         # remove stale project (also accepts a directory path)
+cxt prune                          # delete broken (zombie) entities
+cxt prune --events --days 7        # trim event history older than 7 days
+cxt vacuum --keep-days 7           # drop old events, then compact DB (VACUUM)
 \`\`\`
 
 ### Ignore Rules
