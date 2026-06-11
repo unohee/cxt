@@ -191,9 +191,12 @@ export async function handleExport(opts: ExportOptions): Promise<void> {
 
     const { entities } = store.listEntities({ projectId, limit: 100000, offset: 0 });
 
+    // INT-1476: broken(좀비) 엔티티는 스냅샷에서 제외 — 사라진 코드가 구조도를 오염하지 않도록.
+    const alive = entities.filter((e) => e.status !== 'broken');
+
     const filtered = opts.dir
-      ? entities.filter((e) => e.filePath.startsWith(opts.dir!))
-      : entities;
+      ? alive.filter((e) => e.filePath.startsWith(opts.dir!))
+      : alive;
 
     if (filtered.length === 0) {
       console.error(`# cxt export — no entities found${opts.dir ? ` under "${opts.dir}"` : ''}`);

@@ -315,11 +315,19 @@ export function extractEntities(
       });
 
       // 클래스라면 본문 범위에서 직속 메서드를 추출한다 (methodPattern 정의 언어만).
-      if (kind === 'class' && lineEnd !== undefined && config.methodPattern) {
+      // indent 스타일에서 lineEnd=undefined는 "클래스가 파일 끝까지 이어짐"(흔함) —
+      // EOF를 본문 끝으로 간주해 메서드 추출을 계속한다. brace 스타일의 undefined는
+      // brace 불균형(파싱 실패)이므로 기존대로 스킵.
+      const classBodyEnd = lineEnd !== undefined
+        ? lineEnd
+        : (config.blockStyle === 'indent'
+          ? Math.min(lines.length - 1, i + MAX_BLOCK_SCAN)
+          : undefined);
+      if (kind === 'class' && classBodyEnd !== undefined && config.methodPattern) {
         const methodExtractor = config.blockStyle === 'indent'
           ? extractIndentMethods  // INT-1480: Python 등 indent 스타일
           : extractMethods;       // brace 스타일 (TS/JS/Go/...)
-        for (const method of methodExtractor(lines, i, lineEnd, config, filePath, name)) {
+        for (const method of methodExtractor(lines, i, classBodyEnd, config, filePath, name)) {
           const mkey = `${method.name}:${method.lineStart - 1}`;
           if (seen.has(mkey)) continue;
           seen.add(mkey);
