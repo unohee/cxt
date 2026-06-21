@@ -148,3 +148,102 @@ describe('scanRepository — file walking + test mapping', () => {
     expect(r2.removed).toBeGreaterThanOrEqual(1);
   });
 });
+
+describe('scanRepository — relation graph (calls/extends/implements)', () => {
+  it('loads a calls edge between two same-file functions', async () => {
+    write('src/mod.ts', `
+export function helper() { return 1; }
+export function caller() { return helper(); }
+`.trim());
+
+    const result = await scanRepository(projectDir, 'rel-1');
+    expect(result.relationsLoaded).toBeGreaterThanOrEqual(1);
+
+    const store = getRegistryStore();
+    const callerEnts = store.findEntitiesByName('caller', 'rel-1');
+    expect(callerEnts).toHaveLength(1);
+    const callees = store.getOutgoingRelations(callerEnts[0].id);
+    expect(callees.map((c) => c.targetName)).toContain('helper');
+  });
+
+  it('records the reverse direction (who-calls)', async () => {
+    write('src/mod.ts', `
+export function leaf() { return 1; }
+export function a() { return leaf(); }
+export function b() { return leaf(); }
+`.trim());
+
+    await scanRepository(projectDir, 'rel-2');
+    const store = getRegistryStore();
+    const leaf = store.findEntitiesByName('leaf', 'rel-2')[0];
+    const callers = store.getIncomingRelations(leaf.id);
+    expect(callers.map((c) => c.sourceName).sort()).toEqual(['a', 'b']);
+  });
+
+  it('computes transitive impact set via reverse BFS', async () => {
+    // c -> b -> a  (a is the leaf; changing a impacts b and c)
+    write('src/chain.ts', `
+export function a() { return 1; }
+export function b() { return a(); }
+export function c() { return b(); }
+`.trim());
+
+    await scanRepository(projectDir, 'rel-3');
+    const store = getRegistryStore();
+    const a = store.findEntitiesByName('a', 'rel-3')[0];
+    const impact = store.getImpactSet(a.id);
+    const names = impact.map((i) => i.name).sort();
+    expect(names).toEqual(['b', 'c']);
+    // b is direct (depth 1), c is indirect (depth 2)
+    expect(impact.find((i) => i.name === 'b')?.depth).toBe(1);
+    expect(impact.find((i) => i.name === 'c')?.depth).toBe(2);
+  });
+
+  it('records an extends edge for class inheritance', async () => {
+    write('src/cls.ts', `
+export class Base { run() {} }
+export class Derived extends Base { go() {} }
+`.trim());
+
+    await scanRepository(projectDir, 'rel-4');
+    const store = getRegistryStore();
+    const derived = store.findEntitiesByName('Derived', 'rel-4')[0];
+    const rels = store.getOutgoingRelations(derived.id, 'extends');
+    expect(rels.map((r) => r.targetName)).toContain('Base');
+  });
+
+  it('skips ambiguous call targets (same name in multiple files)', async () => {
+    // `shared` defined in two files → ambiguous, edge must be skipped
+    write('src/x.ts', 'export function shared() { return 1; }');
+    write('src/y.ts', 'export function shared() { return 2; }');
+    write('src/z.ts', `
+import { shared } from './x';
+export function uses() { return shared(); }
+`.trim());
+
+    await scanRepository(projectDir, 'rel-5');
+    const store = getRegistryStore();
+    const uses = store.findEntitiesByName('uses', 'rel-5')[0];
+    const callees = store.getOutgoingRelations(uses.id);
+    // 'shared' is ambiguous (2 candidates, neither in z.ts) → not linked
+    expect(callees.map((c) => c.targetName)).not.toContain('shared');
+  });
+
+  it('clears stale edges on re-scan', async () => {
+    write('src/r.ts', `
+export function target() { return 1; }
+export function user() { return target(); }
+`.trim());
+    const r1 = await scanRepository(projectDir, 'rel-6');
+    expect(r1.relationsLoaded).toBeGreaterThanOrEqual(1);
+
+    // Remove the call → edge must disappear
+    write('src/r.ts', `
+export function target() { return 1; }
+export function user() { return 99; }
+`.trim());
+    await scanRepository(projectDir, 'rel-6');
+    const store = getRegistryStore();
+    expect(store.countRelations('rel-6')).toBe(0);
+  });
+});

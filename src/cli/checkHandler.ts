@@ -172,6 +172,7 @@ export async function handleCheck(
       console.log(`  ${m.updated.padEnd(16)}${c.yellow}~${result.updated}${c.reset}`);
       console.log(`  ${m.markedBroken.padEnd(16)}${result.removed > 0 ? c.red : c.dim}${result.removed}${c.reset}`);
       console.log(`  ${m.testsMapped.padEnd(16)}${c.cyan}${result.testsMapped}${c.reset}`);
+      console.log(`  ${'Relations'.padEnd(16)}${c.cyan}${result.relationsLoaded}${c.reset}`);
       console.log(`  ${m.duration.padEnd(16)}${c.dim}${result.durationMs}ms${c.reset}`);
 
       if (Object.keys(result.languageBreakdown).length > 0) {
@@ -471,13 +472,17 @@ export async function handleCheck(
       return;
     }
 
-    // --search
+    // --search — 기본은 현재 프로젝트 스코프, --global이면 전역.
     if (opts.search) {
       const m = t();
-      const entities = store.searchEntities(opts.search);
-      console.log(`\n${c.bold}${m.searchResults(opts.search, entities.length)}${c.reset}\n`);
+      const scopeId = opts.global ? undefined : (opts.project ?? resolveProjectId(process.cwd()));
+      const entities = store.searchEntities(opts.search, 20, scopeId);
+      const scopeNote = scopeId ? ` ${c.dim}[project: ${scopeId}]${c.reset}` : ` ${c.dim}[global]${c.reset}`;
+      console.log(`\n${c.bold}${m.searchResults(opts.search, entities.length)}${c.reset}${scopeNote}\n`);
       if (entities.length === 0) {
-        console.log(`  ${c.dim}${m.noMatches}${c.reset}\n`);
+        console.log(`  ${c.dim}${m.noMatches}${c.reset}`);
+        if (scopeId) console.log(`  ${c.dim}(다른 프로젝트까지 찾으려면 --global)${c.reset}`);
+        console.log();
       } else {
         for (const e of entities) console.log(formatEntity(e));
         console.log();
