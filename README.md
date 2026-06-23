@@ -89,6 +89,18 @@ cxt impact SqliteRegistryStore     # if I change this class, what breaks?
 
 Ambiguous names are rejected with candidate suggestions — disambiguate with the qualified name (`src/file.ts::name`). Use `--type calls|extends|implements` to filter, `--json` for scripts.
 
+## Benchmark — does it cut agent tool calls?
+
+cxt exists to stop an agent from melting into endless ripgrep. Measured with headless `claude -p`, cxt-on vs cxt-off (cxt blocked), across 2 repos × 3 task types × 2 models:
+
+| Task | off agent explores? | cxt effect (tool calls on→off) |
+|---|---|--:|
+| Call-graph impact ("what breaks if I change X?") | yes — explodes (opus: 300s timeout) | **8–50× fewer** |
+| Untested-function listing | yes — enumerates | **2–11× fewer** |
+| Plain code reading ("read X, summarize") | no — 1–3 calls either way | ~1× (nothing to cut) |
+
+cxt collapses the search exactly where an unaided agent would grind through multi-hop grep, and stays a no-op where there's no grind to kill. Full method, per-cell numbers, limitations, and a reproducible harness: **[BENCHMARK.md](BENCHMARK.md)**.
+
 ## Registry Hygiene
 
 The registry at `~/.cxt/registry.db` accumulates projects and event history over time:
