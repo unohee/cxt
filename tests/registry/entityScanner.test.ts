@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   extractEntities,
+  extractReferences,
 } from '../../src/registry/entityScanner.js';
 
 // entityScanner exports extractEntities + scanRepository.
@@ -275,6 +276,59 @@ describe('extractEntities — Java', () => {
     expect(names).toContain('Calculator');
     expect(names).toContain('Greeter');
     expect(names).toContain('Color');
+  });
+});
+
+describe('extractReferences — 클래스 컨테이너 흡수 방지 (INT-1848)', () => {
+  it('does NOT attribute a member-method body call to the enclosing class', () => {
+    // Regression: a class body slice used to swallow every member method's
+    // internal call, producing a fake `Class → method` calls edge that
+    // poisoned `cxt impact` with false positives.
+    const src = [
+      'export class Store {',
+      '  listEntities() {',
+      '    return this.rowsToEntities([]);',
+      '  }',
+      '  rowsToEntities(r: unknown[]) {',
+      '    return r;',
+      '  }',
+      '}',
+    ].join('\n');
+
+    const ents = extractEntities(src, 'src/store.ts', 'typescript');
+    const refs = extractReferences(src, ents, 'typescript');
+
+    const cls = ents.find((e) => e.name === 'Store' && e.kind === 'class')!;
+    const method = ents.find((e) => e.name === 'listEntities')!;
+    expect(cls).toBeDefined();
+    expect(method).toBeDefined();
+
+    // the method keeps its own call
+    expect(refs.get(method.lineStart)!.callNames.has('rowsToEntities')).toBe(true);
+    // the class must NOT inherit the method-body call
+    expect(refs.get(cls.lineStart)!.callNames.has('rowsToEntities')).toBe(false);
+  });
+
+  it('preserves a class-direct field initializer call', () => {
+    // The mask only blanks member-method lines, so a class-level field
+    // initializer (real class-direct code) is still attributed to the class.
+    const src = [
+      'export class Svc {',
+      '  private store = makeStore();',
+      '  run() {',
+      '    return helperFn();',
+      '  }',
+      '}',
+    ].join('\n');
+
+    const ents = extractEntities(src, 'src/svc.ts', 'typescript');
+    const refs = extractReferences(src, ents, 'typescript');
+    const cls = ents.find((e) => e.name === 'Svc' && e.kind === 'class')!;
+
+    // field initializer (class-direct) is preserved
+    expect(refs.get(cls.lineStart)!.callNames.has('makeStore')).toBe(true);
+    // method-body call is not absorbed
+    expect(refs.get(cls.lineStart)!.callNames.has('helperFn')).toBe(false);
   });
 });
 

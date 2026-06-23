@@ -655,7 +655,25 @@ export function extractReferences(
     if (ent.kind !== 'function' && ent.kind !== 'class') continue;
     const start = ent.lineStart - 1;
     const end = (ent.lineEnd ?? ent.lineStart) - 1;
-    const body = lines.slice(start, end + 1).join('\n');
+    const bodyLines = lines.slice(start, end + 1);
+
+    // INT-1848: 클래스 컨테이너가 멤버 메서드 본문의 호출을 흡수하면
+    // `클래스 → 메서드내부호출대상` 가짜 calls edge가 생긴다 (예: SqliteRegistryStore →
+    // rowsToEntities). 이 흡수가 impact의 transitive BFS를 오염시켜 FP를 낳는다.
+    // 메서드는 개별 엔티티로 자기 calls를 이미 보유하므로, 클래스 body에서 멤버 메서드
+    // 라인을 비워 클래스 직속 코드(필드 이니셜라이저 등)만 남긴다.
+    if (ent.kind === 'class') {
+      for (const inner of entities) {
+        if (inner === ent || inner.kind !== 'function') continue;
+        if (inner.lineStart <= ent.lineStart) continue;
+        const innerEnd = inner.lineEnd ?? inner.lineStart;
+        if (innerEnd > end + 1) continue; // 클래스 범위를 벗어난 엔티티는 건드리지 않음
+        const from = Math.max(0, inner.lineStart - 1 - start);
+        const to = Math.min(bodyLines.length - 1, innerEnd - 1 - start);
+        for (let k = from; k <= to; k++) bodyLines[k] = '';
+      }
+    }
+    const body = bodyLines.join('\n');
 
     const callNames = new Set<string>();
     for (const re of [CALL_PATTERN, MEMBER_CALL_PATTERN]) {
