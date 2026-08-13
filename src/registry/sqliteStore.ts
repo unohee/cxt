@@ -17,6 +17,12 @@ import type {
   FileBrief, RegistryStats,
 } from './schema.js';
 
+function boundedPagination(value: number | undefined, fallback: number, min: number, max: number, name: string): number {
+  const resolved = value ?? fallback;
+  if (!Number.isFinite(resolved)) throw new RangeError(`${name} must be finite`);
+  return Math.min(max, Math.max(min, Math.trunc(resolved)));
+}
+
 const DEFAULT_DB_PATH = resolve(homedir(), '.cxt', 'registry.db');
 
 // ============ 인터페이스 ============
@@ -216,23 +222,24 @@ export class SqliteRegistryStore {
     // 구 스키마는 qualified_name에 단일 UNIQUE 인덱스가 있어 다른 project_id에서
     // 같은 파일 경로의 엔티티가 INSERT되면 충돌. 복합 제약으로 교체한다.
     if (currentVersion < 2) {
-      const indexInfo = this.db.prepare(
-        "SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name='code_entities'"
-      ).all() as Array<{ name: string; sql: string | null }>;
-
-      const hasOldUniqueOnQName = indexInfo.some(idx =>
-        idx.sql && /UNIQUE/i.test(idx.sql) &&
-        /qualified_name/.test(idx.sql) &&
-        !/project_id/.test(idx.sql)
-      );
+      const indexInfo = this.db.prepare('PRAGMA index_list(code_entities)').all() as Array<{ name: string; unique: number }>;
+      const hasOldUniqueOnQName = indexInfo.some((idx) => {
+        if (idx.unique !== 1) return false;
+        const escapedName = idx.name.replace(/"/g, '""');
+        const columns = this.db.prepare(`PRAGMA index_info("${escapedName}")`).all() as Array<{ name: string }>;
+        return columns.length === 1 && columns[0].name === 'qualified_name';
+      });
 
       if (hasOldUniqueOnQName) {
         // 테이블 재생성으로 제약 변경 (SQLite는 DROP CONSTRAINT 미지원)
-        this.db.exec(`
+        this.db.pragma('foreign_keys = OFF');
+        try {
+          this.db.transaction(() => this.db.exec(`
           DROP TRIGGER IF EXISTS ce_fts_ai;
           DROP TRIGGER IF EXISTS ce_fts_ad;
           DROP TRIGGER IF EXISTS ce_fts_au;
           DROP TABLE IF EXISTS code_entities_fts;
+          DROP TABLE IF EXISTS code_entities_v2;
 
           CREATE TABLE code_entities_v2 (
             id TEXT PRIMARY KEY,
@@ -262,7 +269,10 @@ export class SqliteRegistryStore {
           INSERT OR IGNORE INTO code_entities_v2 SELECT * FROM code_entities;
           DROP TABLE code_entities;
           ALTER TABLE code_entities_v2 RENAME TO code_entities;
-        `);
+          `))();
+        } finally {
+          this.db.pragma('foreign_keys = ON');
+        }
       }
     }
 
@@ -271,11 +281,14 @@ export class SqliteRegistryStore {
     const refreshedCols = new Map(refreshedColInfo.map(r => [r.name, r]));
     const lineStartCol = refreshedCols.get('line_start');
     if (lineStartCol && lineStartCol.notnull === 1) {
-      this.db.exec(`
+      this.db.pragma('foreign_keys = OFF');
+      try {
+        this.db.transaction(() => this.db.exec(`
         DROP TRIGGER IF EXISTS ce_fts_ai;
         DROP TRIGGER IF EXISTS ce_fts_ad;
         DROP TRIGGER IF EXISTS ce_fts_au;
         DROP TABLE IF EXISTS code_entities_fts;
+        DROP TABLE IF EXISTS code_entities_new;
 
         CREATE TABLE code_entities_new (
           id TEXT PRIMARY KEY,
@@ -320,7 +333,10 @@ export class SqliteRegistryStore {
         FROM code_entities;
         DROP TABLE code_entities;
         ALTER TABLE code_entities_new RENAME TO code_entities;
-      `);
+        `))();
+      } finally {
+        this.db.pragma('foreign_keys = ON');
+      }
     }
 
     // ── 보조 테이블 + 인덱스 (idempotent) ──
@@ -407,11 +423,7 @@ export class SqliteRegistryStore {
       );`);
 
     if (needsFtsRebuild) {
-      try {
-        this.db.exec("INSERT INTO code_entities_fts(code_entities_fts) VALUES('rebuild')");
-      } catch { // cxt-ignore: exception_hiding — 빈 테이블 rebuild 실패는 무시(인덱싱 불필요)
-        // 빈 테이블은 rebuild 불필요
-      }
+      this.db.exec("INSERT INTO code_entities_fts(code_entities_fts) VALUES('rebuild')");
     }
 
     this.db.exec(`
@@ -438,6 +450,11 @@ export class SqliteRegistryStore {
   }
 
   // ============ 엔티티 CRUD ============
+
+  /** 여러 공개 저장 연산을 하나의 원자적 작업으로 묶는다. */
+  runInTransaction<T>(operation: () => T): T {
+    return this.db.transaction(operation)();
+  }
 
   registerEntity(input: RegisterEntityInput): CodeEntity {
     const id = nanoid(12);
@@ -505,10 +522,12 @@ export class SqliteRegistryStore {
     return this.rowToEntity(row);
   }
 
-  getEntityByName(qualifiedName: string): CodeEntity | null {
-    const row = this.db.prepare(
-      'SELECT * FROM code_entities WHERE qualified_name = ?'
-    ).get(qualifiedName) as EntityRow | undefined;
+  getEntityByName(qualifiedName: string, projectId?: string): CodeEntity | null {
+    const rows = projectId
+      ? this.db.prepare('SELECT * FROM code_entities WHERE qualified_name = ? AND project_id = ? LIMIT 1').all(qualifiedName, projectId) as EntityRow[]
+      : this.db.prepare('SELECT * FROM code_entities WHERE qualified_name = ? LIMIT 2').all(qualifiedName) as EntityRow[];
+    if (!projectId && rows.length !== 1) return null;
+    const row = rows[0];
     if (!row) return null;
     return this.rowToEntity(row);
   }
@@ -601,16 +620,21 @@ export class SqliteRegistryStore {
       params.push(...filter.tags);
     }
 
-    let ftsJoin = '';
+    const ftsJoin = '';
     if (filter?.search) {
-      ftsJoin = 'INNER JOIN code_entities_fts ON code_entities_fts.rowid = e.rowid';
-      conditions.push('code_entities_fts MATCH ?');
-      params.push(filter.search);
+      conditions.push(`(
+        instr(lower(e.name), lower(?)) > 0 OR
+        instr(lower(e.qualified_name), lower(?)) > 0 OR
+        instr(lower(e.description), lower(?)) > 0 OR
+        instr(lower(e.notes), lower(?)) > 0 OR
+        instr(lower(COALESCE(e.signature, '')), lower(?)) > 0
+      )`);
+      params.push(filter.search, filter.search, filter.search, filter.search, filter.search);
     }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-    const limit = filter?.limit ?? 50;
-    const offset = filter?.offset ?? 0;
+    const limit = boundedPagination(filter?.limit, 50, 1, 100_000, 'limit');
+    const offset = boundedPagination(filter?.offset, 0, 0, 10_000_000, 'offset');
 
     const countRow = this.db.prepare(
       `SELECT COUNT(*) as cnt FROM code_entities e ${ftsJoin} ${where}`
@@ -924,6 +948,16 @@ export class SqliteRegistryStore {
     return rows.map(r => this.rowToEntity(r));
   }
 
+  /** qualifiedName 정확 일치 active 엔티티 조회. 전체 레지스트리 페이지 순회를 피한다. */
+  findEntityByQualifiedName(qualifiedName: string, projectId: string): CodeEntity | undefined {
+    const row = this.db.prepare(`
+      SELECT * FROM code_entities
+      WHERE qualified_name = ? AND project_id = ? AND status != 'broken'
+      LIMIT 1
+    `).get(qualifiedName, projectId) as EntityRow | undefined;
+    return row ? this.rowToEntity(row) : undefined;
+  }
+
   /** 프로젝트 전체 relation 수 (검증/통계용). */
   countRelations(projectId: string): number {
     const row = this.db.prepare(`
@@ -994,6 +1028,7 @@ export class SqliteRegistryStore {
   }
 
   getEvents(entityId: string, limit = 50): EntityEvent[] {
+    limit = boundedPagination(limit, 50, 1, 100_000, 'limit');
     return (this.db.prepare(
       'SELECT * FROM code_entity_events WHERE entity_id = ? ORDER BY created_at DESC LIMIT ?'
     ).all(entityId, limit) as EventRow[]).map(this.rowToEvent);
@@ -1001,10 +1036,10 @@ export class SqliteRegistryStore {
 
   // ============ 특화 쿼리 ============
 
-  fileBrief(filePath: string): FileBrief {
+  fileBrief(filePath: string, projectId: string): FileBrief {
     const rows = this.db.prepare(
-      'SELECT * FROM code_entities WHERE file_path = ? ORDER BY line_start NULLS LAST, name'
-    ).all(filePath) as EntityRow[];
+      'SELECT * FROM code_entities WHERE file_path = ? AND project_id = ? ORDER BY line_start NULLS LAST, name'
+    ).all(filePath, projectId) as EntityRow[];
 
     const entities = this.rowsToEntities(rows);
 
@@ -1030,7 +1065,7 @@ export class SqliteRegistryStore {
     const where = projectId
       ? "WHERE status = 'deprecated' AND project_id = ?"
       : "WHERE status = 'deprecated'";
-    const params = projectId ? [projectId] : [];
+    const params: Array<string | number> = projectId ? [projectId] : [];
 
     const rows = this.db.prepare(
       `SELECT * FROM code_entities ${where} ORDER BY deprecated_at DESC`
@@ -1052,44 +1087,55 @@ export class SqliteRegistryStore {
     return this.rowsToEntities(rows);
   }
 
-  highRiskEntities(projectId?: string): CodeEntity[] {
+  highRiskEntities(projectId?: string, limit?: number): CodeEntity[] {
     const where = projectId
       ? "WHERE risk_level = 'high' AND project_id = ?"
       : "WHERE risk_level = 'high'";
-    const params = projectId ? [projectId] : [];
+    const params: Array<string | number> = projectId ? [projectId] : [];
 
+    const limitClause = limit === undefined ? '' : ' LIMIT ?';
+    if (limit !== undefined) params.push(Math.max(0, Math.trunc(limit)));
     const rows = this.db.prepare(
-      `SELECT * FROM code_entities ${where} ORDER BY complexity_score DESC NULLS LAST`
+      `SELECT * FROM code_entities ${where} ORDER BY complexity_score DESC NULLS LAST${limitClause}`
     ).all(...params) as EntityRow[];
     return this.rowsToEntities(rows);
   }
 
-  entitiesByTag(tag: string, value?: string): CodeEntity[] {
+  entitiesByTag(tag: string, value?: string, projectId?: string): CodeEntity[] {
+    const projectClause = projectId ? ' AND e.project_id = ?' : '';
     const query = value
       ? `SELECT e.* FROM code_entities e
          JOIN code_entity_tags t ON t.entity_id = e.id
-         WHERE t.tag = ? AND t.value = ?`
+         WHERE t.tag = ? AND t.value = ?${projectClause}`
       : `SELECT e.* FROM code_entities e
          JOIN code_entity_tags t ON t.entity_id = e.id
-         WHERE t.tag = ?`;
+         WHERE t.tag = ?${projectClause}`;
     const params = value ? [tag, value] : [tag];
+    if (projectId) params.push(projectId);
 
     const rows = this.db.prepare(query).all(...params) as EntityRow[];
     return this.rowsToEntities(rows);
   }
 
-  searchEntities(query: string, limit = 20, projectId?: string): CodeEntity[] {
+  searchEntities(query: string, limit = 20, projectId?: string, dir?: string): CodeEntity[] {
+    limit = boundedPagination(limit, 20, 1, 100_000, 'limit');
     // projectId가 주어지면 해당 프로젝트로 스코프를 좁힌다. 미지정 시 전역 검색.
     const projClause = projectId ? 'AND e.project_id = ?' : '';
     const projClausePlain = projectId ? 'AND project_id = ?' : '';
+    const prefix = dir ? `${dir}/` : undefined;
+    const dirClause = dir ? 'AND (e.file_path = ? OR substr(e.file_path, 1, ?) = ?)' : '';
+    const dirClausePlain = dir ? 'AND (file_path = ? OR substr(file_path, 1, ?) = ?)' : '';
 
     let ftsRows: EntityRow[] = [];
     try {
-      const ftsParams: unknown[] = projectId ? [query, projectId, limit] : [query, limit];
+      const ftsParams: unknown[] = [query];
+      if (projectId) ftsParams.push(projectId);
+      if (dir && prefix) ftsParams.push(dir, prefix.length, prefix);
+      ftsParams.push(limit);
       ftsRows = this.db.prepare(`
         SELECT e.* FROM code_entities e
         INNER JOIN code_entities_fts ON code_entities_fts.rowid = e.rowid
-        WHERE code_entities_fts MATCH ? ${projClause}
+        WHERE code_entities_fts MATCH ? ${projClause} ${dirClause}
         LIMIT ?
       `).all(...ftsParams) as EntityRow[];
     } catch (err) { // cxt-ignore: exception_hiding — FTS5 미지원/MATCH 오류 시 LIKE fallback으로 진행
@@ -1107,10 +1153,11 @@ export class SqliteRegistryStore {
       const existingIds = new Set(results.map(e => e.id));
       const likeParams: unknown[] = [likePattern, likePattern, likePattern, likePattern, likePattern];
       if (projectId) likeParams.push(projectId);
+      if (dir && prefix) likeParams.push(dir, prefix.length, prefix);
       likeParams.push(limit);
       const fallbackRows = this.db.prepare(`
         SELECT * FROM code_entities
-        WHERE (name LIKE ? ESCAPE '\\' OR qualified_name LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR notes LIKE ? ESCAPE '\\' OR signature LIKE ? ESCAPE '\\') ${projClausePlain}
+        WHERE (name LIKE ? ESCAPE '\\' OR qualified_name LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR notes LIKE ? ESCAPE '\\' OR signature LIKE ? ESCAPE '\\') ${projClausePlain} ${dirClausePlain}
         LIMIT ?
       `).all(...likeParams) as EntityRow[];
       const fallback = this.rowsToEntities(fallbackRows)
@@ -1124,12 +1171,12 @@ export class SqliteRegistryStore {
 
   // ============ 통계 ============
 
-  getStats(projectId?: string): RegistryStats {
+  getStats(projectId?: string, dir?: string): RegistryStats {
     // INT-1484: broken 엔티티는 stats에서 제외 — 좀비가 total/highRisk를 오염하지 않도록.
-    const where = projectId
-      ? "WHERE project_id = ? AND status != 'broken'"
-      : "WHERE status != 'broken'";
-    const params = projectId ? [projectId] : [];
+    const prefix = dir ? `${dir}/` : undefined;
+    const where = `${projectId ? 'WHERE project_id = ?' : 'WHERE 1 = 1'} AND status != 'broken'${dir ? ' AND (file_path = ? OR substr(file_path, 1, ?) = ?)' : ''}`;
+    const params: Array<string | number> = projectId ? [projectId] : [];
+    if (dir && prefix) params.push(dir, prefix.length, prefix);
 
     const total = (this.db.prepare(
       `SELECT COUNT(*) as cnt FROM code_entities ${where}`
@@ -1155,14 +1202,11 @@ export class SqliteRegistryStore {
       `SELECT COUNT(*) as cnt FROM code_entities ${where} AND risk_level = 'high'`
     ).get(...params) as CountRow).cnt;
 
+    const warningWhere = `${projectId ? 'AND e.project_id = ?' : ''}${dir ? ' AND (e.file_path = ? OR substr(e.file_path, 1, ?) = ?)' : ''}`;
     const withWarnings = (this.db.prepare(
-      projectId
-        ? `SELECT COUNT(DISTINCT w.entity_id) as cnt FROM code_entity_warnings w
-           JOIN code_entities e ON e.id = w.entity_id
-           WHERE w.resolved = 0 AND e.project_id = ? AND e.status != 'broken'`
-        : `SELECT COUNT(DISTINCT w.entity_id) as cnt FROM code_entity_warnings w
-           JOIN code_entities e ON e.id = w.entity_id
-           WHERE w.resolved = 0 AND e.status != 'broken'`
+      `SELECT COUNT(DISTINCT w.entity_id) as cnt FROM code_entity_warnings w
+       JOIN code_entities e ON e.id = w.entity_id
+       WHERE w.resolved = 0 AND e.status != 'broken' ${warningWhere}`
     ).get(...params) as CountRow).cnt;
 
     return { total, byKind, byStatus, deprecated, untested, highRisk, withWarnings };
@@ -1187,13 +1231,17 @@ export class SqliteRegistryStore {
 
   /** 특정 프로젝트의 모든 엔티티·이벤트·관계를 삭제한다. */
   deleteProject(projectId: string): number {
-    const result = this.db.prepare(
-      "DELETE FROM code_entities WHERE project_id = ?"
-    ).run(projectId);
-    this.db.prepare(
-      "DELETE FROM code_entity_relations WHERE source_id NOT IN (SELECT id FROM code_entities)"
-    ).run();
-    return result.changes;
+    const deleteRelations = this.db.prepare(`
+      DELETE FROM code_entity_relations
+      WHERE source_id IN (SELECT id FROM code_entities WHERE project_id = ?)
+         OR target_id IN (SELECT id FROM code_entities WHERE project_id = ?)
+    `);
+    const deleteEntities = this.db.prepare('DELETE FROM code_entities WHERE project_id = ?');
+    const tx = this.db.transaction((id: string) => {
+      deleteRelations.run(id, id);
+      return deleteEntities.run(id).changes;
+    });
+    return tx(projectId);
   }
 
   /** broken 엔티티만 제거한다 (stale 참조 정리). */
@@ -1207,6 +1255,9 @@ export class SqliteRegistryStore {
 
   /** 지정 일수보다 오래된 events 정리. 삭제된 행 수를 반환한다. */
   pruneEvents(olderThanDays = 30): number {
+    if (!Number.isFinite(olderThanDays) || olderThanDays < 0) {
+      throw new RangeError('olderThanDays must be a finite non-negative number');
+    }
     const cutoff = new Date(Date.now() - olderThanDays * 86_400_000).toISOString();
     const result = this.db.prepare(
       "DELETE FROM code_entity_events WHERE created_at < ?"
@@ -1347,10 +1398,15 @@ export class SqliteRegistryStore {
 
 // 싱글톤
 let storeInstance: SqliteRegistryStore | null = null;
+let storeInstancePath: string | null = null;
 
 export function getRegistryStore(dbPath?: string): SqliteRegistryStore {
+  const requestedPath = resolve(dbPath ?? DEFAULT_DB_PATH);
   if (!storeInstance) {
-    storeInstance = new SqliteRegistryStore(dbPath);
+    storeInstance = new SqliteRegistryStore(requestedPath);
+    storeInstancePath = requestedPath;
+  } else if (dbPath !== undefined && requestedPath !== storeInstancePath) {
+    throw new Error(`Registry store is already open at ${storeInstancePath}; requested ${requestedPath}`);
   }
   return storeInstance;
 }
@@ -1359,5 +1415,6 @@ export function closeRegistryStore(): void {
   if (storeInstance) {
     storeInstance.close();
     storeInstance = null;
+    storeInstancePath = null;
   }
 }

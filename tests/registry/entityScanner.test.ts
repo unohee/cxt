@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   extractEntities,
   extractReferences,
+  extractTypeScriptNamedImports,
 } from '../../src/registry/entityScanner.js';
 
 // entityScanner exports extractEntities + scanRepository.
@@ -10,6 +11,22 @@ import {
 // so we exercise them indirectly through extractEntities + scanRepository.
 
 describe('extractEntities — TypeScript', () => {
+  it('does not extract declaration-shaped text from literals or comments', () => {
+    const source = [
+      'const text = `',
+      'export function phantom() {}',
+      '`;',
+      '/*',
+      'export class Ghost {}',
+      '*/',
+      'export function real() {}',
+    ].join('\n');
+    const names = extractEntities(source, 'src/literals.ts', 'typescript').map((entity) => entity.name);
+    expect(names).toContain('real');
+    expect(names).not.toContain('phantom');
+    expect(names).not.toContain('Ghost');
+  });
+
   it('extracts top-level exported function with signature and line range', () => {
     const src = [
       'export function add(a: number, b: number): number {',
@@ -109,6 +126,14 @@ describe('extractEntities — TypeScript', () => {
     expect(ents.find((e) => e.name === 'run')).toBeDefined();
   });
 
+  it('does not truncate a brace block exceeding 5,000 lines', () => {
+    const body = Array.from({ length: 5_100 }, (_, i) => `  const value${i} = ${i};`);
+    const source = ['export function huge() {', ...body, '}'].join('\n');
+    const huge = extractEntities(source, 'src/huge.ts', 'typescript').find((entity) => entity.name === 'huge')!;
+    expect(huge.lineEnd).toBe(5_102);
+    expect(huge.loc).toBe(5_102);
+  });
+
   it('handles a single-line function body on line 1 (lineEnd=0 must not collapse to undefined)', () => {
     // Regression: findBraceBlockEnd returns 0-based index; a single-line function
     // on line 1 ends at index 0. The caller `lineEnd ? lineEnd+1 : undefined`
@@ -118,6 +143,13 @@ describe('extractEntities — TypeScript', () => {
     const one = ents.find((e) => e.name === 'one')!;
     expect(one.lineStart).toBe(1);
     expect(one.lineEnd).toBe(1);
+  });
+
+  it('reports complete ranges for one-line empty classes', () => {
+    const src = ['export class Exported {}', 'class Local {}'].join('\n');
+    const ents = extractEntities(src, 'src/classes.ts', 'typescript');
+    expect(ents.find((entity) => entity.name === 'Exported')?.lineEnd).toBe(1);
+    expect(ents.find((entity) => entity.name === 'Local')?.lineEnd).toBe(2);
   });
 
   it('extracts class, type, interface, enum, constant', () => {
@@ -172,7 +204,36 @@ describe('extractEntities — TypeScript', () => {
   });
 });
 
+describe('extractEntities — Python comments', () => {
+  it('does not extract declaration-shaped text from hash comments', () => {
+    const source = ['# def phantom():', '  # class Ghost:', 'def real():', '    return 1'].join('\n');
+    const names = extractEntities(source, 'src/example.py', 'python').map((entity) => entity.name);
+    expect(names).toContain('real');
+    expect(names).not.toContain('phantom');
+    expect(names).not.toContain('Ghost');
+  });
+
+  it('does not extract declarations from triple-quoted strings', () => {
+    const source = ['"""', 'def phantom():', '    pass', '"""', 'def real():', '    return 1'].join('\n');
+    const names = extractEntities(source, 'src/example.py', 'python').map((entity) => entity.name);
+    expect(names).toContain('real');
+    expect(names).not.toContain('phantom');
+  });
+});
+
 describe('extractEntities — Python', () => {
+  it('closes functions and classes at EOF and measures bodies longer than 50 lines', () => {
+    const body = Array.from({ length: 60 }, (_, i) => `    value_${i} = ${i}`);
+    const functionSource = ['def long_function():', ...body].join('\n');
+    const fn = extractEntities(functionSource, 'long.py', 'python').find((entity) => entity.name === 'long_function')!;
+    expect(fn.lineEnd).toBe(61);
+    expect(fn.loc).toBe(61);
+
+    const classSource = ['class Tail:', '    def method(self):', '        return 1'].join('\n');
+    const cls = extractEntities(classSource, 'tail.py', 'python').find((entity) => entity.name === 'Tail')!;
+    expect(cls.lineEnd).toBe(3);
+  });
+
   it('extracts def, class, constant', () => {
     const src = [
       'def foo(x, y):',
@@ -329,6 +390,36 @@ describe('extractReferences — 클래스 컨테이너 흡수 방지 (INT-1848)'
     expect(refs.get(cls.lineStart)!.callNames.has('makeStore')).toBe(true);
     // method-body call is not absorbed
     expect(refs.get(cls.lineStart)!.callNames.has('helperFn')).toBe(false);
+  });
+});
+
+describe('TypeScript multiline imports', () => {
+  it('extracts named symbols and source references across physical lines', () => {
+    const src = [
+      'import {',
+      '  helper,',
+      '  worker as aliasedWorker,',
+      "} from './worker';",
+      'export function run() { helper(); }',
+    ].join('\n');
+
+    expect(extractTypeScriptNamedImports(src)).toEqual([{
+      symbols: ['helper', 'worker'],
+      importPath: './worker',
+    }]);
+
+    const entities = extractEntities(src, 'src/run.ts', 'typescript');
+    const run = entities.find((entity) => entity.name === 'run')!;
+    expect(extractReferences(src, entities, 'typescript').get(run.lineStart)?.importPaths)
+      .toContain('./worker');
+  });
+
+  it('ignores import-shaped text in literals and comments', () => {
+    const src = [
+      '`import { phantom } from "./fake"`;',
+      '// import { ghost } from "./comment";',
+    ].join('\n');
+    expect(extractTypeScriptNamedImports(src)).toEqual([]);
   });
 });
 

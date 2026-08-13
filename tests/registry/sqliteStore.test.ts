@@ -53,6 +53,13 @@ describe('SqliteRegistryStore — register / get', () => {
     expect(h.store.getEntityByName('missing::x')).toBeNull();
   });
 
+  it('requires project scope when qualified names are ambiguous', () => {
+    h.store.registerEntity(baseEntity({ projectId: 'p1' }));
+    h.store.registerEntity(baseEntity({ projectId: 'p2' }));
+    expect(h.store.getEntityByName('src/foo.ts::foo')).toBeNull();
+    expect(h.store.getEntityByName('src/foo.ts::foo', 'p2')?.projectId).toBe('p2');
+  });
+
   it('bulk registers multiple entities in a transaction', () => {
     const inputs = [
       baseEntity({ name: 'a', filePath: 'src/a.ts' }),
@@ -259,10 +266,20 @@ describe('SqliteRegistryStore — fileBrief', () => {
     const ent = h.store.registerEntity(baseEntity({ name: 'c', filePath: 'src/foo.ts' }));
     h.store.deprecateEntity(ent.id);
 
-    const brief = h.store.fileBrief('src/foo.ts');
+    const brief = h.store.fileBrief('src/foo.ts', 'p1');
     expect(brief.entities).toHaveLength(3);
     expect(brief.summary).toContain('3 entities');
     expect(brief.summary).toContain('1 deprecated');
+  });
+
+  it('isolates matching relative paths by project', () => {
+    h.store.registerEntity(baseEntity({ projectId: 'p1', name: 'first', filePath: 'src/shared.ts' }));
+    h.store.registerEntity(baseEntity({ projectId: 'p2', name: 'second', filePath: 'src/shared.ts' }));
+
+    const brief = h.store.fileBrief('src/shared.ts', 'p2');
+
+    expect(brief.entities.map((entity) => entity.name)).toEqual(['second']);
+    expect(brief.summary).toContain('1 entities');
   });
 });
 
@@ -290,6 +307,11 @@ describe('SqliteRegistryStore — convenience queries', () => {
     expect(list.map((e) => e.name)).toEqual(['risky']);
   });
 
+  it('highRiskEntities applies a retrieval limit', () => {
+    h.store.registerEntity(baseEntity({ name: 'risky2', filePath: 'src/r2.ts', riskLevel: 'high' }));
+    expect(h.store.highRiskEntities('p1', 1)).toHaveLength(1);
+  });
+
   it('deprecatedEntities returns deprecated only', () => {
     const list = h.store.deprecatedEntities('p1');
     expect(list.map((e) => e.name)).toEqual(['old']);
@@ -308,6 +330,49 @@ describe('SqliteRegistryStore — events', () => {
 });
 
 describe('SqliteRegistryStore — schema version + FTS rebuild guard (INT-1478)', () => {
+  it('migrates an inline UNIQUE(qualified_name) autoindex from v1', () => {
+    const dbPath = join(h.dir, 'registry.db');
+    const raw = new Database(dbPath);
+    const schema = (raw.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'code_entities'").get() as { sql: string }).sql;
+    raw.close();
+
+    const legacyPath = join(h.dir, 'legacy.db');
+    const legacy = new Database(legacyPath);
+    legacy.exec(schema.replace('UNIQUE(project_id, qualified_name)', 'UNIQUE(qualified_name)'));
+    legacy.pragma('user_version = 1');
+    legacy.close();
+
+    const migrated = new SqliteRegistryStore(legacyPath);
+    migrated.registerEntity(baseEntity({ projectId: 'p1' }));
+    expect(() => migrated.registerEntity(baseEntity({ projectId: 'p2' }))).not.toThrow();
+    migrated.close();
+  });
+
+  it('migrates a populated v1 database while preserving child rows', () => {
+    const currentPath = join(h.dir, 'registry.db');
+    const current = new Database(currentPath);
+    const entitySchema = (current.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'code_entities'").get() as { sql: string }).sql;
+    const tagSchema = (current.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'code_entity_tags'").get() as { sql: string }).sql;
+    current.close();
+    const legacyPath = join(h.dir, 'legacy-populated.db');
+    const legacy = new Database(legacyPath);
+    legacy.exec(entitySchema.replace('UNIQUE(project_id, qualified_name)', 'UNIQUE(qualified_name)'));
+    legacy.exec(tagSchema);
+    legacy.prepare(`INSERT INTO code_entities
+      (id, project_id, kind, name, qualified_name, file_path, line_start, line_end, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`)
+      .run('legacy-entity', 'legacy-project', 'function', 'legacy', 'src/legacy.ts::legacy', 'src/legacy.ts', 1, 1);
+    legacy.prepare('INSERT INTO code_entity_tags (entity_id, tag, value) VALUES (?, ?, ?)')
+      .run('legacy-entity', 'owner', 'core');
+    legacy.pragma('user_version = 1');
+    legacy.close();
+
+    const migrated = new SqliteRegistryStore(legacyPath);
+    expect(migrated.getEntity('legacy-entity')?.name).toBe('legacy');
+    expect(migrated.getTags('legacy-entity')).toEqual([{ tag: 'owner', value: 'core' }]);
+    migrated.close();
+  });
+
   it('stamps user_version on first migrate and keeps FTS working across reopen', () => {
     const dbPath = join(h.dir, 'registry.db');
     h.store.registerEntity(baseEntity({ name: 'alphaFn', filePath: 'src/a.ts' }));
@@ -403,6 +468,14 @@ describe('SqliteRegistryStore — registry hygiene (INT-1476/1479)', () => {
     h.store.addEvent(ent.id, 'updated', { content: 'fresh' });
     expect(h.store.pruneEvents(30)).toBe(0);
     expect(h.store.getEvents(ent.id)).toHaveLength(1);
+    expect(() => h.store.getEvents(ent.id, -1)).not.toThrow();
+    expect(h.store.getEvents(ent.id, -1)).toHaveLength(1);
+    expect(() => h.store.getEvents(ent.id, Number.NaN)).toThrow('limit must be finite');
+  });
+
+  it('rejects invalid event retention periods', () => {
+    expect(() => h.store.pruneEvents(-1)).toThrow('finite non-negative');
+    expect(() => h.store.pruneEvents(Number.NaN)).toThrow('finite non-negative');
   });
 
   it('vacuum runs without error', () => {

@@ -32,6 +32,12 @@ describe('bsDetector — CRITICAL patterns', () => {
     expect(issues.find((i) => i.category === 'exception_hiding')).toBeDefined();
   });
 
+  it('ignores catch-shaped text in comments and string literals', () => {
+    const src = ['// catch (e) {}', 'const example = "catch (e) {}";'].join('\n');
+    const issues = scanFileContent(src, 'src/example.ts', 'typescript');
+    expect(issues.find((issue) => issue.category === 'exception_hiding')).toBeUndefined();
+  });
+
   it('skips empty catch in test files', () => {
     const src = 'try { foo(); } catch (e) {}';
     const issues = scanFileContent(src, 'src/x.test.ts', 'typescript');
@@ -161,6 +167,33 @@ describe('bsDetector — WARNING patterns', () => {
     expect(issues.find((i) => i.category === 'security')).toBeDefined();
   });
 
+  it('does not flag eval text inside literals or comments', () => {
+    const issues = scanFileContent('const example = "eval(value)";\n// eval(value)', 'src/example.ts', 'typescript');
+    expect(issues.some((issue) => issue.category === 'security')).toBe(false);
+  });
+
+  it('does not flag structural patterns in Python comments', () => {
+    const issues = scanFileContent('# eval("example")\nvalue = 1', 'src/example.py', 'python');
+    expect(issues.some((issue) => issue.category === 'security')).toBe(false);
+  });
+
+  it('does not flag structural patterns in Python triple-quoted strings', () => {
+    const issues = scanFileContent('"""\neval("example")\n"""', 'src/example.py', 'python');
+    expect(issues.some((issue) => issue.category === 'security')).toBe(false);
+  });
+
+  it('scans executable JavaScript template interpolations', () => {
+    const issues = scanFileContent('const value = `${eval(input)}`;', 'src/example.ts', 'typescript');
+    expect(issues.some((issue) => issue.category === 'security')).toBe(true);
+  });
+
+  it('does not restore template-like text in Go or Rust raw strings', () => {
+    for (const language of ['go', 'rust']) {
+      const issues = scanFileContent('const sample = `${eval(input)}`', `src/example.${language}`, language);
+      expect(issues.some((issue) => issue.category === 'security')).toBe(false);
+    }
+  });
+
   it('detects fake URL example.com', () => {
     const src = 'const api = "https://api.example.com/v1";';
     const issues = scanFileContent(src, 'src/x.ts', 'typescript');
@@ -244,6 +277,61 @@ describe('bsDetector — inline suppression (cxt-ignore)', () => {
   it('cxt-ignore inside a string literal does not suppress (needs comment marker)', () => {
     const issues = scanFileContent('const s = "cxt-ignore"; const x = y as any;', 'src/a.ts', 'typescript');
     expect(issues.find((i) => i.category === 'type_safety')).toBeDefined();
+  });
+
+  it('does not accept a comment-shaped suppression token inside a string', () => {
+    const issues = scanFileContent('const note = "// cxt-ignore"; eval(input);', 'src/x.ts', 'typescript');
+    expect(issues.some((issue) => issue.category === 'security')).toBe(true);
+  });
+
+  it('does not accept suppression directives inside multiline literals', () => {
+    const source = ['const note = `', '// cxt-ignore-next-line', '`; eval(input);'].join('\n');
+    const issues = scanFileContent(source, 'src/x.ts', 'typescript');
+    expect(issues.some((issue) => issue.category === 'security')).toBe(true);
+  });
+
+  it('does not accept non-comment suppression markers in JavaScript regexes', () => {
+    const issues = scanFileContent('const r = /# cxt-ignore/; eval(input);', 'src/x.ts', 'typescript');
+    expect(issues.some((issue) => issue.category === 'security')).toBe(true);
+  });
+
+  it('does not accept slash-comment-shaped suppression text inside regex classes', () => {
+    const issues = scanFileContent('const r = /[//] cxt-ignore/; eval(input);', 'src/x.ts', 'typescript');
+    expect(issues.some((issue) => issue.category === 'security')).toBe(true);
+  });
+
+  it('does not accept suppression text in regexes after control heads', () => {
+    const issues = scanFileContent('eval(input); if (ok) /[//] cxt-ignore/', 'src/x.ts', 'typescript');
+    expect(issues.some((issue) => issue.category === 'security')).toBe(true);
+  });
+
+  it('does not accept suppression text in regexes after expression-leading keywords', () => {
+    for (const keyword of ['return', 'yield', 'throw', 'await', 'new', 'in', 'of', 'else', 'do']) {
+      const issues = scanFileContent(`${keyword} /[//] cxt-ignore/; eval(input);`, 'src/x.ts', 'typescript');
+      expect(issues.some((issue) => issue.category === 'security')).toBe(true);
+    }
+  });
+
+  it('does not mask executable code after slash-heavy regex character classes', () => {
+    const issues = scanFileContent('const r = /[///]/; eval(input);', 'src/x.ts', 'typescript');
+    expect(issues.some((issue) => issue.category === 'security')).toBe(true);
+  });
+
+  it('does not treat multiplication as a suppression comment', () => {
+    const issues = scanFileContent('eval(input); value * cxt-ignore', 'src/x.ts', 'typescript');
+    expect(issues.some((issue) => issue.category === 'security')).toBe(true);
+  });
+
+  it('keeps risky calls visible after keyword-led regex literals', () => {
+    for (const keyword of ['yield', 'return']) {
+      const issues = scanFileContent(`${keyword} /[//] marker/; eval(input);`, 'src/x.ts', 'typescript');
+      expect(issues.some((issue) => issue.category === 'security')).toBe(true);
+    }
+  });
+
+  it('keeps risky calls visible after control-head regex literals', () => {
+    const issues = scanFileContent('if (ok) /[//]/.test(value); eval(input);', 'src/x.ts', 'typescript');
+    expect(issues.some((issue) => issue.category === 'security')).toBe(true);
   });
   it('same-line rule does not mistake cxt-ignore-next-line for cxt-ignore', () => {
     const issues = scanFileContent('const x = y as any; // cxt-ignore-next-line', 'src/a.ts', 'typescript');
@@ -369,6 +457,11 @@ describe('bsDetector — scanFile (async file reader)', () => {
     const issues = await scanFile(path);
     expect(issues).toEqual([]);
   });
+
+  it('rejects oversized supported files before reading their contents', async () => {
+    const path = writeFile('src/huge.ts', 'x'.repeat(600 * 1024));
+    await expect(scanFile(path)).rejects.toThrow('file exceeds scan size limit');
+  });
 });
 
 describe('bsDetector — scanRepository', () => {
@@ -391,6 +484,31 @@ describe('bsDetector — scanRepository', () => {
     expect(result.bsScore).toBe(0);
   });
 
+  it('does not include sibling directories that only share the --dir prefix', async () => {
+    writeFile('src/api/clean.ts', 'export const clean = 1;');
+    writeFile('src/api-client/dirty.ts', 'function dirty() { eval("nope"); }');
+
+    const result = await scanRepository(projectDir, { dir: 'src/api' });
+    expect(result.filesScanned).toBe(1);
+    expect(result.issues.some((issue) => issue.filePath.includes('api-client'))).toBe(false);
+  });
+
+  it('treats dot as the repository root scope', async () => {
+    writeFile('src/clean.ts', 'export const clean = 1;');
+    const result = await scanRepository(projectDir, { dir: './' });
+    expect(result.filesScanned).toBe(1);
+  });
+
+  it('applies file ignore rules before scanning source files', async () => {
+    writeFile('.cxtignore', '*.generated.ts\n!keep.generated.ts\n');
+    writeFile('drop.generated.ts', 'eval("drop")');
+    writeFile('keep.generated.ts', 'eval("keep")');
+    const result = await scanRepository(projectDir);
+    expect(result.filesScanned).toBe(1);
+    expect(result.issues.some((issue) => issue.filePath === 'drop.generated.ts')).toBe(false);
+    expect(result.issues.some((issue) => issue.filePath === 'keep.generated.ts')).toBe(true);
+  });
+
   it('skips oversized files', async () => {
     const big = 'const X = "' + 'x'.repeat(600 * 1024) + '";';
     writeFile('src/big.ts', big);
@@ -398,6 +516,17 @@ describe('bsDetector — scanRepository', () => {
 
     const result = await scanRepository(projectDir);
     expect(result.filesScanned).toBe(1);
+    expect(result.errors.some((error) => error.includes('src/big.ts') && error.includes('size limit'))).toBe(true);
+  });
+
+  it('bounds repository traversal by depth and deadline', async () => {
+    writeFile('a/b/c/deep.ts', 'export const deep = 1;');
+    const depthLimited = await scanRepository(projectDir, { maxDepth: 1 });
+    expect(depthLimited.errors.some((error) => error.includes('scan depth exceeded'))).toBe(true);
+    expect(depthLimited.filesScanned).toBe(0);
+
+    await expect(scanRepository(projectDir, { timeoutMs: -1 })).rejects.toThrow('timeoutMs must be finite and positive');
+    await expect(scanRepository(projectDir, { maxDepth: Infinity })).rejects.toThrow('maxDepth must be finite');
   });
 
   it('verbose mode does not crash', async () => {

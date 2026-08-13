@@ -1,13 +1,71 @@
 # cxt Benchmark — does it actually cut agent tool calls?
 
+> The published table below is the historical Claude Code run from 2026-06-23.
+> For a current Codex A/B, use `npm run bench:codex`. The harness builds the
+> current source in a baseline snapshot, gives every condition an independent
+> workspace and SQLite backup, records raw JSONL, and applies a quality floor
+> before it calls a reduction meaningful.
+
+## Current Codex harness
+
+```bash
+# setup/schema/oracle validation only (no model call)
+npm run bench:codex -- --dry-run
+
+# quick paired smoke
+npm run bench:codex -- --tasks callgraph --runs 1
+
+# recommended matrix; alternating on/off order reduces ordering bias
+npm run bench:codex -- --tasks callgraph,locate,explain --runs 3
+```
+
+The harness copies the current source and builds it once in a temporary baseline,
+then creates a separate disposable workspace and SQLite backup for **every**
+on/off session. It runs `codex exec --ephemeral --ignore-user-config --sandbox
+workspace-write` with an auth-only temporary `CODEX_HOME`; the real worktree
+and registry remain outside the writable sandbox. In the **on** condition, the
+prompt receives an absolute wrapper path to that session's built `dist/cli.js`;
+in **off**, cxt is explicitly unavailable. Both absolute paths are intentional
+because Codex invokes a login shell, which may reset PATH and select a different
+Node ABI. This prevents global skills, hooks, a stale global package, or state
+left by an earlier condition from contaminating the comparison.
+
+Every run stores raw JSONL and stderr plus `results.json`. The harness compares
+the prepared source, built `dist`, and build/config files with the baseline
+after every session. `summary.json` contains paired tool-call differences. A
+pair is eligible for the headline
+only when cxt-on scores at least 0.80 and is no more than 0.05 worse than
+cxt-off. `meaningful: true` therefore means a positive mean net tool saving
+among quality-eligible pairs, not merely fewer calls from an incomplete answer.
+
+The three tasks cover cxt's expected strong case (`callgraph`), a batch lookup
+(`locate`), and a negative control that still requires source reading
+(`explain`). The callgraph oracle is the current registry result, so that score
+measures agreement with cxt—not independent callgraph correctness. Preserve the
+raw output and separately audit relation accuracy before using the number as a
+correctness claim.
+
+### 2026-08-10 preliminary run (superseded)
+
+The initial 34-pair callgraph run was intentionally stopped before the planned
+50 pairs. It reused one writable workspace between conditions and checked only
+`src` afterwards. No source mutation was detected, but that design allows
+unhashed state to carry between sessions, so it is **not valid current A/B
+evidence**. The aggregate is retained for auditability, not as a product claim.
+
+The compact, tracked [n=34 aggregate](testing/benchmarks/codex_20260810_n34_summary.json)
+contains every pair's tool counts, scores, and eligibility. The full JSONL
+transcripts remain local because they contain tool output and are not a package
+artifact. Re-run the updated harness before drawing any Codex tool-call or
+quality conclusion. Do not retain the old `n=1` call-count claim as a product
+claim.
+
 cxt's pitch is "skip exploratory Read/Grep, use the registry." This benchmark
 measures whether that's real, on what kinds of tasks, and where it *isn't*.
 
-**TL;DR** — the point of cxt is to stop the agent from melting into endless
-ripgrep. On tasks where an off agent *does* explode into multi-hop search
-(call-graph, untested-listing) cxt collapses it to one deterministic call. On
-tasks that never explode in the first place (`explain` — read one function) cxt
-correctly stays out of the way. The win is exactly where the pain is.
+**Historical Claude Code result** — the table below predates the current Codex
+harness. It is retained as a historical observation, not a current product
+claim; a new condition-isolated Codex run is required for current evidence.
 
 | Task class | What it asks | off agent explores? | cxt effect (tool calls on→off) |
 |---|---|---|---|

@@ -7,6 +7,7 @@
 import { readFile } from 'node:fs/promises';
 import { extname } from 'node:path';
 import { t } from '../i18n.js';
+import { maskLiteralsAndComments } from './lexical.js';
 
 // ============ 타입 ============
 
@@ -28,6 +29,7 @@ export interface BsScanResult {
   warning: number;
   minor: number;
   bsScore: number;
+  errors: string[];
 }
 
 // ============ 패턴 정의 ============
@@ -64,18 +66,107 @@ function isRustNonProd(filePath: string): boolean {
  *   cxt-ignore-next-line[: cat] → 다음 줄 억제
  * 반환: null=억제 없음, '*'=전체 억제, Set<category>=특정 카테고리만 억제.
  */
-function parseSuppression(line: string, kind: 'same' | 'next'): '*' | Set<string> | null {
+function parseSuppression(line: string, lexicalLine: string, kind: 'same' | 'next', language: string, startsInLiteral = false): '*' | Set<string> | null {
+  if (startsInLiteral) return null;
   const token = kind === 'same' ? 'cxt-ignore' : 'cxt-ignore-next-line';
   // 주석 컨텍스트에서 토큰 + (선택) ": 카테고리 목록" 캡처.
   // same 줄 매칭 시 cxt-ignore-next-line 까지 같이 잡히지 않도록, same 은 -next-line 이 아닌 경우만 인정.
-  const re = kind === 'same'
-    ? /(?:\/\/|#|\/\*|\*|--|;)\s*cxt-ignore(?!-next-line)\b\s*(?::\s*([\w,\s]+))?/
-    : /(?:\/\/|#|\/\*|\*|--|;)\s*cxt-ignore-next-line\b\s*(?::\s*([\w,\s]+))?/;
+  const marker = language === 'python' ? '#' : '(?:\\/\\/|\\/\\*)';
+  const suffix = kind === 'same' ? 'cxt-ignore(?!-next-line)' : 'cxt-ignore-next-line';
+  const re = new RegExp(`${marker}\\s*${suffix}\\b\\s*(?::\\s*([\\w,\\s]+))?`);
   const m = line.match(re);
   if (!m) return null;
+  if (isInsideQuotedLiteral(line, m.index ?? 0)) return null;
+  if ((language === 'typescript' || language === 'javascript') && isInsideRegexLiteral(line, m.index ?? 0)) return null;
+  const markerEnd = (m.index ?? 0) + m[0].length;
+  if (/\S/.test(lexicalLine.slice(markerEnd))) return null;
   if (!m[1]) return '*';
   const cats = m[1].split(',').map(s => s.trim()).filter(Boolean);
   return cats.length ? new Set(cats) : '*';
+}
+
+function isInsideRegexLiteral(line: string, end: number): boolean {
+  let inRegex = false;
+  let charClass = false;
+  let escaped = false;
+  let previous = '';
+  let recentWord = '';
+  let controlParenDepth: number | undefined;
+  let afterControlHead = false;
+  for (let i = 0; i < end; i++) {
+    const ch = line[i];
+    if (inRegex) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '[') charClass = true;
+      else if (ch === ']') charClass = false;
+      else if (ch === '/' && !charClass) { inRegex = false; previous = 'r'; }
+      continue;
+    }
+    if (ch === '/' && (afterControlHead || /^(?:return|throw|case|yield|await|typeof|delete|void|new|in|of|else|do)$/.test(recentWord) || !previous || /[=(:,!&|?{};\[+*%~<>/]/.test(previous))) {
+      inRegex = true; afterControlHead = false; recentWord = ''; continue;
+    }
+    if (!/\s/.test(ch)) {
+      if (ch === '(') {
+        if (controlParenDepth !== undefined) controlParenDepth++;
+        else if (/^(?:if|while|for|with)$/.test(recentWord)) controlParenDepth = 1;
+      } else if (ch === ')' && controlParenDepth !== undefined && --controlParenDepth === 0) {
+        controlParenDepth = undefined;
+        afterControlHead = true;
+      } else if (afterControlHead) afterControlHead = false;
+      previous = ch;
+      if (/[A-Za-z_]/.test(ch)) recentWord += ch;
+      else recentWord = '';
+    }
+  }
+  return inRegex;
+}
+
+function linesStartingInsideLiteral(source: string, language: string): boolean[] {
+  const lines = source.split('\n');
+  const result: boolean[] = [];
+  let quote: "'" | '"' | '`' | "'''" | '"""' | undefined;
+  for (const line of lines) {
+    result.push(quote !== undefined);
+    let escaped = false;
+    for (let i = 0; i < line.length; i++) {
+      if (quote?.length === 3) {
+        if (line.startsWith(quote, i)) { i += 2; quote = undefined; }
+        continue;
+      }
+      const ch = line[i];
+      if (quote) {
+        if (escaped) escaped = false;
+        else if (ch === '\\') escaped = true;
+        else if (ch === quote) quote = undefined;
+        continue;
+      }
+      if (language === 'python' && (line.startsWith("'''", i) || line.startsWith('"""', i))) {
+        quote = line.slice(i, i + 3) as "'''" | '"""'; i += 2; continue;
+      }
+      if (ch === "'" || ch === '"' || (ch === '`' && (language === 'typescript' || language === 'javascript'))) quote = ch;
+      else if (ch === '#' && language === 'python') break;
+      else if (ch === '/' && (line[i + 1] === '/' || line[i + 1] === '*')) break;
+    }
+    if (quote?.length === 1 && quote !== '`') quote = undefined;
+  }
+  return result;
+}
+
+function isInsideQuotedLiteral(line: string, end: number): boolean {
+  let quote: "'" | '"' | '`' | undefined;
+  let escaped = false;
+  for (let i = 0; i < end; i++) {
+    const ch = line[i];
+    if (escaped) { escaped = false; continue; }
+    if (ch === '\\') { escaped = true; continue; }
+    if (quote) {
+      if (ch === quote) quote = undefined;
+    } else if (ch === "'" || ch === '"' || ch === '`') {
+      quote = ch;
+    }
+  }
+  return quote !== undefined;
 }
 
 /** suppression 규칙이 주어진 category 를 억제하는가. */
@@ -296,11 +387,12 @@ function scanCatchSwallow(
   msgs: ReturnType<typeof t>,
 ): Array<{ line: number; matchedText: string }> {
   const found: Array<{ line: number; matchedText: string }> = [];
+  const lexicalLines = maskLiteralsAndComments(lines.join('\n')).split('\n');
   // catch (...) { 또는 catch { 의 여는 brace 위치를 찾는다.
   const catchRe = /\bcatch\s*(?:\([^)]*\))?\s*\{/;
 
   for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(catchRe);
+    const m = lexicalLines[i].match(catchRe);
     if (!m) continue;
 
     // 여는 { 위치(매치 끝)부터 brace 카운팅으로 블록 끝을 찾는다.
@@ -312,7 +404,7 @@ function scanCatchSwallow(
 
     for (let j = i; j < lines.length && j < i + 200; j++) {
       const startCol = j === i ? braceStartCol : 0;
-      const text = lines[j];
+      const text = lexicalLines[j] ?? '';
       for (let k = startCol; k < text.length; k++) {
         const ch = text[k];
         if (ch === '{') depth++;
@@ -350,19 +442,25 @@ export function scanFileContent(
 
   const issues: BsIssue[] = [];
   const lines = content.split('\n');
+  const lexicalLines = maskLiteralsAndComments(content, language).split('\n');
+  const literalLineStarts = linesStartingInsideLiteral(content, language);
   const msgs = t();
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
     // Inline suppression: 같은 줄의 cxt-ignore + 이전 줄의 cxt-ignore-next-line
-    const sameLineRule = parseSuppression(line, 'same');
-    const prevLineRule = i > 0 ? parseSuppression(lines[i - 1], 'next') : null;
+    const sameLineRule = parseSuppression(line, lexicalLines[i] ?? '', 'same', language, literalLineStarts[i]);
+    const prevLineRule = i > 0 ? parseSuppression(lines[i - 1], lexicalLines[i - 1] ?? '', 'next', language, literalLineStarts[i - 1]) : null;
 
     for (const bp of BS_PATTERN_DEFS) {
       if (bp.languages && !bp.languages.includes(language)) continue;
 
-      const match = line.match(bp.pattern);
+      // Secret/incomplete/fake-execution rules intentionally inspect literal or comment text;
+      // structural rules must not fire on examples embedded in literals/comments.
+      const inspectRaw = bp.category === 'hardcoded_secret' || bp.category === 'incomplete'
+        || bp.category === 'fake_execution' || bp.category === 'fake_data';
+      const match = (inspectRaw ? line : (lexicalLines[i] ?? '')).match(bp.pattern);
       if (!match) continue;
 
       if (bp.excludeIf && bp.excludeIf(line, filePath)) continue;
@@ -386,8 +484,8 @@ export function scanFileContent(
     if (!isTestPath(filePath)) {
       for (const hit of scanCatchSwallow(lines, filePath, msgs)) {
         const idx = hit.line - 1;
-        const sameLineRule = parseSuppression(lines[idx], 'same');
-        const prevLineRule = idx > 0 ? parseSuppression(lines[idx - 1], 'next') : null;
+        const sameLineRule = parseSuppression(lines[idx], lexicalLines[idx] ?? '', 'same', language, literalLineStarts[idx]);
+        const prevLineRule = idx > 0 ? parseSuppression(lines[idx - 1], lexicalLines[idx - 1] ?? '', 'next', language, literalLineStarts[idx - 1]) : null;
         if (suppresses(sameLineRule, 'exception_hiding') || suppresses(prevLineRule, 'exception_hiding')) continue;
 
         issues.push({
@@ -412,13 +510,17 @@ export async function scanFile(filePath: string): Promise<BsIssue[]> {
   const language = detectLanguageForBs(ext);
   if (!language) return [];
 
+  const fileStat = await stat(filePath);
+  if (fileStat.size > MAX_FILE_SIZE) {
+    throw new RangeError(`${filePath}: file exceeds scan size limit`);
+  }
   const content = await readFile(filePath, 'utf-8');
   return scanFileContent(content, filePath, language);
 }
 
 // ============ 결과 집계 ============
 
-export function aggregateResults(issues: BsIssue[], filesScanned: number): BsScanResult {
+export function aggregateResults(issues: BsIssue[], filesScanned: number, errors: string[] = []): BsScanResult {
   const critical = issues.filter(i => i.severity === 'critical').length;
   const warning = issues.filter(i => i.severity === 'warning').length;
   const minor = issues.filter(i => i.severity === 'minor').length;
@@ -426,14 +528,15 @@ export function aggregateResults(issues: BsIssue[], filesScanned: number): BsSca
     ? (critical * 10 + warning * 3 + minor * 1) / filesScanned
     : 0;
 
-  return { issues, filesScanned, critical, warning, minor, bsScore };
+  return { issues, filesScanned, critical, warning, minor, bsScore, errors };
 }
 
 // ============ 레포 전체 스캔 ============
 
 import { readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { buildIgnoreConfig, shouldSkipDir } from './ignoreRules.js';
+import { buildIgnoreConfig, shouldSkipDir, shouldSkipFile } from './ignoreRules.js';
+import { normalizeDirFilter } from '../cli/outputSafety.js';
 
 const SOURCE_EXTENSIONS = new Set([
   '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs',
@@ -442,39 +545,60 @@ const SOURCE_EXTENSIONS = new Set([
 ]);
 
 const MAX_FILE_SIZE = 512 * 1024;
+const MAX_SCAN_DEPTH = 15;
+const SCAN_TIMEOUT_MS = 60_000;
 
 export async function scanRepository(
   projectPath: string,
   // INT-1485: --json/--dir 옵션 추가
-  options?: { verbose?: boolean; dir?: string },
+  options?: { verbose?: boolean; dir?: string; maxDepth?: number; timeoutMs?: number },
 ): Promise<BsScanResult> {
+  const startTime = Date.now();
   const verbose = options?.verbose ?? false;
+  const requestedDepth = options?.maxDepth ?? MAX_SCAN_DEPTH;
+  const requestedTimeout = options?.timeoutMs ?? SCAN_TIMEOUT_MS;
+  if (!Number.isFinite(requestedDepth) || requestedDepth < 0 || !Number.isFinite(requestedTimeout) || requestedTimeout <= 0) {
+    throw new RangeError('maxDepth must be finite and non-negative; timeoutMs must be finite and positive');
+  }
+  const maxDepth = Math.min(Math.trunc(requestedDepth), MAX_SCAN_DEPTH);
+  const timeoutMs = Math.min(requestedTimeout, SCAN_TIMEOUT_MS);
   // dir 옵션이 있으면 그 하위만 스캔 (정규화하여 trailing slash 통일)
-  const dirFilter = options?.dir ? options.dir.replace(/\/$/, '') : undefined;
+  const dirFilter = normalizeDirFilter(options?.dir);
   const ignoreConfig = buildIgnoreConfig(projectPath);
   const allIssues: BsIssue[] = [];
   let filesScanned = 0;
+  const errors: string[] = [];
+  const matchesDir = (candidate: string, directory: string): boolean =>
+    candidate === directory || candidate.startsWith(`${directory}/`);
 
-  async function walk(dirPath: string, relPath: string): Promise<void> {
+  async function walk(dirPath: string, relPath: string, depth: number): Promise<void> {
+    if (depth > maxDepth) { errors.push(`scan depth exceeded at ${relPath}`); return; }
+    if (Date.now() - startTime > timeoutMs) { errors.push(`scan timed out at ${relPath || '.'}`); return; }
     let entries;
     try {
       entries = await readdir(dirPath, { withFileTypes: true });
-    } catch { return; } // cxt-ignore: exception_hiding — readdir 실패 시 해당 디렉터리 스킵
+    } catch (err) {
+      errors.push(`${relPath || '.'}: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
 
     for (const entry of entries) {
+      if (Date.now() - startTime > timeoutMs) { errors.push(`scan timed out at ${relPath || '.'}`); return; }
       const fullPath = join(dirPath, entry.name);
       const entryRelPath = relPath ? `${relPath}/${entry.name}` : entry.name;
+
+      if (entry.isSymbolicLink()) continue;
 
       if (entry.isDirectory()) {
         if (shouldSkipDir(entry.name, relPath, ignoreConfig)) continue;
         // --dir 필터: 대상 디렉터리 외부는 스킵 (단, 대상의 상위는 순회해야 도달 가능).
         if (dirFilter &&
-            !entryRelPath.startsWith(dirFilter) &&
-            !dirFilter.startsWith(entryRelPath)) continue;
-        await walk(fullPath, entryRelPath);
+            !matchesDir(entryRelPath, dirFilter) &&
+            !matchesDir(dirFilter, entryRelPath)) continue;
+        await walk(fullPath, entryRelPath, depth + 1);
       } else if (entry.isFile()) {
-        if (dirFilter && !entryRelPath.startsWith(dirFilter + '/') &&
-            entryRelPath !== dirFilter) continue;
+        if (shouldSkipFile(entryRelPath, ignoreConfig)) continue;
+        if (dirFilter && !matchesDir(entryRelPath, dirFilter)) continue;
 
         const ext = extname(entry.name);
         if (!SOURCE_EXTENSIONS.has(ext)) continue;
@@ -484,8 +608,14 @@ export async function scanRepository(
 
         try {
           const fileStat = await stat(fullPath);
-          if (fileStat.size > MAX_FILE_SIZE) continue;
-        } catch { continue; } // cxt-ignore: exception_hiding — stat 실패(권한/심볼릭 링크) 시 파일 스킵
+          if (fileStat.size > MAX_FILE_SIZE) {
+            errors.push(`${entryRelPath}: file exceeds scan size limit`);
+            continue;
+          }
+        } catch (err) {
+          errors.push(`${entryRelPath}: ${err instanceof Error ? err.message : String(err)}`);
+          continue;
+        }
 
         try {
           const content = await readFile(fullPath, 'utf-8');
@@ -496,11 +626,14 @@ export async function scanRepository(
           if (verbose && issues.length > 0) {
             console.log(`  [bs] ${entryRelPath}: ${issues.length} issues`);
           }
-        } catch { continue; } // cxt-ignore: exception_hiding — readFile/스캔 실패 시 해당 파일 스킵
+        } catch (err) {
+          errors.push(`${entryRelPath}: ${err instanceof Error ? err.message : String(err)}`);
+          continue;
+        }
       }
     }
   }
 
-  await walk(projectPath, '');
-  return aggregateResults(allIssues, filesScanned);
+  await walk(projectPath, '', 0);
+  return aggregateResults(allIssues, filesScanned, errors);
 }

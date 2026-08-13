@@ -1,4 +1,6 @@
 // ============================================
+
+import { escapeTerminal } from './cli/outputSafety.js';
 // ctx - i18n (Internationalization)
 // Created: 2026-04-11
 // Purpose: Multi-language support for CLI output
@@ -117,6 +119,11 @@ interface Messages {
   // ── Inject ──
   injectHeader: (name: string) => string;
   highRiskHeader: string;
+  callGraph: string;
+  callGraphReady: (n: number) => string;
+  callGraphMissing: string;
+  injectTest: string;
+  injectRiskHigh: string;
 
   // ── Audit ──
   auditHeader: string;
@@ -149,6 +156,7 @@ interface Messages {
   projAllScope: string;
   projPruneNone: string;
   projPruneConfirm: (scope: string, n: number) => string;
+  projPruneEventsConfirm: (days: number) => string;
   projPruneDone: (n: number) => string;
   projPruneEventsDone: (n: number, days: number) => string;
   projVacuumRunning: string;
@@ -267,6 +275,11 @@ const en: Messages = {
   // Inject
   injectHeader: (name) => `[Code Registry] ${name} — skip exploratory Read/Grep, use this map`,
   highRiskHeader: 'High-risk (untested + complex):',
+  callGraph: 'Call graph:',
+  callGraphReady: (n) => `${n} edges — use \`cxt who-calls <name>\` / \`cxt impact <name>\` instead of grep`,
+  callGraphMissing: 'none — run `cxt scan` to enable who-calls/impact relation queries',
+  injectTest: 'test',
+  injectRiskHigh: 'risk:HIGH',
 
   // Audit
   auditHeader: 'Code Audit',
@@ -299,6 +312,7 @@ const en: Messages = {
   projAllScope: 'all projects',
   projPruneNone: '✓ No broken entities — nothing to prune',
   projPruneConfirm: (scope, n) => `⚠ This deletes ${n} broken entities in ${scope}. Continue?`,
+  projPruneEventsConfirm: (days) => `⚠ Delete events older than ${days} days?`,
   projPruneDone: (n) => `✓ Pruned ${n} broken entities`,
   projPruneEventsDone: (n, days) => `✓ Pruned ${n} events older than ${days} days`,
   projVacuumRunning: 'Running VACUUM...',
@@ -342,7 +356,7 @@ const ko: Messages = {
   statsScopeProject: (id) => `범위: 프로젝트 "${id}"`,
   statsScopeGlobal: '범위: 전체 프로젝트 (--global)',
   totalEntities: '전체 엔티티:',
-  deprecated: 'Deprecated:',
+  deprecated: '사용 중단:',
   untested: '테스트 없음:',
   highRisk: '고위험:',
   withWarnings: '경고 있음:',
@@ -415,8 +429,13 @@ const ko: Messages = {
   warnExample: '예시: --warn "error/security: SQL injection risk"',
 
   // Inject
-  injectHeader: (name) => `[Code Registry] ${name} — skip exploratory Read/Grep, use this map`,
-  highRiskHeader: 'High-risk (untested + complex):',
+  injectHeader: (name) => `[코드 레지스트리] ${name} — 탐색적 Read/Grep 대신 이 맵 사용`,
+  highRiskHeader: '고위험 (테스트 없음 + 복잡):',
+  callGraph: '호출 그래프:',
+  callGraphReady: (n) => `${n}개 엣지 — grep 대신 \`cxt who-calls <name>\` / \`cxt impact <name>\` 사용`,
+  callGraphMissing: '없음 — who-calls/impact 관계 조회를 활성화하려면 `cxt scan` 실행',
+  injectTest: '테스트',
+  injectRiskHigh: '위험:높음',
 
   // Audit
   auditHeader: '코드 감사',
@@ -449,6 +468,7 @@ const ko: Messages = {
   projAllScope: '전체 프로젝트',
   projPruneNone: '✓ broken 엔티티 없음 — 정리 불필요',
   projPruneConfirm: (scope, n) => `⚠ ${scope}의 broken 엔티티 ${n}개를 삭제합니다. 계속?`,
+  projPruneEventsConfirm: (days) => `⚠ ${days}일보다 오래된 이벤트를 삭제합니다. 계속?`,
   projPruneDone: (n) => `✓ broken 엔티티 ${n}개 정리 완료`,
   projPruneEventsDone: (n, days) => `✓ ${days}일 이전 이벤트 ${n}개 정리 완료`,
   projVacuumRunning: 'DB VACUUM 실행 중...',
@@ -460,7 +480,10 @@ const locales: Record<Locale, Messages> = { en, ko };
 
 let currentLocale: Locale = 'en';
 
-export function setLocale(locale: Locale): void {
+export function setLocale(locale: Locale | string): void {
+  if (locale !== 'en' && locale !== 'ko') {
+    throw new RangeError(`Unsupported locale: ${escapeTerminal(locale)}`);
+  }
   currentLocale = locale;
 }
 
@@ -468,10 +491,17 @@ export function getLocale(): Locale {
   return currentLocale;
 }
 
-/** Detect locale from environment (LANG, LC_ALL, LANGUAGE) */
+/** Detect locale from environment (LC_ALL, LANGUAGE, LANG) */
 export function detectLocale(): Locale {
-  const envLang = process.env.LC_ALL || process.env.LANG || process.env.LANGUAGE || '';
-  if (/^ko/i.test(envLang)) return 'ko';
+  const isLocale = (value: string, language: Locale): boolean =>
+    new RegExp(`^${language}(?:[-_.@]|$)`, 'i').test(value);
+  const lcAll = process.env.LC_ALL;
+  if (lcAll) return isLocale(lcAll, 'ko') ? 'ko' : 'en';
+  for (const preference of process.env.LANGUAGE?.split(':') ?? []) {
+    if (isLocale(preference, 'ko')) return 'ko';
+    if (isLocale(preference, 'en')) return 'en';
+  }
+  if (isLocale(process.env.LANG ?? '', 'ko')) return 'ko';
   return 'en';
 }
 

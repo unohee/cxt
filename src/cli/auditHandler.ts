@@ -4,12 +4,12 @@
 // Purpose: `cxt audit` — BS 패턴 + 레지스트리 무결성 종합 감사 (/audit 스킬 이관)
 // ============================================
 
-import { readFileSync, existsSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { getRegistryStore, closeRegistryStore } from '../registry/sqliteStore.js';
 import { resolveProjectId } from './checkHandler.js';
 import { t } from '../i18n.js';
-import type { BsIssue } from '../registry/bsDetector.js';
+import { escapeTerminal, resolveProjectDirFilter } from './outputSafety.js';
 
 // 색상 헬퍼 (ANSI) — checkHandler 와 동일 팔레트
 const c = {
@@ -50,6 +50,7 @@ export interface AuditResult {
     critical: number;
     warning: number;
     minor: number;
+    errors: string[];
   };
   registry: {
     total: number;
@@ -77,33 +78,23 @@ export async function handleAudit(opts: {
 
     // ── BS 스캔 (항상 실행) ──
     const { scanRepository: scanBs } = await import('../registry/bsDetector.js');
-    const bs = await scanBs(projectPath, { verbose: opts.verbose });
-
-    // dir 필터: BS 이슈를 디렉터리 prefix 로 좁힐 수 있게
-    let issues: BsIssue[] = bs.issues;
-    if (opts.dir) {
-      issues = issues.filter(i => i.filePath.startsWith(opts.dir!));
-    }
-    const critical = issues.filter(i => i.severity === 'critical').length;
-    const warning = issues.filter(i => i.severity === 'warning').length;
-    const minor = issues.filter(i => i.severity === 'minor').length;
-    const filesScanned = opts.dir ? new Set(issues.map(i => i.filePath)).size : bs.filesScanned;
-    const score = filesScanned > 0
-      ? (critical * 10 + warning * 3 + minor * 1) / filesScanned
-      : 0;
+    const dirFilter = resolveProjectDirFilter(projectPath, opts.dir);
+    const bs = await scanBs(projectPath, { verbose: opts.verbose, dir: dirFilter });
+    const issues = bs.issues;
+    const { critical, warning, minor, filesScanned, bsScore: score } = bs;
 
     // ── 레지스트리 통계 (--quick 이면 skip) ──
     const stats = opts.quick
       ? { total: 0, deprecated: 0, untested: 0, highRisk: 0, withWarnings: 0 }
-      : store.getStats(projectId);
+      : store.getStats(projectId, dirFilter);
 
-    const pass = critical === 0;
+    const pass = critical === 0 && bs.errors.length === 0;
 
     const result: AuditResult = {
       project: projectId,
       path: projectPath,
       tracks,
-      bs: { filesScanned, score, critical, warning, minor },
+      bs: { filesScanned, score, critical, warning, minor, errors: bs.errors.map(escapeTerminal) },
       registry: {
         total: stats.total,
         deprecated: stats.deprecated,
@@ -122,12 +113,12 @@ export async function handleAudit(opts: {
     }
 
     // ── 사람용 리포트 ──
-    const statusColor = critical > 0 ? c.red : warning > 0 ? c.yellow : c.green;
-    const statusText = critical > 0 ? 'FAIL' : warning > 0 ? 'WARN' : 'PASS';
+    const statusColor = !pass ? c.red : warning > 0 ? c.yellow : c.green;
+    const statusText = !pass ? 'FAIL' : warning > 0 ? 'WARN' : 'PASS';
 
-    console.log(`\n${c.bold}${m.auditHeader}${c.reset} — ${projectId}`);
-    console.log(`  ${c.dim}${projectPath}${c.reset}`);
-    console.log(`  ${c.dim}${m.auditTracks} ${tracks.length ? tracks.join(', ') : m.none}${c.reset}\n`);
+    console.log(`\n${c.bold}${m.auditHeader}${c.reset} — ${escapeTerminal(projectId)}`);
+    console.log(`  ${c.dim}${escapeTerminal(projectPath)}${c.reset}`);
+    console.log(`  ${c.dim}${m.auditTracks} ${escapeTerminal(tracks.length ? tracks.join(', ') : m.none)}${c.reset}\n`);
 
     console.log(`${'─'.repeat(50)}`);
     console.log(`  ${m.filesScanned.padEnd(18)}${c.bold}${filesScanned}${c.reset}`);
@@ -136,6 +127,10 @@ export async function handleAudit(opts: {
     console.log(`  ${'CRITICAL:'.padEnd(18)}${critical > 0 ? c.red : c.green}${critical}${c.reset}`);
     console.log(`  ${'WARNING:'.padEnd(18)}${warning > 0 ? c.yellow : c.green}${warning}${c.reset}`);
     console.log(`  ${'MINOR:'.padEnd(18)}${minor > 0 ? c.dim : c.green}${minor}${c.reset}`);
+    if (bs.errors.length > 0) {
+      console.log(`  ${'SCAN ERRORS:'.padEnd(18)}${c.red}${bs.errors.length}${c.reset}`);
+      for (const error of bs.errors.slice(0, 10)) console.log(`    ${c.dim}${escapeTerminal(error)}${c.reset}`);
+    }
 
     if (!opts.quick && stats.total > 0) {
       console.log(`\n  ${c.bold}${m.registryStatus}${c.reset} ${c.dim}(${stats.total} ${m.totalEntities.replace(':', '').toLowerCase()})${c.reset}`);
@@ -150,8 +145,8 @@ export async function handleAudit(opts: {
     if (criticals.length > 0) {
       console.log(`\n  ${c.red}${c.bold}${m.criticalFixNow}${c.reset}`);
       for (const issue of criticals) {
-        console.log(`    ${c.red}${issue.filePath}:${issue.line}${c.reset} — ${issue.message}`);
-        console.log(`      ${c.dim}${issue.matchedText}${c.reset}`);
+        console.log(`    ${c.red}${escapeTerminal(issue.filePath)}:${issue.line}${c.reset} — ${escapeTerminal(issue.message)}`);
+        console.log(`      ${c.dim}${escapeTerminal(issue.matchedText)}${c.reset}`);
       }
     }
 
@@ -159,7 +154,7 @@ export async function handleAudit(opts: {
     if (warnings.length > 0) {
       console.log(`\n  ${c.yellow}${m.warningRecommended}${c.reset}`);
       for (const issue of warnings.slice(0, 30)) {
-        console.log(`    ${c.yellow}${issue.filePath}:${issue.line}${c.reset} — ${issue.message}`);
+        console.log(`    ${c.yellow}${escapeTerminal(issue.filePath)}:${issue.line}${c.reset} — ${escapeTerminal(issue.message)}`);
       }
       if (warnings.length > 30) {
         console.log(`    ${c.dim}${m.andMore(warnings.length - 30)}${c.reset}`);
@@ -170,7 +165,7 @@ export async function handleAudit(opts: {
     if (minors.length > 0) {
       console.log(`\n  ${c.dim}${m.minorCount(minors.length)}${c.reset}`);
       for (const issue of minors.slice(0, 10)) {
-        console.log(`    ${c.dim}${issue.filePath}:${issue.line} — ${issue.message}${c.reset}`);
+        console.log(`    ${c.dim}${escapeTerminal(issue.filePath)}:${issue.line} — ${escapeTerminal(issue.message)}${c.reset}`);
       }
       if (minors.length > 10) {
         console.log(`    ${c.dim}${m.andMore(minors.length - 10)}${c.reset}`);

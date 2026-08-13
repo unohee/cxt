@@ -35,6 +35,7 @@ cxt calls <name>         # entities that <name> calls/extends/implements
 cxt impact <name>        # transitive callers — everything affected if <name> changes
 cxt impact <name> --depth 3   # limit BFS depth (default: 5)
 cxt who-calls <name> --json   # machine-readable output (also: calls/impact)
+cxt preflight <name> --json   # candidate files + risk/test/warning review checklist
 
 # Registry hygiene
 cxt projects             # list registered projects with entity counts
@@ -77,6 +78,21 @@ cxt --lang en scan
 cxt --lang ko bs
 ```
 
+## Change Preflight (impact / risk / test gap)
+
+`preflight` turns the relation graph into a deterministic change-review
+checklist. It lists candidate files and flags impacted high-risk, untested, or
+warned entities. `--strict` exits 1 when such follow-up exists, so it can gate
+a change plan or CI review.
+
+```bash
+cxt preflight handlePayment
+cxt preflight src/payments.ts::handlePayment --json --strict
+```
+
+The call graph is deliberately a **seed**, not proof that no other caller
+exists: verify dynamic dispatch, imports, and framework callbacks in source.
+
 ## Call Graph (who-calls / calls / impact)
 
 `cxt scan` builds a same-project relation graph (`calls`, `uses`, `extends`, `implements`, `overrides`) from regex-extracted references. After a scan, relation queries replace grep for understanding code flow:
@@ -91,15 +107,14 @@ Ambiguous names are rejected with candidate suggestions — disambiguate with th
 
 ## Benchmark — does it cut agent tool calls?
 
-cxt exists to stop an agent from melting into endless ripgrep. Measured with headless `claude -p`, cxt-on vs cxt-off (cxt blocked), across 2 repos × 3 task types × 2 models:
+cxt can provide deterministic registry answers where an agent would otherwise
+trace code manually. Historical `claude -p` measurements are directional only;
+the current Codex harness requires a fresh condition-isolated run before making
+a tool-call reduction claim.
 
-| Task | off agent explores? | cxt effect (tool calls on→off) |
-|---|---|--:|
-| Call-graph impact ("what breaks if I change X?") | yes — explodes (opus: 300s timeout) | **8–50× fewer** |
-| Untested-function listing | yes — enumerates | **2–11× fewer** |
-| Plain code reading ("read X, summarize") | no — 1–3 calls either way | ~1× (nothing to cut) |
-
-cxt collapses the search exactly where an unaided agent would grind through multi-hop grep, and stays a no-op where there's no grind to kill. Full method, per-cell numbers, limitations, and a reproducible harness: **[BENCHMARK.md](BENCHMARK.md)**.
+Run `npm run bench:codex -- --dry-run` to validate the isolated setup, then use
+paired runs for evidence. Full method, retained historical aggregates,
+limitations, and the reproducible harness: **[BENCHMARK.md](BENCHMARK.md)**.
 
 ## Registry Hygiene
 

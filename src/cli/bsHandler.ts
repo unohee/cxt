@@ -7,6 +7,7 @@
 
 import { scanRepository } from '../registry/bsDetector.js';
 import { t } from '../i18n.js';
+import { escapeTerminal, resolveProjectDirFilter } from './outputSafety.js';
 
 const c = {
   reset: '\x1b[0m', bold: '\x1b[1m', dim: '\x1b[2m',
@@ -25,11 +26,11 @@ export async function handleBs(opts: BsOptions): Promise<void> {
 
   if (!opts.json) {
     console.log(`\n${c.bold}${m.bsDetector}${c.reset} — scanning for bad code patterns...`);
-    if (opts.dir) console.log(`  ${c.dim}dir: ${opts.dir}${c.reset}`);
-    console.log(`  ${c.dim}path: ${projectPath}${c.reset}\n`);
+    if (opts.dir) console.log(`  ${c.dim}dir: ${escapeTerminal(opts.dir)}${c.reset}`);
+    console.log(`  ${c.dim}path: ${escapeTerminal(projectPath)}${c.reset}\n`);
   }
 
-  const result = await scanRepository(projectPath, { verbose: opts.verbose, dir: opts.dir });
+  const result = await scanRepository(projectPath, { verbose: opts.verbose, dir: resolveProjectDirFilter(projectPath, opts.dir) });
 
   if (opts.json) {
     console.log(JSON.stringify({
@@ -38,6 +39,7 @@ export async function handleBs(opts: BsOptions): Promise<void> {
       critical: result.critical,
       warning: result.warning,
       minor: result.minor,
+      errors: result.errors,
       issues: result.issues.map(i => ({
         file: i.filePath,
         line: i.line,
@@ -47,12 +49,13 @@ export async function handleBs(opts: BsOptions): Promise<void> {
         matched: i.matchedText,
       })),
     }, null, 2));
-    if (result.critical > 0) process.exitCode = 1;
+    if (result.critical > 0 || result.warning > 0 || result.errors.length > 0) process.exitCode = 1;
     return;
   }
 
-  const statusColor = result.critical > 0 ? c.red : result.warning > 0 ? c.yellow : c.green;
-  const statusText = result.critical > 0 ? 'FAIL' : result.warning > 0 ? 'WARN' : 'CLEAN';
+  const scanFailed = result.critical > 0 || result.errors.length > 0;
+  const statusColor = scanFailed ? c.red : result.warning > 0 ? c.yellow : c.green;
+  const statusText = scanFailed ? 'FAIL' : result.warning > 0 ? 'WARN' : 'CLEAN';
 
   console.log(`${c.bold}${m.bsScanResult}${c.reset}`);
   console.log(`${'─'.repeat(50)}`);
@@ -62,14 +65,15 @@ export async function handleBs(opts: BsOptions): Promise<void> {
   console.log(`  CRITICAL:      ${result.critical > 0 ? c.red : c.green}${result.critical}${c.reset}`);
   console.log(`  WARNING:       ${result.warning > 0 ? c.yellow : c.green}${result.warning}${c.reset}`);
   console.log(`  MINOR:         ${result.minor > 0 ? c.dim : c.green}${result.minor}${c.reset}`);
+  if (result.errors.length > 0) console.log(`  SCAN ERRORS:   ${c.red}${result.errors.length}${c.reset}`);
 
   if (result.issues.length > 0) {
     const criticals = result.issues.filter(i => i.severity === 'critical');
     if (criticals.length > 0) {
       console.log(`\n  ${c.red}${c.bold}${m.criticalFixNow}${c.reset}`);
       for (const issue of criticals) {
-        console.log(`    ${c.red}${issue.filePath}:${issue.line}${c.reset} — ${issue.message}`);
-        console.log(`      ${c.dim}${issue.matchedText}${c.reset}`);
+        console.log(`    ${c.red}${escapeTerminal(issue.filePath)}:${issue.line}${c.reset} — ${escapeTerminal(issue.message)}`);
+        console.log(`      ${c.dim}${escapeTerminal(issue.matchedText)}${c.reset}`);
       }
     }
 
@@ -77,7 +81,7 @@ export async function handleBs(opts: BsOptions): Promise<void> {
     if (warnings.length > 0) {
       console.log(`\n  ${c.yellow}${m.warningRecommended}${c.reset}`);
       for (const issue of warnings.slice(0, 30)) {
-        console.log(`    ${c.yellow}${issue.filePath}:${issue.line}${c.reset} — ${issue.message}`);
+        console.log(`    ${c.yellow}${escapeTerminal(issue.filePath)}:${issue.line}${c.reset} — ${escapeTerminal(issue.message)}`);
       }
       if (warnings.length > 30) {
         console.log(`    ${c.dim}${m.andMore(warnings.length - 30)}${c.reset}`);
@@ -88,7 +92,7 @@ export async function handleBs(opts: BsOptions): Promise<void> {
     if (minors.length > 0) {
       console.log(`\n  ${c.dim}${m.minorCount(minors.length)}${c.reset}`);
       for (const issue of minors.slice(0, 10)) {
-        console.log(`    ${c.dim}${issue.filePath}:${issue.line} — ${issue.message}${c.reset}`);
+        console.log(`    ${c.dim}${escapeTerminal(issue.filePath)}:${issue.line} — ${escapeTerminal(issue.message)}${c.reset}`);
       }
       if (minors.length > 10) {
         console.log(`    ${c.dim}${m.andMore(minors.length - 10)}${c.reset}`);
@@ -97,4 +101,5 @@ export async function handleBs(opts: BsOptions): Promise<void> {
   }
 
   console.log();
+  if (result.critical > 0 || result.warning > 0 || result.errors.length > 0) process.exitCode = 1;
 }

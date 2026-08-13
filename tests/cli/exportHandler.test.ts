@@ -154,7 +154,21 @@ describe('handleExport — --dir filtering', () => {
     expect(out).toContain('Service');
     expect(out).toContain('oldHandler');
     expect(out).not.toContain('function helper'); // src/util.ts excluded
-    expect(out).toContain('# entities: 2/3');
+    expect(out).toContain('# entities: 2/2');
+  });
+
+  it('escapes terminal controls in an unmatched directory diagnostic', async () => {
+    const messages: string[] = [];
+    const errSpy = vi.spyOn(console, 'error').mockImplementation((message) => { messages.push(String(message)); });
+    const previousExitCode = process.exitCode;
+    try {
+      await handleExport({ project: 'tproj', dir: 'missing\u001b]8;;https://evil.invalid\u0007' });
+    } finally {
+      errSpy.mockRestore();
+      process.exitCode = previousExitCode;
+    }
+    expect(messages.join('\n')).not.toContain('\u001b');
+    expect(messages.join('\n')).not.toContain('\u0007');
   });
 });
 

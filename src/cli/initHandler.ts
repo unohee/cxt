@@ -5,9 +5,10 @@
 // Purpose: `cxt init` — inject cxt usage into agent instruction files
 // ============================================
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, lstatSync, renameSync, unlinkSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { homedir } from 'node:os';
+import { escapeTerminal } from './outputSafety.js';
 
 const CXT_SECTION_START = '<!-- cxt:start -->';
 const CXT_SECTION_END = '<!-- cxt:end -->';
@@ -183,6 +184,25 @@ const c = {
 
 type Action = 'added' | 'updated' | 'unchanged' | 'removed' | 'noop' | 'dry';
 
+function assertRegularTarget(filePath: string): void {
+  if (!existsSync(filePath)) return;
+  const target = lstatSync(filePath);
+  if (target.isSymbolicLink()) throw new Error(`Refusing to modify symlinked instruction file: ${escapeTerminal(filePath)}`);
+  if (!target.isFile()) throw new Error(`Refusing to modify non-regular instruction file: ${escapeTerminal(filePath)}`);
+}
+
+function writeAtomic(filePath: string, content: string): void {
+  const tempPath = join(dirname(filePath), `.${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.cxt.tmp`);
+  const mode = existsSync(filePath) ? lstatSync(filePath).mode : 0o666;
+  try {
+    writeFileSync(tempPath, content, { encoding: 'utf-8', flag: 'wx', mode });
+    renameSync(tempPath, filePath);
+  } catch (error) {
+    if (existsSync(tempPath)) unlinkSync(tempPath);
+    throw error;
+  }
+}
+
 function applyToFile(
   filePath: string,
   label: string,
@@ -190,20 +210,23 @@ function applyToFile(
   opts: { remove?: boolean; dry?: boolean },
 ): Action {
   const dir = dirname(filePath);
+  const safePath = escapeTerminal(filePath);
+  const safeDir = escapeTerminal(dir);
+  const safeLabel = escapeTerminal(label);
+  assertRegularTarget(filePath);
 
   // --remove
   if (opts.remove) {
     if (!existsSync(filePath)) {
-      console.log(`  ${c.dim}${label}: ${filePath} not found — skip${c.reset}`);
+      console.log(`  ${c.dim}${safeLabel}: ${safePath} not found — skip${c.reset}`);
       return 'noop';
     }
 
     const content = readFileSync(filePath, 'utf-8');
-    const startIdx = content.indexOf(CXT_SECTION_START);
-    const endIdx = content.indexOf(CXT_SECTION_END);
+    const { startIdx, endIdx } = locateCxtSection(content, filePath);
 
     if (startIdx === -1 || endIdx === -1) {
-      console.log(`  ${c.dim}${label}: no cxt section in ${filePath} — skip${c.reset}`);
+      console.log(`  ${c.dim}${safeLabel}: no cxt section in ${safePath} — skip${c.reset}`);
       return 'noop';
     }
 
@@ -212,19 +235,19 @@ function applyToFile(
     const newContent = before + (after ? '\n\n' + after : '') + '\n';
 
     if (opts.dry) {
-      console.log(`  ${c.bold}[dry]${c.reset} ${label}: would remove section from ${c.cyan}${filePath}${c.reset}`);
+      console.log(`  ${c.bold}[dry]${c.reset} ${safeLabel}: would remove section from ${c.cyan}${safePath}${c.reset}`);
       return 'dry';
     }
 
-    writeFileSync(filePath, newContent, 'utf-8');
-    console.log(`  ${c.green}removed${c.reset} ${label}: ${c.cyan}${filePath}${c.reset}`);
+    writeAtomic(filePath, newContent);
+    console.log(`  ${c.green}removed${c.reset} ${safeLabel}: ${c.cyan}${safePath}${c.reset}`);
     return 'removed';
   }
 
   // --add / --update
   if (!existsSync(dir)) {
     if (opts.dry) {
-      console.log(`  ${c.bold}[dry]${c.reset} ${label}: would create ${c.cyan}${dir}${c.reset}`);
+      console.log(`  ${c.bold}[dry]${c.reset} ${safeLabel}: would create ${c.cyan}${safeDir}${c.reset}`);
     } else {
       mkdirSync(dir, { recursive: true });
     }
@@ -233,38 +256,47 @@ function applyToFile(
   let existing = '';
   if (existsSync(filePath)) {
     existing = readFileSync(filePath, 'utf-8');
-    const startIdx = existing.indexOf(CXT_SECTION_START);
-    const endIdx = existing.indexOf(CXT_SECTION_END);
+    const { startIdx, endIdx } = locateCxtSection(existing, filePath);
 
     if (startIdx !== -1 && endIdx !== -1) {
       const oldSection = existing.slice(startIdx, endIdx + CXT_SECTION_END.length);
       if (oldSection === cxtSection) {
-        console.log(`  ${c.dim}${label}: already up to date (${filePath})${c.reset}`);
+        console.log(`  ${c.dim}${safeLabel}: already up to date (${safePath})${c.reset}`);
         return 'unchanged';
       }
 
       if (opts.dry) {
-        console.log(`  ${c.bold}[dry]${c.reset} ${label}: would update section in ${c.cyan}${filePath}${c.reset}`);
+        console.log(`  ${c.bold}[dry]${c.reset} ${safeLabel}: would update section in ${c.cyan}${safePath}${c.reset}`);
         return 'dry';
       }
 
       const newContent = existing.slice(0, startIdx) + cxtSection + existing.slice(endIdx + CXT_SECTION_END.length);
-      writeFileSync(filePath, newContent, 'utf-8');
-      console.log(`  ${c.yellow}updated${c.reset} ${label}: ${c.cyan}${filePath}${c.reset}`);
+      writeAtomic(filePath, newContent);
+      console.log(`  ${c.yellow}updated${c.reset} ${safeLabel}: ${c.cyan}${safePath}${c.reset}`);
       return 'updated';
     }
   }
 
   // Append
   if (opts.dry) {
-    console.log(`  ${c.bold}[dry]${c.reset} ${label}: would append section to ${c.cyan}${filePath}${c.reset}`);
+    console.log(`  ${c.bold}[dry]${c.reset} ${safeLabel}: would append section to ${c.cyan}${safePath}${c.reset}`);
     return 'dry';
   }
 
   const separator = existing.length > 0 ? '\n\n' : '';
-  writeFileSync(filePath, existing + separator + cxtSection + '\n', 'utf-8');
-  console.log(`  ${c.green}added${c.reset} ${label}: ${c.cyan}${filePath}${c.reset}`);
+  writeAtomic(filePath, existing + separator + cxtSection + '\n');
+  console.log(`  ${c.green}added${c.reset} ${safeLabel}: ${c.cyan}${safePath}${c.reset}`);
   return 'added';
+}
+
+export function locateCxtSection(content: string, filePath: string): { startIdx: number; endIdx: number } {
+  const starts = [...content.matchAll(new RegExp(CXT_SECTION_START, 'g'))].map((m) => m.index);
+  const ends = [...content.matchAll(new RegExp(CXT_SECTION_END, 'g'))].map((m) => m.index);
+  if (starts.length === 0 && ends.length === 0) return { startIdx: -1, endIdx: -1 };
+  if (starts.length !== 1 || ends.length !== 1 || starts[0] > ends[0]) {
+    throw new Error(`Malformed cxt section delimiters in ${escapeTerminal(filePath)}`);
+  }
+  return { startIdx: starts[0], endIdx: ends[0] };
 }
 
 function resolveTargets(targetOpt: string | undefined, cwd: string): TargetSpec[] {
@@ -290,7 +322,7 @@ function resolveTargets(targetOpt: string | undefined, cwd: string): TargetSpec[
   }
 
   if (invalid.length > 0) {
-    console.error(`${c.red}Unknown target(s): ${invalid.join(', ')}${c.reset}`);
+    console.error(`${c.red}Unknown target(s): ${invalid.map(escapeTerminal).join(', ')}${c.reset}`);
     console.error(`${c.dim}Valid: ${VALID_TARGET_NAMES.join(', ')}, all${c.reset}`);
     process.exit(1);
   }
@@ -349,6 +381,6 @@ export async function handleInit(opts: {
 
   if (!opts.remove && (summary.added > 0 || summary.updated > 0)) {
     console.log(`  ${c.dim}Agents will now see cxt commands in every session.${c.reset}`);
-    console.log(`  ${c.dim}Run \`cxt init --remove --target ${opts.target ?? 'claude'}\` to undo.${c.reset}\n`);
+    console.log(`  ${c.dim}Run \`cxt init --remove --target ${escapeTerminal(opts.target ?? 'claude')}\` to undo.${c.reset}\n`);
   }
 }
