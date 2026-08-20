@@ -417,9 +417,14 @@ export class SqliteRegistryStore {
       const tableSqlRow = this.db.prepare(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='code_entities'"
       ).get() as { sql: string } | undefined;
+      // 두 CHECK를 각각 검사한다 — status CHECK 하나를 "v3 스키마 설치됨"의 증거로
+      // 삼으면, 어떤 경위로든 반쪽 스키마가 된 테이블이 risk_level CHECK 없이
+      // user_version 3으로 봉인된다 (PR #7 리뷰 지적).
       const hasStatusCheck = !!tableSqlRow && /CHECK\s*\(\s*status\s+IN/i.test(tableSqlRow.sql);
+      const hasRiskCheck = !!tableSqlRow && /CHECK\s*\(\s*risk_level\s+IN/i.test(tableSqlRow.sql);
+      const hasV3Checks = hasStatusCheck && hasRiskCheck;
 
-      if (currentVersion < 3 && !hasStatusCheck) {
+      if (currentVersion < 3 && !hasV3Checks) {
         // 보존 우선: CHECK 위반이 될 행을 먼저 유효값으로 정정한 뒤 straight INSERT로
         // 복사한다 — 행을 떨어뜨리는 INSERT OR IGNORE의 침묵 유실을 차단.
         this.coerceInvalidEnumRows();

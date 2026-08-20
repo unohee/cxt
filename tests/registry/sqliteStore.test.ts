@@ -721,3 +721,58 @@ describe('SqliteRegistryStore — getImpactSet CTE equivalence (INT-3881)', () =
     expect(h.store.getImpactSet(lone.id, 5)).toEqual([]);
   });
 });
+
+describe('SqliteRegistryStore — v3 gate requires BOTH check constraints (PR #7 review)', () => {
+  it('rebuilds a half-schema table that has only the status CHECK', () => {
+    // status CHECK만 있고 risk_level CHECK가 없는 변칙 테이블 — 게이트가 status만
+    // 검사하면 이 테이블은 리빌드 없이 v3로 봉인되고 risk CHECK가 영원히 누락된다.
+    const halfPath = join(h.dir, 'half-schema.db');
+    const half = new Database(halfPath);
+    half.exec(`
+      CREATE TABLE code_entities (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        name TEXT NOT NULL,
+        qualified_name TEXT NOT NULL,
+        file_path TEXT NOT NULL,
+        line_start INTEGER,
+        line_end INTEGER,
+        signature TEXT,
+        status TEXT DEFAULT 'active',
+        deprecated_at TEXT,
+        deprecated_reason TEXT,
+        has_tests INTEGER DEFAULT 0,
+        test_file TEXT,
+        author TEXT,
+        maintainer TEXT,
+        complexity_score INTEGER,
+        risk_level TEXT DEFAULT 'low',
+        description TEXT DEFAULT '',
+        notes TEXT DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(project_id, qualified_name),
+        CHECK (status IN ('active', 'deprecated', 'experimental', 'planned', 'broken'))
+      );
+    `);
+    half.prepare(`INSERT INTO code_entities
+      (id, project_id, kind, name, qualified_name, file_path, risk_level, created_at, updated_at)
+      VALUES ('e-half', 'p1', 'function', 'halfFn', 'src/h.ts::halfFn', 'src/h.ts', 'extreme', datetime('now'), datetime('now'))`).run();
+    half.pragma('user_version = 2');
+    half.close();
+
+    const migrated = new SqliteRegistryStore(halfPath);
+    expect(migrated.getEntity('e-half')?.riskLevel).toBe('low'); // coerced during rebuild
+    migrated.close();
+
+    const raw = new Database(halfPath);
+    const sql = (raw.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='code_entities'").get() as { sql: string }).sql;
+    expect(sql).toMatch(/CHECK\s*\(\s*risk_level\s+IN/i); // rebuild fired, risk CHECK now present
+    expect(() => raw.prepare(`INSERT INTO code_entities
+      (id, project_id, kind, name, qualified_name, file_path, risk_level, created_at, updated_at)
+      VALUES ('x', 'p', 'function', 'x', 'f::x', 'f', 'extreme', datetime('now'), datetime('now'))`).run())
+      .toThrow(/CHECK/);
+    raw.close();
+  });
+});
