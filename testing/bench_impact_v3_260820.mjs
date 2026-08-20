@@ -129,7 +129,11 @@ try {
   bench('ref (JS BFS + index)', () => jsBfs(dbNew, root, MAX_DEPTH));
   bench('ref (CTE, no index)', () => cteImpact(dbOld, root, MAX_DEPTH));
 
-  console.log(`\nspeedup p95: ${(a.p95 / b.p95).toFixed(1)}x  (DoD gate: >= 5x)`);
+  const speedup = a.p95 / b.p95;
+  const pass = speedup >= 5;
+  console.log(`\nspeedup p95: ${speedup.toFixed(1)}x  (DoD gate: >= 5x) — ${pass ? 'PASS' : 'FAIL'}`);
+  // 게이트 집행: 선언만 하고 통과시키면 DoD 근거가 못 된다 (PR #7 리뷰 r3).
+  process.exitCode = pass ? 0 : 1;
   dbOld.close(); dbNew.close();
 } finally {
   rmSync(dir, { recursive: true, force: true });
