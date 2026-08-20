@@ -1153,7 +1153,7 @@ export async function scanRepository(
         existingEntity.testFile !== testFile ||
         existingEntity.complexityScore !== score ||
         existingEntity.riskLevel !== riskLevel ||
-        // v3 컬럼: 구 스캔의 NULL(undefined)과 신규 값이 다르면 채워 넣는다.
+        // v3 columns: backfill when the stored NULL (undefined) differs from the fresh value.
         existingEntity.isExported !== ext.isExported ||
         existingEntity.loc !== ext.loc ||
         existingEntity.nestingDepth !== ext.nestingDepth ||

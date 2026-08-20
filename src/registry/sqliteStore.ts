@@ -171,6 +171,10 @@ export class SqliteRegistryStore {
 
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('foreign_keys = ON');
+    // Migration rebuilds on a large registry can hold the write lock for
+    // several seconds; the 5s default made concurrent first opens die with
+    // SQLITE_BUSY (SessionStart hook + manual run is a real usage pattern).
+    this.db.pragma('busy_timeout = 30000');
 
     this.migrate();
   }
@@ -178,20 +182,23 @@ export class SqliteRegistryStore {
   // 스키마 버전 — 변경 시 반드시 증가. migrate()의 핵심 마이그레이션 단계와 1:1 대응.
   // INT-1478: user_version 가드로 FTS rebuild를 최초 1회만 수행.
   // INT-1475: v2 = qualified_name 전역 UNIQUE → UNIQUE(project_id, qualified_name) 복합 제약.
-  // INT-3881: v3 = relations 역방향 인덱스 + scanner 메트릭 컬럼 회수(is_exported/loc/
-  //           nesting_depth/param_count) + status/risk_level CHECK 제약(테이블 리빌드).
-  //           kind CHECK는 의도적으로 제외 — P1(tree-sitter 프론트엔드)에서 EntityKind가
-  //           확장될 가능성이 높아 지금 고정하면 또 한 번의 리빌드를 강제한다.
-  //           relations의 relation_type CHECK는 P2 v4(code_call_sites 신설)에서 함께 처리.
+  // INT-3881: v3 = reverse relation index + recovered scanner metric columns
+  //           (is_exported/loc/nesting_depth/param_count) + status/risk_level
+  //           CHECK constraints (table rebuild). kind CHECK is deliberately
+  //           omitted — P1 (tree-sitter frontend) is expected to extend
+  //           EntityKind and pinning it now would force another rebuild.
+  //           relations' relation_type CHECK moves to P2 v4 (code_call_sites).
   private static readonly SCHEMA_VERSION = 3;
 
-  // FTS 인덱스 스키마(인덱싱 컬럼 집합)가 마지막으로 바뀐 버전. user_version 승급과
-  // 분리한다 — v2까지는 "버전이 오르면 무조건 rebuild"였는데, 그 결합은 FTS와 무관한
-  // 마이그레이션(v3+)까지 전체 rebuild를 강제한다(396k 엔티티에서 3.3s, INT-1478).
+  // The last version in which the FTS index schema (set of indexed columns)
+  // changed. Decoupled from the user_version bump: through v2 "version went up"
+  // implied "always rebuild", and that coupling would force a full FTS rebuild
+  // for FTS-unrelated migrations (v3+) — 3.3s at 396k entities (INT-1478).
   private static readonly FTS_SCHEMA_VERSION = 2;
 
-  // 엔티티 테이블의 정본 컬럼 목록 — DDL·리빌드 INSERT가 전부 여기서 파생된다.
-  // 복제된 DDL 3벌(초기/v2/v3)이 조용히 어긋나는 드리프트를 차단.
+  // Canonical column list for the entity table — every DDL and rebuild INSERT
+  // derives from it, preventing the three duplicated DDL copies (initial/v2/v3)
+  // from silently drifting apart.
   private static readonly ENTITY_COLUMNS = [
     'id', 'project_id', 'kind', 'name', 'qualified_name', 'file_path',
     'line_start', 'line_end', 'signature', 'status',
@@ -201,8 +208,9 @@ export class SqliteRegistryStore {
     'description', 'notes', 'created_at', 'updated_at',
   ] as const;
 
-  // 정본 테이블 DDL. kind CHECK는 의도적으로 없다 — P1(tree-sitter 프론트엔드)에서
-  // EntityKind 확장이 예정돼 있어 지금 고정하면 또 한 번의 테이블 리빌드를 강제한다.
+  // Canonical table DDL. No kind CHECK on purpose — P1 (tree-sitter frontend)
+  // is expected to extend EntityKind, and pinning it now would force yet
+  // another table rebuild.
   private static entityTableDdl(tableName: string, ifNotExists = false): string {
     return `
       CREATE TABLE ${ifNotExists ? 'IF NOT EXISTS ' : ''}${tableName} (
@@ -237,29 +245,47 @@ export class SqliteRegistryStore {
       );`;
   }
 
-  // 동시 최초 오픈 경합 완화: PRAGMA table_info 확인과 ALTER 사이에 다른 프로세스가
-  // 같은 컬럼을 먼저 추가하면 duplicate column으로 죽는다(TOCTOU). SessionStart 훅과
-  // 수동 실행이 동시에 발화하는 실사용 패턴이라, 그 오류만 무해로 삼키고 나머지는 던진다.
+  // Concurrent-first-open mitigation: between the PRAGMA table_info check and
+  // the ALTER, another process may add the same column first (TOCTOU) and the
+  // ALTER dies with "duplicate column". SessionStart hook + a manual run firing
+  // together is a real usage pattern, so swallow exactly that error, rethrow the rest.
   private addColumnTolerantly(sql: string): void {
     try {
       this.db.exec(sql);
-    } catch (err) { // cxt-ignore: exception_hiding — duplicate column만 흡수(동시 마이그레이션 경합), 그 외는 rethrow
+    } catch (err) { // cxt-ignore: exception_hiding — only absorbs duplicate-column (concurrent migration race); everything else rethrows
       const msg = err instanceof Error ? err.message : String(err);
       if (!msg.includes('duplicate column name')) throw err;
     }
   }
 
-  // 리빌드 대상 테이블에 CHECK가 걸리므로, 위반이 될 행을 먼저 유효값으로 정정한다.
-  // 행을 떨어뜨리는 INSERT OR IGNORE의 침묵 유실 대신 명시적 정정 + stderr 1줄 고지.
-  private coerceInvalidEnumRows(): void {
-    const coercedStatus = this.db.prepare(
+  // Rebuild targets carry CHECK / NOT NULL constraints, so rows that would
+  // violate them are repaired to valid defaults first — an explicit coerce
+  // instead of INSERT OR IGNORE silently dropping rows.
+  //
+  // MUST be called inside the rebuild transaction, after the legacy FTS
+  // triggers have been dropped: (a) if the rebuild fails, the coercion rolls
+  // back with it instead of permanently flattening data in autocommit mode;
+  // (b) running UPDATEs while a desynced external-content FTS trigger is live
+  // raises SQLITE_CORRUPT_VTAB and bricks the constructor.
+  // Returns counts; the caller logs them only after the transaction commits.
+  private coerceInvalidEnumRows(): { status: number; risk: number; timestamps: number } {
+    const status = this.db.prepare(
       "UPDATE code_entities SET status = 'active' WHERE status IS NULL OR status NOT IN ('active','deprecated','experimental','planned','broken')"
     ).run().changes;
-    const coercedRisk = this.db.prepare(
+    const risk = this.db.prepare(
       "UPDATE code_entities SET risk_level = 'low' WHERE risk_level IS NULL OR risk_level NOT IN ('low','medium','high')"
     ).run().changes;
-    if (coercedStatus + coercedRisk > 0) {
-      console.error(`[cxt migrate] coerced ${coercedStatus} invalid status / ${coercedRisk} invalid risk_level rows to defaults`);
+    // Rust-era rows may carry NULL timestamps; the rebuild target declares
+    // NOT NULL and an explicit NULL bypasses column DEFAULTs on INSERT..SELECT.
+    const timestamps = this.db.prepare(
+      "UPDATE code_entities SET created_at = COALESCE(created_at, datetime('now')), updated_at = COALESCE(updated_at, datetime('now')) WHERE created_at IS NULL OR updated_at IS NULL"
+    ).run().changes;
+    return { status, risk, timestamps };
+  }
+
+  private static logCoerced(c: { status: number; risk: number; timestamps: number }): void {
+    if (c.status + c.risk + c.timestamps > 0) {
+      console.error(`[cxt migrate] coerced ${c.status} invalid status / ${c.risk} invalid risk_level / ${c.timestamps} NULL timestamp rows to defaults`);
     }
   }
 
@@ -282,18 +308,20 @@ export class SqliteRegistryStore {
       ['description', "ALTER TABLE code_entities ADD COLUMN description TEXT DEFAULT ''"],
       ['notes', "ALTER TABLE code_entities ADD COLUMN notes TEXT DEFAULT ''"],
     ];
-    // 주의: v3 신규 컬럼(is_exported 등)은 여기가 아니라 아래 v3 단계에서 추가한다.
-    // 레거시 리빌드(v1→v2, line_start)가 `SELECT *`로 복사하므로, 리빌드 전에 컬럼을
-    // 추가하면 대상 테이블(22컬럼)과 소스(26컬럼)의 컬럼 수가 어긋나 마이그레이션이 깨진다.
+    // NOTE: the new v3 columns (is_exported etc.) are added in the v3 step
+    // below, not here — the legacy rebuilds (v1→v2, line_start) copy with
+    // SELECT * / fixed lists, and adding columns before them desyncs the
+    // column counts (22-column target vs 26-column source) and breaks migration.
     for (const [col, sql] of addColMigrations) {
       if (!existingCols.has(col)) {
         this.addColumnTolerantly(sql);
       }
     }
 
-    // 테이블 리빌드 발생 추적 — 리빌드는 rowid를 재할당하므로 external-content FTS의
-    // rowid 매핑이 깨진다. 리빌드가 하나라도 발생하면 FTS rebuild를 강제해야 한다.
-    // (v2까지는 "버전 승급 = 무조건 rebuild"라 우연히 안전했던 결합을 명시적으로 대체.)
+    // Track whether any table rebuild happened — rebuilds reassign rowids,
+    // which invalidates the external-content FTS rowid mapping, so any rebuild
+    // must force an FTS rebuild. (Through v2 "version bump = always rebuild"
+    // made this accidentally safe; this flag replaces that coupling explicitly.)
     let tableRebuilt = false;
 
     // ── v1 → v2: qualified_name 전역 UNIQUE → UNIQUE(project_id, qualified_name) ──
@@ -309,14 +337,15 @@ export class SqliteRegistryStore {
       });
 
       if (hasOldUniqueOnQName) {
-        // 테이블 재생성으로 제약 변경 (SQLite는 DROP CONSTRAINT 미지원).
-        // 타깃은 현행 정본 DDL(v3 형태, CHECK 포함) — 이 경로를 지난 DB는 v3 리빌드가
-        // 다시 필요 없다. CHECK 위반이 될 행은 복사 전에 정정한다.
-        this.coerceInvalidEnumRows();
-
-        // 소스 컬럼 집합은 DB 세대에 따라 다르다(진짜 v1 = 22개, 현행 스키마에서 파생된
-        // 테스트 픽스처 = 26개). SELECT * 는 컬럼 수/순서 불일치로 깨지므로, 정본 컬럼
-        // 목록과 소스의 교집합을 명시 나열한다. 이름은 고정 allowlist에서만 나온다.
+        // Constraint change requires a table rebuild (SQLite cannot DROP
+        // CONSTRAINT). The target is the current canonical DDL (v3 shape with
+        // CHECKs), so DBs that take this path never need the v3 rebuild again.
+        //
+        // Source column sets differ by DB generation (true v1 = 22 columns,
+        // fixtures derived from the current schema = 26). SELECT * breaks on
+        // column count/order mismatches, so copy the intersection of the
+        // canonical list and the source; names only ever come from the fixed
+        // allowlist.
         const v2SrcCols = new Set(
           (this.db.prepare("PRAGMA table_info(code_entities)").all() as Array<{ name: string }>).map(r => r.name)
         );
@@ -324,19 +353,29 @@ export class SqliteRegistryStore {
 
         this.db.pragma('foreign_keys = OFF');
         try {
-          this.db.transaction(() => this.db.exec(`
-          DROP TRIGGER IF EXISTS ce_fts_ai;
-          DROP TRIGGER IF EXISTS ce_fts_ad;
-          DROP TRIGGER IF EXISTS ce_fts_au;
-          DROP TABLE IF EXISTS code_entities_fts;
-          DROP TABLE IF EXISTS code_entities_v2;
-
-          ${SqliteRegistryStore.entityTableDdl('code_entities_v2')}
-          INSERT OR IGNORE INTO code_entities_v2 (${v2CopyCols})
-            SELECT ${v2CopyCols} FROM code_entities;
-          DROP TABLE code_entities;
-          ALTER TABLE code_entities_v2 RENAME TO code_entities;
-          `))();
+          let coerced = { status: 0, risk: 0, timestamps: 0 };
+          // Coerce runs INSIDE the transaction, after the FTS triggers are
+          // dropped: it must roll back with a failed rebuild, and it must not
+          // fire legacy triggers against a possibly-desynced FTS index.
+          const tx = this.db.transaction(() => {
+            this.db.exec(`
+            DROP TRIGGER IF EXISTS ce_fts_ai;
+            DROP TRIGGER IF EXISTS ce_fts_ad;
+            DROP TRIGGER IF EXISTS ce_fts_au;
+            DROP TABLE IF EXISTS code_entities_fts;
+            DROP TABLE IF EXISTS code_entities_v2;
+            `);
+            coerced = this.coerceInvalidEnumRows();
+            this.db.exec(`
+            ${SqliteRegistryStore.entityTableDdl('code_entities_v2')}
+            INSERT OR IGNORE INTO code_entities_v2 (${v2CopyCols})
+              SELECT ${v2CopyCols} FROM code_entities;
+            DROP TABLE code_entities;
+            ALTER TABLE code_entities_v2 RENAME TO code_entities;
+            `);
+          });
+          tx.immediate();
+          SqliteRegistryStore.logCoerced(coerced);
           tableRebuilt = true;
         } finally {
           this.db.pragma('foreign_keys = ON');
@@ -408,14 +447,16 @@ export class SqliteRegistryStore {
       }
     }
 
-    // ── v2 → v3 (INT-3881): scanner 메트릭 컬럼 회수 + status/risk_level CHECK ──
-    // 반드시 레거시 리빌드(v1→v2, line_start) 뒤에서 실행 — 그 단계들은 SELECT * 복사라
-    // 새 컬럼이 먼저 추가되면 컬럼 수가 어긋난다. 컬럼 추가는 idempotent하게 항상 검사.
+    // ── v2 → v3 (INT-3881): recover scanner metric columns + status/risk_level CHECKs ──
+    // Must run AFTER the legacy rebuilds (v1→v2, line_start): those copy with
+    // SELECT * / fixed column lists, and adding the new columns first would
+    // desync column counts. Column adds are re-checked idempotently every open.
     {
       const v3ColInfo = this.db.prepare("PRAGMA table_info(code_entities)").all() as Array<{ name: string }>;
       const v3Cols = new Set(v3ColInfo.map(r => r.name));
-      // is_exported도 DEFAULT 없이 nullable — 레거시 행을 0으로 백필하면 "미측정"이
-      // "export 아님 확인됨"으로 붕괴한다(F3). NULL = 아직 스캔 안 됨, 0/1 = 측정값.
+      // is_exported is nullable with no DEFAULT on purpose: backfilling legacy
+      // rows with 0 would collapse "unmeasured" into "confirmed not exported".
+      // NULL = not scanned yet, 0/1 = measured value.
       const v3AddCols: Array<[string, string]> = [
         ['is_exported', 'ALTER TABLE code_entities ADD COLUMN is_exported INTEGER'],
         ['loc', 'ALTER TABLE code_entities ADD COLUMN loc INTEGER'],
@@ -426,53 +467,88 @@ export class SqliteRegistryStore {
         if (!v3Cols.has(col)) this.addColumnTolerantly(sql);
       }
 
-      // CHECK 제약은 CREATE TABLE에서만 선언 가능 → 없는 기존 테이블은 리빌드로 교체.
-      // kind CHECK는 의도적으로 제외(P1에서 EntityKind 확장 예정 — 지금 고정하면 또 리빌드).
-      const tableSqlRow = this.db.prepare(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='code_entities'"
-      ).get() as { sql: string } | undefined;
-      // v3 스키마 판정은 버전이 아니라 **테이블 상태**로 한다 (PR #7 리뷰 2건 반영):
-      // (1) CHECK 2종을 각각 검사 — status CHECK 하나를 증거로 삼으면 반쪽 스키마가
-      //     risk_level CHECK 없이 봉인된다.
-      // (2) NOT NULL 2종도 요구 — SQLite CHECK는 NULL에 대해 통과하므로(3-valued logic)
-      //     NOT NULL 없이는 명시적 NULL insert가 enum 불변식을 우회한다.
-      // 상태 기반이라, 과거에 어떤 형태로 user_version 3이 찍혔든 다음 오픈에서 자가 치유된다.
-      const hasStatusCheck = !!tableSqlRow && /CHECK\s*\(\s*status\s+IN/i.test(tableSqlRow.sql);
-      const hasRiskCheck = !!tableSqlRow && /CHECK\s*\(\s*risk_level\s+IN/i.test(tableSqlRow.sql);
-      const v3NotNull = new Map(
-        (this.db.prepare("PRAGMA table_info(code_entities)").all() as Array<{ name: string; notnull: number }>)
-          .map(r => [r.name, r.notnull === 1])
-      );
-      const hasV3Schema = hasStatusCheck && hasRiskCheck
-        && v3NotNull.get('status') === true && v3NotNull.get('risk_level') === true;
+      // CHECK constraints can only be declared at CREATE TABLE time, so tables
+      // lacking them are replaced via rebuild. kind CHECK is deliberately
+      // omitted — P1 (tree-sitter frontend) will extend EntityKind, and pinning
+      // it now would force yet another rebuild.
+      //
+      // v3 schema detection is TABLE-STATE based, not version based:
+      // (1) both CHECKs individually — treating the status CHECK alone as proof
+      //     would seal a half-schema without the risk_level CHECK;
+      // (2) both NOT NULLs — SQLite CHECK passes NULL (3-valued logic), so
+      //     without NOT NULL an explicit NULL bypasses the enum invariant.
+      // State-based healing means any mis-stamped version-3 DB self-repairs on
+      // the next open. Defined as a closure so it can be RE-CHECKED under the
+      // write lock (see below).
+      const readsV3Schema = (): boolean => {
+        const tableSqlRow = this.db.prepare(
+          "SELECT sql FROM sqlite_master WHERE type='table' AND name='code_entities'"
+        ).get() as { sql: string } | undefined;
+        if (!tableSqlRow) return false;
+        const hasStatusCheck = /CHECK\s*\(\s*status\s+IN/i.test(tableSqlRow.sql);
+        const hasRiskCheck = /CHECK\s*\(\s*risk_level\s+IN/i.test(tableSqlRow.sql);
+        const notNull = new Map(
+          (this.db.prepare("PRAGMA table_info(code_entities)").all() as Array<{ name: string; notnull: number }>)
+            .map(r => [r.name, r.notnull === 1])
+        );
+        return hasStatusCheck && hasRiskCheck
+          && notNull.get('status') === true && notNull.get('risk_level') === true;
+      };
 
-      // 전방 호환 가드(F5): 미래 버전(v4+) DB의 스키마 구성이 달라져 이 판정에 안 맞아도,
-      // 구 바이너리가 정본 26컬럼으로 리빌드하며 신 컬럼 데이터를 드랍해선 안 된다.
-      // 상태 기반 치유는 우리가 아는 버전(≤3)까지만.
-      if (currentVersion <= SqliteRegistryStore.SCHEMA_VERSION && !hasV3Schema) {
-        // 보존 우선: CHECK 위반이 될 행을 먼저 유효값으로 정정한 뒤 straight INSERT로
-        // 복사한다 — 행을 떨어뜨리는 INSERT OR IGNORE의 침묵 유실을 차단.
-        this.coerceInvalidEnumRows();
-
-        // 위에서 v3 컬럼 4개를 보강했으므로 소스는 정본 컬럼 전체를 보유한다.
-        const v3CopyCols = SqliteRegistryStore.ENTITY_COLUMNS.join(', ');
+      // Forward-compat guard: a future (v4+) DB whose schema legitimately
+      // differs must never be "healed" down to the canonical 26 columns by an
+      // older binary. State-based healing applies only to versions we know (≤3).
+      if (currentVersion <= SqliteRegistryStore.SCHEMA_VERSION && !readsV3Schema()) {
+        // Copy only columns the source actually has (mirrors the v1→v2 path):
+        // a degraded legacy table missing e.g. `signature` must not crash the
+        // rebuild with "no such column". Missing columns take their DDL defaults.
+        const v3SrcCols = new Set(
+          (this.db.prepare("PRAGMA table_info(code_entities)").all() as Array<{ name: string }>).map(r => r.name)
+        );
+        const v3CopyCols = SqliteRegistryStore.ENTITY_COLUMNS.filter(c => v3SrcCols.has(c)).join(', ');
 
         this.db.pragma('foreign_keys = OFF');
         try {
-          this.db.transaction(() => this.db.exec(`
-          DROP TRIGGER IF EXISTS ce_fts_ai;
-          DROP TRIGGER IF EXISTS ce_fts_ad;
-          DROP TRIGGER IF EXISTS ce_fts_au;
-          DROP TABLE IF EXISTS code_entities_fts;
-          DROP TABLE IF EXISTS code_entities_v3;
-
-          ${SqliteRegistryStore.entityTableDdl('code_entities_v3')}
-          INSERT INTO code_entities_v3 (${v3CopyCols})
-            SELECT ${v3CopyCols} FROM code_entities;
-          DROP TABLE code_entities;
-          ALTER TABLE code_entities_v3 RENAME TO code_entities;
-          `))();
-          tableRebuilt = true;
+          let coerced = { status: 0, risk: 0, timestamps: 0 };
+          let didRebuild = false;
+          const tx = this.db.transaction(() => {
+            // Double-checked under the write lock: a concurrent open may have
+            // completed this exact rebuild while we waited on busy_timeout.
+            if (readsV3Schema()) return;
+            this.db.exec(`
+            DROP TRIGGER IF EXISTS ce_fts_ai;
+            DROP TRIGGER IF EXISTS ce_fts_ad;
+            DROP TRIGGER IF EXISTS ce_fts_au;
+            DROP TABLE IF EXISTS code_entities_fts;
+            DROP TABLE IF EXISTS code_entities_v3;
+            `);
+            // Inside the transaction and after the trigger drops: the coercion
+            // must roll back with a failed rebuild, and must not fire legacy
+            // triggers against a possibly-desynced FTS index.
+            coerced = this.coerceInvalidEnumRows();
+            this.db.exec(`
+            ${SqliteRegistryStore.entityTableDdl('code_entities_v3')}
+            INSERT INTO code_entities_v3 (${v3CopyCols})
+              SELECT ${v3CopyCols} FROM code_entities;
+            DROP TABLE code_entities;
+            ALTER TABLE code_entities_v3 RENAME TO code_entities;
+            `);
+            didRebuild = true;
+          });
+          try {
+            tx.immediate();
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            // A straight INSERT is intentional (no silent row drops), so give
+            // the operator a recovery path instead of a bare constraint error.
+            throw new Error(
+              `cxt registry v3 migration failed and was rolled back (database unchanged): ${msg}. `
+              + `If this registry predates the composite UNIQUE constraint and holds duplicate entities, `
+              + `restore a backup, or remove the affected project with 'cxt project rm <id>' and re-scan.`
+            );
+          }
+          SqliteRegistryStore.logCoerced(coerced);
+          if (didRebuild) tableRebuilt = true;
         } finally {
           this.db.pragma('foreign_keys = ON');
         }
@@ -541,28 +617,31 @@ export class SqliteRegistryStore {
       CREATE INDEX IF NOT EXISTS idx_ce_tags_tag ON code_entity_tags(tag);
       CREATE INDEX IF NOT EXISTS idx_ce_warnings_sev ON code_entity_warnings(severity);
       CREATE INDEX IF NOT EXISTS idx_ce_warnings_entity ON code_entity_warnings(entity_id);
-      -- INT-3881(v3): 역방향 조회 인덱스. relations의 유일한 인덱스였던 PK는 선두가
-      -- source_id라 who-calls/impact의 WHERE target_id = ? 가 매 홉 풀스캔이었다.
+      -- INT-3881(v3): reverse-lookup index. The PK (leading source_id) was the
+      -- only index on relations, so who-calls/impact full-scanned on every hop
+      -- of WHERE target_id = ?.
       CREATE INDEX IF NOT EXISTS idx_cer_target ON code_entity_relations(target_id, relation_type);
     `);
 
-    // ── FTS 가상 테이블 + 트리거 ──
-    // INT-1478: 최초 1회 또는 FTS 인덱싱 컬럼이 실제로 바뀐 버전에서만 rebuild.
-    // INT-3881: user_version 승급과 분리 — FTS 무관 마이그레이션(v3+)이 전체 rebuild를
-    // 강제하지 않도록. 단 테이블 리빌드가 일어났다면 rowid가 재할당됐으므로 강제 rebuild.
-    // 크래시 윈도우 치유(F1+R1): 리빌드 트랜잭션(FTS drop 포함) 커밋 이후 어느 지점에서
-    // 죽어도 — FTS 재생성 전(테이블 부재) 또는 CREATE 직후 'rebuild' 전(존재하되 빈) —
-    // 재오픈 시 버전/리빌드 조건이 모두 false라 stale FTS가 영구 고착된다.
-    // "엔티티는 있는데 FTS가 없거나 비어 있다"는 상태 자체를 rebuild 사유로 삼아
-    // 자가 치유한다. 프로브는 LIMIT 1 존재 검사라 O(1) — 매 오픈 비용 무시 가능.
+    // ── FTS virtual table + triggers ──
+    // INT-1478: rebuild only on first open or when the FTS-indexed column set
+    // actually changed. INT-3881: decoupled from the user_version bump so that
+    // FTS-unrelated migrations (v3+) don't force a full rebuild — but a table
+    // rebuild reassigns rowids, so it always forces one.
+    // Crash-window healing: if the process dies anywhere after the rebuild
+    // transaction commits (which drops FTS) — before FTS recreation (table
+    // absent) or right after CREATE but before 'rebuild' (table exists, empty)
+    // — every reopen condition would be false and a stale FTS would be sealed
+    // forever. So "entities exist but FTS is missing OR empty" is itself a
+    // rebuild trigger. Probes are LIMIT-1 existence checks — O(1) per open.
     const ftsExisted = !!this.db.prepare(
       "SELECT name FROM sqlite_master WHERE type='table' AND name='code_entities_fts'"
     ).get();
     const hasAnyEntity = !!this.db.prepare('SELECT rowid FROM code_entities LIMIT 1').get();
-    // 주의: external-content FTS5는 MATCH 없는 SELECT를 content 테이블 스캔으로
-    // 처리하므로 본체를 조회하면 빈 인덱스도 "행 있음"으로 보인다. 인덱스의 실제
-    // 문서 수는 shadow 테이블 _docsize(문서당 1행, columnsize 기본값에서 항상 존재)로
-    // 프로브한다 — O(1).
+    // Caveat: external-content FTS5 answers non-MATCH SELECTs by scanning the
+    // content table, so probing the fts table itself reports rows even when the
+    // index is empty. The _docsize shadow table (one row per indexed document,
+    // always present at the default columnsize) is the O(1) truthful probe.
     const ftsEmpty = ftsExisted
       && !this.db.prepare('SELECT rowid FROM code_entities_fts_docsize LIMIT 1').get();
     const ftsStaleWithData = hasAnyEntity && (!ftsExisted || ftsEmpty);
@@ -605,7 +684,8 @@ export class SqliteRegistryStore {
       END;
     `);
 
-    // 버전 기록 (마이그레이션이 모두 끝난 뒤) — FTS rebuild 여부와 무관하게 승급한다.
+    // Stamp the version once all migrations finished — independent of whether
+    // an FTS rebuild ran.
     if (currentVersion < SqliteRegistryStore.SCHEMA_VERSION) {
       this.db.pragma(`user_version = ${SqliteRegistryStore.SCHEMA_VERSION}`);
     }
@@ -652,7 +732,7 @@ export class SqliteRegistryStore {
         input.hasTests ? 1 : 0, input.testFile ?? null,
         input.author ?? null, input.maintainer ?? null,
         input.complexityScore ?? null, input.riskLevel ?? 'low',
-        // tri-state 보존(F3): undefined(미측정) → NULL. 0으로 붕괴시키지 않는다.
+        // Preserve the tri-state: undefined (unmeasured) → NULL, never collapsed to 0.
         input.isExported == null ? null : (input.isExported ? 1 : 0), input.loc ?? null,
         input.nestingDepth ?? null, input.paramCount ?? null,
         input.description ?? '', input.notes ?? '',
@@ -1057,39 +1137,48 @@ export class SqliteRegistryStore {
   }
 
   /**
-   * transitive 역방향 도달 집합 — "X를 고치면 영향받는 엔티티 전체".
-   * INT-3881(v3): JS BFS → 재귀 CTE. 홉마다 prepared statement를 재실행하던 왕복을
-   * 단일 쿼리로 대체하고, idx_cer_target 인덱스가 JOIN을 서비스한다.
+   * Transitive reverse reachability — "everything affected if X changes".
+   * Visited-set BFS over the reverse edges, served by idx_cer_target (v3).
    *
-   * BFS 시맨틱 보존 노트:
-   * - UNION(not ALL)이 (id, depth) 튜플을 dedup하고 depth < maxDepth가 사이클을 종결.
-   * - MIN(depth)가 기존 visited-set BFS의 "최단 거리" 시맨틱을 재현.
-   * - root 제외는 depth 조건이 아니라 id != root — 사이클로 root에 depth>0으로
-   *   재도달한 행이 GROUP BY 전에 depth 필터를 통과해 살아남는 것을 막는다.
-   * - 결과는 depth 오름차순(같은 depth 내 이름순) — 소비자는 depth 그룹핑만 가정한다.
+   * Why BFS and not a recursive CTE (tried in this PR, then reverted):
+   * - A recursive CTE can only dedup (id, depth) tuples, not visited ids, so
+   *   cyclic/dense graphs re-expand each node once per distinct depth —
+   *   O(E × maxDepth) work. Measured 16.1s at --depth 100 on a 20k-entity
+   *   cyclic graph vs ~5ms for this BFS (review finding #5). maxDepth up to
+   *   100 is user-reachable via `cxt impact --depth`.
+   * - The per-hop JOIN against code_entities makes dangling relation rows
+   *   (ghost endpoints) dead-end the traversal instead of acting as invisible
+   *   pass-through hops (review finding #6).
+   * The index alone delivers the v3 perf win: 52.55ms → ~3ms p95 on the DoD
+   * fixture (see testing/bench_impact_v3_260820.mjs).
    */
   getImpactSet(
     rootEntityId: string,
     maxDepth = 5,
   ): Array<{ id: string; name: string; filePath: string; depth: number }> {
-    const rows = this.db.prepare(`
-      WITH RECURSIVE impact(id, depth) AS (
-        SELECT ?, 0
-        UNION
-        SELECT r.source_id, i.depth + 1
-        FROM code_entity_relations r
-        JOIN impact i ON r.target_id = i.id
-        WHERE i.depth < ?
-      )
-      SELECT i.id, e.name, e.file_path, MIN(i.depth) AS depth
-      FROM impact i
-      JOIN code_entities e ON e.id = i.id
-      WHERE i.id != ?
-      GROUP BY i.id
-      ORDER BY depth ASC, e.name ASC
-    `).all(rootEntityId, maxDepth, rootEntityId) as Array<{ id: string; name: string; file_path: string; depth: number }>;
-
-    return rows.map(r => ({ id: r.id, name: r.name, filePath: r.file_path, depth: r.depth }));
+    const visited = new Set<string>([rootEntityId]);
+    const result: Array<{ id: string; name: string; filePath: string; depth: number }> = [];
+    let frontier = [rootEntityId];
+    const stmt = this.db.prepare(`
+      SELECT DISTINCT r.source_id, e.name, e.file_path
+      FROM code_entity_relations r
+      JOIN code_entities e ON e.id = r.source_id
+      WHERE r.target_id = ?
+    `);
+    for (let depth = 1; depth <= maxDepth && frontier.length > 0; depth++) {
+      const next: string[] = [];
+      for (const id of frontier) {
+        const callers = stmt.all(id) as Array<{ source_id: string; name: string; file_path: string }>;
+        for (const c of callers) {
+          if (visited.has(c.source_id)) continue;
+          visited.add(c.source_id);
+          result.push({ id: c.source_id, name: c.name, filePath: c.file_path, depth });
+          next.push(c.source_id);
+        }
+      }
+      frontier = next;
+    }
+    return result;
   }
 
   /** 프로젝트 전체 정방향 edge를 source_id별로 그룹핑해 일괄 반환 (export N+1 방지). */

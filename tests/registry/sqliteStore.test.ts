@@ -600,8 +600,8 @@ describe('SqliteRegistryStore — v3 migration (INT-3881)', () => {
     h.store.registerEntity(baseEntity({ name: 'stableFn', filePath: 'src/s.ts' }));
     h.store.close();
 
-    // sqlite schema_version은 DDL이 실행될 때마다 증가한다 — 재오픈이 리빌드/재생성을
-    // 하지 않았다는 것을 이름이 아니라 관측으로 단언한다 (L2 리뷰 F8).
+    // sqlite's schema_version increments whenever DDL runs — assert by
+    // observation, not by test name, that reopening ran no rebuild (L2 review F8).
     const before = new Database(dbPath);
     const schemaVerBefore = before.pragma('schema_version', { simple: true }) as number;
     before.close();
@@ -731,8 +731,8 @@ describe('SqliteRegistryStore — getImpactSet CTE equivalence (INT-3881)', () =
 
 describe('SqliteRegistryStore — v3 gate requires BOTH check constraints (PR #7 review)', () => {
   it('rebuilds a half-schema table that has only the status CHECK', () => {
-    // status CHECK만 있고 risk_level CHECK가 없는 변칙 테이블 — 게이트가 status만
-    // 검사하면 이 테이블은 리빌드 없이 v3로 봉인되고 risk CHECK가 영원히 누락된다.
+    // Anomalous table carrying only the status CHECK — a gate that tests just
+    // status would seal it at v3 with the risk_level CHECK missing forever.
     const halfPath = join(h.dir, 'half-schema.db');
     const half = new Database(halfPath);
     half.exec(`
@@ -799,8 +799,9 @@ describe('SqliteRegistryStore — enum invariant holds for NULL (PR #7 review r2
   });
 
   it('self-heals a v3-stamped table that has CHECKs but nullable enum columns', () => {
-    // 초기 v3 구현(0b3717a)이 만든 형태: CHECK는 있으나 NOT NULL이 없어 NULL이 통과.
-    // 게이트가 버전 기반이면 user_version=3에 봉인돼 영원히 안 고쳐진다 — 상태 기반 검증.
+    // The shape the initial v3 implementation (0b3717a) produced: CHECKs present
+    // but no NOT NULL, so NULL passes. A version-based gate would seal it at
+    // user_version=3 forever — this asserts the state-based healing.
     const p = join(h.dir, 'nullable-v3.db');
     const db = new Database(p);
     db.exec(`
@@ -856,8 +857,9 @@ describe('SqliteRegistryStore — enum invariant holds for NULL (PR #7 review r2
 
 describe('SqliteRegistryStore — L2 review fixes (F1/F3 regression)', () => {
   it('F1: heals the crash window — v3 table with rows, version 2, FTS table missing', () => {
-    // 리빌드 트랜잭션(FTS drop 포함) 커밋 직후 ~ FTS 재생성 전 크래시를 재현:
-    // 정상 v3 테이블 + 데이터 + user_version=2 + FTS/트리거 부재.
+    // Reproduce a crash right after the rebuild transaction commits (FTS dropped
+    // inside it) but before FTS recreation: healthy v3 table + data +
+    // user_version=2 + no FTS table/triggers.
     const p = join(h.dir, 'crash-window.db');
     const s1 = new SqliteRegistryStore(p);
     s1.registerEntity(baseEntity({ name: 'crashFn', filePath: 'src/cw.ts' }));
@@ -876,7 +878,7 @@ describe('SqliteRegistryStore — L2 review fixes (F1/F3 regression)', () => {
     const s2 = new SqliteRegistryStore(p);
     s2.close();
 
-    // LIKE fallback이 가릴 수 있으므로 FTS 인덱스 자체를 raw로 검증한다.
+    // searchEntities' LIKE fallback could mask the defect — probe the FTS index itself.
     const raw2 = new Database(p);
     const hits = (raw2.prepare(
       "SELECT COUNT(*) as cnt FROM code_entities_fts WHERE code_entities_fts MATCH 'crashFn'"
@@ -887,7 +889,7 @@ describe('SqliteRegistryStore — L2 review fixes (F1/F3 regression)', () => {
   });
 
   it('F3: legacy backfill keeps is_exported as unmeasured (NULL), not false', () => {
-    // v2 DB를 마이그레이션하면 is_exported는 NULL(미측정)이어야 한다 — 0 백필 금지.
+    // Migrating a v2 DB must leave is_exported as NULL (unmeasured) — no 0 backfill.
     const p = join(h.dir, 'tri-state.db');
     const legacy = new Database(p);
     legacy.exec(`
@@ -911,8 +913,8 @@ describe('SqliteRegistryStore — L2 review fixes (F1/F3 regression)', () => {
     legacy.close();
 
     const migrated = new SqliteRegistryStore(p);
-    expect(migrated.getEntity('e-tri')?.isExported).toBeUndefined(); // 미측정 — false 아님
-    // 미측정 register도 NULL 보존
+    expect(migrated.getEntity('e-tri')?.isExported).toBeUndefined(); // unmeasured — not false
+    // registering without the metric also preserves NULL
     const fresh = migrated.registerEntity(baseEntity({ name: 'noMetric', filePath: 'src/nm.ts' }));
     expect(migrated.getEntity(fresh.id)?.isExported).toBeUndefined();
     migrated.close();
@@ -921,8 +923,9 @@ describe('SqliteRegistryStore — L2 review fixes (F1/F3 regression)', () => {
 
 describe('SqliteRegistryStore — L2 addendum (R1 micro-window, F5 guard regression)', () => {
   it('R1: heals an FTS table that exists but is empty while entities exist', () => {
-    // 크래시 지점이 CREATE VIRTUAL TABLE 직후 ~ rebuild INSERT 직전이면 "존재하되 빈"
-    // FTS가 남는다. 테이블 부재만 검사하면 이 상태는 영구 stale — 행 존재 프로브로 치유.
+    // A crash between CREATE VIRTUAL TABLE and the rebuild INSERT leaves an
+    // "existing but empty" FTS. Checking only for table absence would keep this
+    // state permanently stale — the row-existence probe must heal it.
     const p = join(h.dir, 'empty-fts.db');
     const s1 = new SqliteRegistryStore(p);
     s1.registerEntity(baseEntity({ name: 'emptyFtsFn', filePath: 'src/ef.ts' }));
@@ -939,7 +942,7 @@ describe('SqliteRegistryStore — L2 addendum (R1 micro-window, F5 guard regress
         content=code_entities, content_rowid=rowid
       );
     `);
-    // 버전은 이미 3인 최악 케이스 — 순수하게 상태 프로브만으로 치유돼야 한다.
+    // Worst case: version is already 3 — healing must come purely from the state probe.
     raw.close();
 
     const s2 = new SqliteRegistryStore(p);
@@ -954,9 +957,10 @@ describe('SqliteRegistryStore — L2 addendum (R1 micro-window, F5 guard regress
   });
 
   it('F5 guard: a future v4 database is never rebuilt down to the v3 shape', () => {
-    // v4 가정: CHECK 구성이 바뀌고(여기선 부재로 모사) v4 전용 컬럼을 가짐.
-    // 가드가 없으면 상태 게이트가 이를 "비정상 v3"로 보고 정본 26컬럼으로 리빌드하며
-    // call_sites_count 데이터를 드랍한다.
+    // Hypothetical v4: CHECK layout changed (simulated by absence) plus a
+    // v4-only column. Without the guard the state gate would treat this as a
+    // "broken v3" and rebuild down to the canonical 26 columns, dropping
+    // call_sites_count data.
     const p = join(h.dir, 'future-v4.db');
     const db = new Database(p);
     db.exec(`
@@ -985,9 +989,99 @@ describe('SqliteRegistryStore — L2 addendum (R1 micro-window, F5 guard regress
     opened.close();
 
     const raw = new Database(p);
-    expect(raw.pragma('user_version', { simple: true })).toBe(4); // 다운스탬프 없음
+    expect(raw.pragma('user_version', { simple: true })).toBe(4); // no down-stamp
     const row = raw.prepare("SELECT call_sites_count FROM code_entities WHERE id = 'e-v4'").get() as { call_sites_count: number };
-    expect(row.call_sites_count).toBe(42); // v4 데이터 보존 — 리빌드 미발동
+    expect(row.call_sites_count).toBe(42); // v4 data preserved — rebuild did not fire
     raw.close();
+  });
+});
+
+describe('SqliteRegistryStore — /code-review findings (#1 atomicity, #2 recovery, #6 ghost hop)', () => {
+  it('#1/#2: a failed v3 rebuild rolls back the enum coercion and raises an actionable error', () => {
+    // Pre-v2-era shape: NO unique constraint at all, so duplicate
+    // (project_id, qualified_name) pairs exist and the v1->v2 path is skipped
+    // (it only fires on a single-column qualified_name UNIQUE index). The v3
+    // rebuild's straight INSERT must then fail on the composite UNIQUE — and
+    // the coercion of the invalid status must fail WITH it, not survive it.
+    const p = join(h.dir, 'dup-legacy.db');
+    const legacy = new Database(p);
+    legacy.exec(`
+      CREATE TABLE code_entities (
+        id TEXT PRIMARY KEY, project_id TEXT NOT NULL, kind TEXT NOT NULL,
+        name TEXT NOT NULL, qualified_name TEXT NOT NULL, file_path TEXT NOT NULL,
+        line_start INTEGER, line_end INTEGER, signature TEXT,
+        status TEXT DEFAULT 'active', deprecated_at TEXT, deprecated_reason TEXT,
+        has_tests INTEGER DEFAULT 0, test_file TEXT, author TEXT, maintainer TEXT,
+        complexity_score INTEGER, risk_level TEXT DEFAULT 'low',
+        description TEXT DEFAULT '', notes TEXT DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `);
+    const ins = legacy.prepare(`INSERT INTO code_entities
+      (id, project_id, kind, name, qualified_name, file_path, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`);
+    ins.run('e-dup-1', 'p1', 'function', 'dupFn', 'src/d.ts::dupFn', 'src/d.ts', 'weird-status');
+    ins.run('e-dup-2', 'p1', 'function', 'dupFn', 'src/d.ts::dupFn', 'src/d.ts', 'active');
+    legacy.close();
+
+    expect(() => new SqliteRegistryStore(p))
+      .toThrow(/v3 migration failed and was rolled back.*cxt project rm/s);
+
+    // The coercion must have rolled back with the rebuild: the original
+    // (invalid) status value is still inspectable, not flattened to 'active'.
+    const raw = new Database(p);
+    const st = (raw.prepare("SELECT status FROM code_entities WHERE id = 'e-dup-1'").get() as { status: string }).status;
+    expect(st).toBe('weird-status');
+    const cnt = (raw.prepare('SELECT COUNT(*) as c FROM code_entities').get() as { c: number }).c;
+    expect(cnt).toBe(2); // no rows lost either
+    raw.close();
+  });
+
+  it('#2: NULL timestamps in legacy rows are repaired instead of failing NOT NULL on copy', () => {
+    const p = join(h.dir, 'null-ts.db');
+    const legacy = new Database(p);
+    legacy.exec(`
+      CREATE TABLE code_entities (
+        id TEXT PRIMARY KEY, project_id TEXT NOT NULL, kind TEXT NOT NULL,
+        name TEXT NOT NULL, qualified_name TEXT NOT NULL, file_path TEXT NOT NULL,
+        line_start INTEGER, line_end INTEGER, signature TEXT,
+        status TEXT DEFAULT 'active', deprecated_at TEXT, deprecated_reason TEXT,
+        has_tests INTEGER DEFAULT 0, test_file TEXT, author TEXT, maintainer TEXT,
+        complexity_score INTEGER, risk_level TEXT DEFAULT 'low',
+        description TEXT DEFAULT '', notes TEXT DEFAULT '',
+        created_at TEXT, updated_at TEXT,
+        UNIQUE(project_id, qualified_name)
+      );
+    `);
+    legacy.prepare(`INSERT INTO code_entities
+      (id, project_id, kind, name, qualified_name, file_path, created_at, updated_at)
+      VALUES ('e-nots', 'p1', 'function', 'noTsFn', 'src/nt.ts::noTsFn', 'src/nt.ts', NULL, NULL)`).run();
+    legacy.close();
+
+    const migrated = new SqliteRegistryStore(p);
+    const ent = migrated.getEntity('e-nots');
+    expect(ent?.createdAt).toBeTruthy();
+    expect(ent?.updatedAt).toBeTruthy();
+    migrated.close();
+  });
+
+  it('#6: dangling relation rows dead-end the impact traversal (ghosts are not pass-through hops)', () => {
+    const target = h.store.registerEntity(baseEntity({ name: 'ghostTarget', filePath: 'src/gt.ts' }));
+    const outer = h.store.registerEntity(baseEntity({ name: 'ghostCaller', filePath: 'src/gc.ts' }));
+
+    // Fabricate dangling rows the way a historical FK-off migration could:
+    // ghost-x calls target, outer calls ghost-x — but ghost-x has no entity row.
+    const raw = new Database(join(h.dir, 'registry.db'));
+    raw.pragma('foreign_keys = OFF');
+    const insR = raw.prepare('INSERT INTO code_entity_relations (source_id, target_id, relation_type) VALUES (?, ?, ?)');
+    insR.run('ghost-x', target.id, 'calls');
+    insR.run(outer.id, 'ghost-x', 'calls');
+    raw.close();
+
+    // The ghost has no entity row, so the traversal must stop at it: outer is
+    // NOT reported as depth-2 impact of target.
+    const got = h.store.getImpactSet(target.id, 5);
+    expect(got).toEqual([]);
   });
 });
