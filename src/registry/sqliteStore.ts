@@ -215,7 +215,7 @@ export class SqliteRegistryStore {
         line_start INTEGER,
         line_end INTEGER,
         signature TEXT,
-        status TEXT DEFAULT 'active',
+        status TEXT NOT NULL DEFAULT 'active',
         deprecated_at TEXT,
         deprecated_reason TEXT,
         has_tests INTEGER DEFAULT 0,
@@ -223,7 +223,7 @@ export class SqliteRegistryStore {
         author TEXT,
         maintainer TEXT,
         complexity_score INTEGER,
-        risk_level TEXT DEFAULT 'low' CHECK (risk_level IN ('low', 'medium', 'high')),
+        risk_level TEXT NOT NULL DEFAULT 'low' CHECK (risk_level IN ('low', 'medium', 'high')),
         is_exported INTEGER DEFAULT 0,
         loc INTEGER,
         nesting_depth INTEGER,
@@ -417,14 +417,22 @@ export class SqliteRegistryStore {
       const tableSqlRow = this.db.prepare(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='code_entities'"
       ).get() as { sql: string } | undefined;
-      // 두 CHECK를 각각 검사한다 — status CHECK 하나를 "v3 스키마 설치됨"의 증거로
-      // 삼으면, 어떤 경위로든 반쪽 스키마가 된 테이블이 risk_level CHECK 없이
-      // user_version 3으로 봉인된다 (PR #7 리뷰 지적).
+      // v3 스키마 판정은 버전이 아니라 **테이블 상태**로 한다 (PR #7 리뷰 2건 반영):
+      // (1) CHECK 2종을 각각 검사 — status CHECK 하나를 증거로 삼으면 반쪽 스키마가
+      //     risk_level CHECK 없이 봉인된다.
+      // (2) NOT NULL 2종도 요구 — SQLite CHECK는 NULL에 대해 통과하므로(3-valued logic)
+      //     NOT NULL 없이는 명시적 NULL insert가 enum 불변식을 우회한다.
+      // 상태 기반이라, 과거에 어떤 형태로 user_version 3이 찍혔든 다음 오픈에서 자가 치유된다.
       const hasStatusCheck = !!tableSqlRow && /CHECK\s*\(\s*status\s+IN/i.test(tableSqlRow.sql);
       const hasRiskCheck = !!tableSqlRow && /CHECK\s*\(\s*risk_level\s+IN/i.test(tableSqlRow.sql);
-      const hasV3Checks = hasStatusCheck && hasRiskCheck;
+      const v3NotNull = new Map(
+        (this.db.prepare("PRAGMA table_info(code_entities)").all() as Array<{ name: string; notnull: number }>)
+          .map(r => [r.name, r.notnull === 1])
+      );
+      const hasV3Schema = hasStatusCheck && hasRiskCheck
+        && v3NotNull.get('status') === true && v3NotNull.get('risk_level') === true;
 
-      if (currentVersion < 3 && !hasV3Checks) {
+      if (!hasV3Schema) {
         // 보존 우선: CHECK 위반이 될 행을 먼저 유효값으로 정정한 뒤 straight INSERT로
         // 복사한다 — 행을 떨어뜨리는 INSERT OR IGNORE의 침묵 유실을 차단.
         this.coerceInvalidEnumRows();

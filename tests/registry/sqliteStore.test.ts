@@ -776,3 +776,73 @@ describe('SqliteRegistryStore — v3 gate requires BOTH check constraints (PR #7
     raw.close();
   });
 });
+
+describe('SqliteRegistryStore — enum invariant holds for NULL (PR #7 review r2)', () => {
+  it('fresh DBs reject explicit NULL status/risk_level (CHECK passes NULL — NOT NULL must catch it)', () => {
+    const raw = new Database(join(h.dir, 'registry.db'));
+    expect(() => raw.prepare(`INSERT INTO code_entities
+      (id, project_id, kind, name, qualified_name, file_path, status, created_at, updated_at)
+      VALUES ('x1', 'p', 'function', 'x1', 'f::x1', 'f', NULL, datetime('now'), datetime('now'))`).run())
+      .toThrow(/NOT NULL/);
+    expect(() => raw.prepare(`INSERT INTO code_entities
+      (id, project_id, kind, name, qualified_name, file_path, risk_level, created_at, updated_at)
+      VALUES ('x2', 'p', 'function', 'x2', 'f::x2', 'f', NULL, datetime('now'), datetime('now'))`).run())
+      .toThrow(/NOT NULL/);
+    raw.close();
+  });
+
+  it('self-heals a v3-stamped table that has CHECKs but nullable enum columns', () => {
+    // 초기 v3 구현(0b3717a)이 만든 형태: CHECK는 있으나 NOT NULL이 없어 NULL이 통과.
+    // 게이트가 버전 기반이면 user_version=3에 봉인돼 영원히 안 고쳐진다 — 상태 기반 검증.
+    const p = join(h.dir, 'nullable-v3.db');
+    const db = new Database(p);
+    db.exec(`
+      CREATE TABLE code_entities (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        name TEXT NOT NULL,
+        qualified_name TEXT NOT NULL,
+        file_path TEXT NOT NULL,
+        line_start INTEGER,
+        line_end INTEGER,
+        signature TEXT,
+        status TEXT DEFAULT 'active',
+        deprecated_at TEXT,
+        deprecated_reason TEXT,
+        has_tests INTEGER DEFAULT 0,
+        test_file TEXT,
+        author TEXT,
+        maintainer TEXT,
+        complexity_score INTEGER,
+        risk_level TEXT DEFAULT 'low' CHECK (risk_level IN ('low', 'medium', 'high')),
+        is_exported INTEGER DEFAULT 0,
+        loc INTEGER,
+        nesting_depth INTEGER,
+        param_count INTEGER,
+        description TEXT DEFAULT '',
+        notes TEXT DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(project_id, qualified_name),
+        CHECK (status IN ('active', 'deprecated', 'experimental', 'planned', 'broken'))
+      );
+    `);
+    db.prepare(`INSERT INTO code_entities
+      (id, project_id, kind, name, qualified_name, file_path, status, created_at, updated_at)
+      VALUES ('e-null', 'p1', 'function', 'nullFn', 'src/n.ts::nullFn', 'src/n.ts', NULL, datetime('now'), datetime('now'))`).run();
+    db.pragma('user_version = 3');
+    db.close();
+
+    const migrated = new SqliteRegistryStore(p);
+    expect(migrated.getEntity('e-null')?.status).toBe('active'); // NULL coerced during heal
+    migrated.close();
+
+    const raw = new Database(p);
+    const cols = raw.prepare('PRAGMA table_info(code_entities)').all() as Array<{ name: string; notnull: number }>;
+    const byName = new Map(cols.map(c => [c.name, c.notnull]));
+    expect(byName.get('status')).toBe(1);
+    expect(byName.get('risk_level')).toBe(1);
+    raw.close();
+  });
+});
