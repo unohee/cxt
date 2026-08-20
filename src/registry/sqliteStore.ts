@@ -224,7 +224,7 @@ export class SqliteRegistryStore {
         maintainer TEXT,
         complexity_score INTEGER,
         risk_level TEXT NOT NULL DEFAULT 'low' CHECK (risk_level IN ('low', 'medium', 'high')),
-        is_exported INTEGER DEFAULT 0,
+        is_exported INTEGER,
         loc INTEGER,
         nesting_depth INTEGER,
         param_count INTEGER,
@@ -235,6 +235,18 @@ export class SqliteRegistryStore {
         UNIQUE(project_id, qualified_name),
         CHECK (status IN ('active', 'deprecated', 'experimental', 'planned', 'broken'))
       );`;
+  }
+
+  // 동시 최초 오픈 경합 완화: PRAGMA table_info 확인과 ALTER 사이에 다른 프로세스가
+  // 같은 컬럼을 먼저 추가하면 duplicate column으로 죽는다(TOCTOU). SessionStart 훅과
+  // 수동 실행이 동시에 발화하는 실사용 패턴이라, 그 오류만 무해로 삼키고 나머지는 던진다.
+  private addColumnTolerantly(sql: string): void {
+    try {
+      this.db.exec(sql);
+    } catch (err) { // cxt-ignore: exception_hiding — duplicate column만 흡수(동시 마이그레이션 경합), 그 외는 rethrow
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.includes('duplicate column name')) throw err;
+    }
   }
 
   // 리빌드 대상 테이블에 CHECK가 걸리므로, 위반이 될 행을 먼저 유효값으로 정정한다.
@@ -275,7 +287,7 @@ export class SqliteRegistryStore {
     // 추가하면 대상 테이블(22컬럼)과 소스(26컬럼)의 컬럼 수가 어긋나 마이그레이션이 깨진다.
     for (const [col, sql] of addColMigrations) {
       if (!existingCols.has(col)) {
-        this.db.exec(sql);
+        this.addColumnTolerantly(sql);
       }
     }
 
@@ -402,14 +414,16 @@ export class SqliteRegistryStore {
     {
       const v3ColInfo = this.db.prepare("PRAGMA table_info(code_entities)").all() as Array<{ name: string }>;
       const v3Cols = new Set(v3ColInfo.map(r => r.name));
+      // is_exported도 DEFAULT 없이 nullable — 레거시 행을 0으로 백필하면 "미측정"이
+      // "export 아님 확인됨"으로 붕괴한다(F3). NULL = 아직 스캔 안 됨, 0/1 = 측정값.
       const v3AddCols: Array<[string, string]> = [
-        ['is_exported', 'ALTER TABLE code_entities ADD COLUMN is_exported INTEGER DEFAULT 0'],
+        ['is_exported', 'ALTER TABLE code_entities ADD COLUMN is_exported INTEGER'],
         ['loc', 'ALTER TABLE code_entities ADD COLUMN loc INTEGER'],
         ['nesting_depth', 'ALTER TABLE code_entities ADD COLUMN nesting_depth INTEGER'],
         ['param_count', 'ALTER TABLE code_entities ADD COLUMN param_count INTEGER'],
       ];
       for (const [col, sql] of v3AddCols) {
-        if (!v3Cols.has(col)) this.db.exec(sql);
+        if (!v3Cols.has(col)) this.addColumnTolerantly(sql);
       }
 
       // CHECK 제약은 CREATE TABLE에서만 선언 가능 → 없는 기존 테이블은 리빌드로 교체.
@@ -432,7 +446,10 @@ export class SqliteRegistryStore {
       const hasV3Schema = hasStatusCheck && hasRiskCheck
         && v3NotNull.get('status') === true && v3NotNull.get('risk_level') === true;
 
-      if (!hasV3Schema) {
+      // 전방 호환 가드(F5): 미래 버전(v4+) DB의 스키마 구성이 달라져 이 판정에 안 맞아도,
+      // 구 바이너리가 정본 26컬럼으로 리빌드하며 신 컬럼 데이터를 드랍해선 안 된다.
+      // 상태 기반 치유는 우리가 아는 버전(≤3)까지만.
+      if (currentVersion <= SqliteRegistryStore.SCHEMA_VERSION && !hasV3Schema) {
         // 보존 우선: CHECK 위반이 될 행을 먼저 유효값으로 정정한 뒤 straight INSERT로
         // 복사한다 — 행을 떨어뜨리는 INSERT OR IGNORE의 침묵 유실을 차단.
         this.coerceInvalidEnumRows();
@@ -533,7 +550,16 @@ export class SqliteRegistryStore {
     // INT-1478: 최초 1회 또는 FTS 인덱싱 컬럼이 실제로 바뀐 버전에서만 rebuild.
     // INT-3881: user_version 승급과 분리 — FTS 무관 마이그레이션(v3+)이 전체 rebuild를
     // 강제하지 않도록. 단 테이블 리빌드가 일어났다면 rowid가 재할당됐으므로 강제 rebuild.
-    const needsFtsRebuild = currentVersion < SqliteRegistryStore.FTS_SCHEMA_VERSION || tableRebuilt;
+    // 크래시 윈도우 치유(F1): 리빌드 트랜잭션(FTS drop 포함) 커밋 직후 ~ FTS 재생성 전에
+    // 프로세스가 죽으면, 재오픈 시 버전/리빌드 조건이 모두 false라 빈 FTS가 영구 고착된다.
+    // "FTS 테이블이 없는데 엔티티는 있다"는 상태 자체를 rebuild 사유로 삼아 자가 치유한다.
+    const ftsExisted = !!this.db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='code_entities_fts'"
+    ).get();
+    const ftsMissingWithData = !ftsExisted
+      && ((this.db.prepare('SELECT COUNT(*) as cnt FROM code_entities').get() as { cnt: number }).cnt > 0);
+    const needsFtsRebuild = currentVersion < SqliteRegistryStore.FTS_SCHEMA_VERSION
+      || tableRebuilt || ftsMissingWithData;
 
     if (needsFtsRebuild) {
       this.db.exec(`
@@ -618,7 +644,8 @@ export class SqliteRegistryStore {
         input.hasTests ? 1 : 0, input.testFile ?? null,
         input.author ?? null, input.maintainer ?? null,
         input.complexityScore ?? null, input.riskLevel ?? 'low',
-        input.isExported ? 1 : 0, input.loc ?? null,
+        // tri-state 보존(F3): undefined(미측정) → NULL. 0으로 붕괴시키지 않는다.
+        input.isExported == null ? null : (input.isExported ? 1 : 0), input.loc ?? null,
         input.nestingDepth ?? null, input.paramCount ?? null,
         input.description ?? '', input.notes ?? '',
         now, now,

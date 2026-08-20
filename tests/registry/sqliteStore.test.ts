@@ -595,10 +595,16 @@ describe('SqliteRegistryStore — v3 migration (INT-3881)', () => {
     expect(updated?.nestingDepth).toBe(3); // untouched field survives
   });
 
-  it('reopening a v3 database is a no-op migration that keeps FTS intact', () => {
+  it('reopening a v3 database is a no-op migration: no DDL runs, FTS intact', () => {
     const dbPath = join(h.dir, 'registry.db');
     h.store.registerEntity(baseEntity({ name: 'stableFn', filePath: 'src/s.ts' }));
     h.store.close();
+
+    // sqlite schema_version은 DDL이 실행될 때마다 증가한다 — 재오픈이 리빌드/재생성을
+    // 하지 않았다는 것을 이름이 아니라 관측으로 단언한다 (L2 리뷰 F8).
+    const before = new Database(dbPath);
+    const schemaVerBefore = before.pragma('schema_version', { simple: true }) as number;
+    before.close();
 
     const store2 = new SqliteRegistryStore(dbPath);
     expect(store2.searchEntities('stableFn', 10).some(e => e.name === 'stableFn')).toBe(true);
@@ -606,6 +612,7 @@ describe('SqliteRegistryStore — v3 migration (INT-3881)', () => {
 
     const raw = new Database(dbPath);
     expect(raw.pragma('user_version', { simple: true })).toBe(3);
+    expect(raw.pragma('schema_version', { simple: true })).toBe(schemaVerBefore);
     raw.close();
   });
 });
@@ -844,5 +851,70 @@ describe('SqliteRegistryStore — enum invariant holds for NULL (PR #7 review r2
     expect(byName.get('status')).toBe(1);
     expect(byName.get('risk_level')).toBe(1);
     raw.close();
+  });
+});
+
+describe('SqliteRegistryStore — L2 review fixes (F1/F3 regression)', () => {
+  it('F1: heals the crash window — v3 table with rows, version 2, FTS table missing', () => {
+    // 리빌드 트랜잭션(FTS drop 포함) 커밋 직후 ~ FTS 재생성 전 크래시를 재현:
+    // 정상 v3 테이블 + 데이터 + user_version=2 + FTS/트리거 부재.
+    const p = join(h.dir, 'crash-window.db');
+    const s1 = new SqliteRegistryStore(p);
+    s1.registerEntity(baseEntity({ name: 'crashFn', filePath: 'src/cw.ts' }));
+    s1.close();
+
+    const raw = new Database(p);
+    raw.exec(`
+      DROP TRIGGER IF EXISTS ce_fts_ai;
+      DROP TRIGGER IF EXISTS ce_fts_ad;
+      DROP TRIGGER IF EXISTS ce_fts_au;
+      DROP TABLE IF EXISTS code_entities_fts;
+    `);
+    raw.pragma('user_version = 2');
+    raw.close();
+
+    const s2 = new SqliteRegistryStore(p);
+    s2.close();
+
+    // LIKE fallback이 가릴 수 있으므로 FTS 인덱스 자체를 raw로 검증한다.
+    const raw2 = new Database(p);
+    const hits = (raw2.prepare(
+      "SELECT COUNT(*) as cnt FROM code_entities_fts WHERE code_entities_fts MATCH 'crashFn'"
+    ).get() as { cnt: number }).cnt;
+    expect(hits).toBe(1);
+    expect(raw2.pragma('user_version', { simple: true })).toBe(3);
+    raw2.close();
+  });
+
+  it('F3: legacy backfill keeps is_exported as unmeasured (NULL), not false', () => {
+    // v2 DB를 마이그레이션하면 is_exported는 NULL(미측정)이어야 한다 — 0 백필 금지.
+    const p = join(h.dir, 'tri-state.db');
+    const legacy = new Database(p);
+    legacy.exec(`
+      CREATE TABLE code_entities (
+        id TEXT PRIMARY KEY, project_id TEXT NOT NULL, kind TEXT NOT NULL,
+        name TEXT NOT NULL, qualified_name TEXT NOT NULL, file_path TEXT NOT NULL,
+        line_start INTEGER, line_end INTEGER, signature TEXT,
+        status TEXT DEFAULT 'active', deprecated_at TEXT, deprecated_reason TEXT,
+        has_tests INTEGER DEFAULT 0, test_file TEXT, author TEXT, maintainer TEXT,
+        complexity_score INTEGER, risk_level TEXT DEFAULT 'low',
+        description TEXT DEFAULT '', notes TEXT DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(project_id, qualified_name)
+      );
+    `);
+    legacy.prepare(`INSERT INTO code_entities
+      (id, project_id, kind, name, qualified_name, file_path, created_at, updated_at)
+      VALUES ('e-tri', 'p1', 'function', 'triFn', 'src/t.ts::triFn', 'src/t.ts', datetime('now'), datetime('now'))`).run();
+    legacy.pragma('user_version = 2');
+    legacy.close();
+
+    const migrated = new SqliteRegistryStore(p);
+    expect(migrated.getEntity('e-tri')?.isExported).toBeUndefined(); // 미측정 — false 아님
+    // 미측정 register도 NULL 보존
+    const fresh = migrated.registerEntity(baseEntity({ name: 'noMetric', filePath: 'src/nm.ts' }));
+    expect(migrated.getEntity(fresh.id)?.isExported).toBeUndefined();
+    migrated.close();
   });
 });
