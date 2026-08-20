@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   buildIgnoreConfig,
   shouldSkipDir,
+  shouldSkipFile,
   BUILTIN_SKIP_DIRS,
 } from '../../src/registry/ignoreRules.js';
 import { createTmpDir, type TmpDirHandle } from '../helpers/tmpDir.js';
@@ -95,11 +96,40 @@ describe('buildIgnoreConfig — .cxtignore parsing', () => {
     expect(cfg.skipDirs.has('# comment')).toBe(false);
   });
 
-  it('skips negation patterns (not supported)', () => {
-    tmp.write('.cxtignore', '!important/\n');
+  it('honors ordered negation patterns', () => {
+    tmp.write('.cxtignore', 'generated/\n!generated/important/\n');
     const cfg = buildIgnoreConfig(tmp.root);
-    expect(cfg.skipDirs.has('important')).toBe(false);
-    expect(cfg.skipDirs.has('!important')).toBe(false);
+    expect(shouldSkipDir('generated', '', cfg)).toBe(false); // descendant 재포함을 위해 순회
+    expect(shouldSkipDir('important', 'generated', cfg)).toBe(false);
+    expect(shouldSkipDir('other', 'generated', cfg)).toBe(true);
+    expect(shouldSkipFile('generated/other.ts', cfg)).toBe(true);
+    expect(shouldSkipFile('generated/important/keep.ts', cfg)).toBe(false);
+  });
+
+  it('keeps ignored sibling files excluded while re-including one descendant', () => {
+    tmp.write('.cxtignore', 'generated/\n!generated/keep.ts\n');
+    const cfg = buildIgnoreConfig(tmp.root);
+    expect(shouldSkipDir('generated', '', cfg)).toBe(false);
+    expect(shouldSkipFile('generated/other.ts', cfg)).toBe(true);
+    expect(shouldSkipFile('generated/keep.ts', cfg)).toBe(false);
+  });
+
+  it('traverses ignored descendants that may match a wildcard negation', () => {
+    tmp.write('.cxtignore', 'generated/\n!generated/**/*.ts\n');
+    const cfg = buildIgnoreConfig(tmp.root);
+    expect(shouldSkipDir('generated', '', cfg)).toBe(false);
+    expect(shouldSkipDir('foo', 'generated', cfg)).toBe(false);
+    expect(shouldSkipFile('generated/foo/keep.ts', cfg)).toBe(false);
+    expect(shouldSkipFile('generated/foo/drop.txt', cfg)).toBe(true);
+  });
+
+  it('does not apply directory-only rules to same-named files', () => {
+    tmp.write('.cxtignore', 'generated.ts/\n');
+    const cfg = buildIgnoreConfig(tmp.root);
+    expect(shouldSkipFile('generated.ts', cfg)).toBe(false);
+    expect(shouldSkipFile('generated.ts/output.js', cfg)).toBe(true);
+    expect(shouldSkipFile('nested/generated.ts/output.js', cfg)).toBe(true);
+    expect(shouldSkipDir('generated.ts', '', cfg)).toBe(true);
   });
 
   it('treats no-extension entries as directory names', () => {
@@ -118,14 +148,14 @@ describe('buildIgnoreConfig — .gitignore parsing', () => {
   });
 });
 
-describe('buildIgnoreConfig — vendored subproject auto-detection', () => {
-  it('detects subproject with package.json + node_modules as vendored', () => {
+describe('buildIgnoreConfig — vendored subprojects', () => {
+  it('excludes a nested package with its own installed dependencies', () => {
     tmp.write('package.json', '{}'); // root manifest
     tmp.write('vendored-pkg/package.json', '{}');
     tmp.write('vendored-pkg/node_modules/.placeholder', '');
 
     const cfg = buildIgnoreConfig(tmp.root);
-    expect(cfg.skipDirs.has('vendored-pkg')).toBe(true);
+    expect(shouldSkipDir('vendored-pkg', '', cfg)).toBe(true);
   });
 
   it('does not skip subdirs without their own manifest', () => {
@@ -144,12 +174,37 @@ describe('buildIgnoreConfig — vendored subproject auto-detection', () => {
     expect(cfg.skipDirs.has('subpkg')).toBe(false);
   });
 
-  it('detects Python subproject (.venv)', () => {
+  it('excludes a nested Python project with its own environment', () => {
     tmp.write('package.json', '{}');
     tmp.write('pyproj/pyproject.toml', '');
     tmp.write('pyproj/.venv/.placeholder', '');
 
     const cfg = buildIgnoreConfig(tmp.root);
-    expect(cfg.skipDirs.has('pyproj')).toBe(true);
+    expect(shouldSkipDir('pyproj', '', cfg)).toBe(true);
+  });
+
+  it('honors anchored patterns and escaped glob characters', () => {
+    tmp.write('.gitignore', '/root-output/\nfoo\\*bar/\n');
+    const cfg = buildIgnoreConfig(tmp.root);
+    expect(shouldSkipDir('root-output', '', cfg)).toBe(true);
+    expect(shouldSkipDir('root-output', 'nested', cfg)).toBe(false);
+    expect(shouldSkipDir('foo*bar', '', cfg)).toBe(true);
+    expect(shouldSkipDir('fooxbar', '', cfg)).toBe(false);
+  });
+
+  it('supports bracket expressions and escaped spaces', () => {
+    tmp.write('.gitignore', '*.[ch]\n[Tt]mp/\nspace\\ dir/\n');
+    const cfg = buildIgnoreConfig(tmp.root);
+    expect(shouldSkipFile('src/native.c', cfg)).toBe(true);
+    expect(shouldSkipFile('src/native.h', cfg)).toBe(true);
+    expect(shouldSkipDir('Tmp', '', cfg)).toBe(true);
+    expect(shouldSkipDir('tmp', '', cfg)).toBe(true);
+    expect(shouldSkipDir('space dir', '', cfg)).toBe(true);
+  });
+
+  it('ignores malformed bracket expressions without aborting config loading', () => {
+    tmp.write('.gitignore', '[z-a]\nvalid/\n');
+    expect(() => buildIgnoreConfig(tmp.root)).not.toThrow();
+    expect(shouldSkipDir('valid', '', buildIgnoreConfig(tmp.root))).toBe(true);
   });
 });

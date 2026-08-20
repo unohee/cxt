@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { handleInit } from '../../src/cli/initHandler.js';
+import { handleInit, locateCxtSection } from '../../src/cli/initHandler.js';
 import { createTmpDir, type TmpDirHandle } from '../helpers/tmpDir.js';
 
 let tmp: TmpDirHandle;
@@ -22,6 +22,28 @@ afterEach(() => {
 });
 
 describe('handleInit — append to new file', () => {
+  it('refuses to follow symlinked instruction targets', async () => {
+    const outside = join(tmp.root, 'outside.md');
+    const target = join(tmp.root, 'AGENTS.md');
+    writeFileSync(outside, 'untouched');
+    symlinkSync(outside, target);
+    await expect(handleInit({ path: target })).rejects.toThrow('Refusing to modify symlinked instruction file');
+    expect(readFileSync(outside, 'utf-8')).toBe('untouched');
+  });
+
+  it('escapes terminal controls in malformed-section errors', () => {
+    expect(() => locateCxtSection('<!-- cxt:start -->', '/tmp/evil\u001b]8;;https://evil.invalid\u0007'))
+      .toThrow('Malformed cxt section delimiters in /tmp/evil]8;;https://evil.invalid�');
+  });
+
+  it('escapes terminal controls in rendered target paths', async () => {
+    const target = join(tmp.root, 'evil\u001b]52;c;payload\u0007.md');
+    await handleInit({ path: target, dry: true });
+    const output = logSpy.mock.calls.flat().join('\n');
+    expect(output).not.toContain('\u001b]52');
+    expect(output).not.toContain('\u0007');
+  });
+
   it('creates target file with cxt section', async () => {
     const target = join(tmp.root, 'AGENTS.md');
     await handleInit({ path: target });

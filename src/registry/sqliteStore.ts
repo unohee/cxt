@@ -17,6 +17,12 @@ import type {
   FileBrief, RegistryStats,
 } from './schema.js';
 
+function boundedPagination(value: number | undefined, fallback: number, min: number, max: number, name: string): number {
+  const resolved = value ?? fallback;
+  if (!Number.isFinite(resolved)) throw new RangeError(`${name} must be finite`);
+  return Math.min(max, Math.max(min, Math.trunc(resolved)));
+}
+
 const DEFAULT_DB_PATH = resolve(homedir(), '.cxt', 'registry.db');
 
 // ============ 인터페이스 ============
@@ -157,14 +163,22 @@ export class SqliteRegistryStore {
     this.migrate();
   }
 
+  // 스키마 버전 — 변경 시 반드시 증가. migrate()의 핵심 마이그레이션 단계와 1:1 대응.
+  // INT-1478: user_version 가드로 FTS rebuild를 최초 1회만 수행.
+  // INT-1475: v2 = qualified_name 전역 UNIQUE → UNIQUE(project_id, qualified_name) 복합 제약.
+  private static readonly SCHEMA_VERSION = 2;
+
   private migrate(): void {
+    const currentVersion = (this.db.pragma('user_version', { simple: true }) as number) ?? 0;
+
+    // ── 초기 테이블 생성 (idempotent) ──
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS code_entities (
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL,
         kind TEXT NOT NULL,
         name TEXT NOT NULL,
-        qualified_name TEXT NOT NULL UNIQUE,
+        qualified_name TEXT NOT NULL,
         file_path TEXT NOT NULL,
         line_start INTEGER,
         line_end INTEGER,
@@ -181,17 +195,9 @@ export class SqliteRegistryStore {
         description TEXT DEFAULT '',
         notes TEXT DEFAULT '',
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(project_id, qualified_name)
       );`);
-
-    // ── 기존 FTS/트리거 정리 (테이블 마이그레이션 전에 먼저 제거) ──
-    // code_entities 테이블을 재생성할 수 있으므로, FTS 트리거와 구 FTS를 선제적으로 제거
-    this.db.exec(`
-      DROP TRIGGER IF EXISTS ce_fts_ai;
-      DROP TRIGGER IF EXISTS ce_fts_ad;
-      DROP TRIGGER IF EXISTS ce_fts_au;
-      DROP TABLE IF EXISTS code_entities_fts;
-    `);
 
     // ── 이전 스키마에서 누락된 컬럼 추가 ──
     const colInfo = this.db.prepare("PRAGMA table_info(code_entities)").all() as Array<{ name: string; notnull: number }>;
@@ -212,16 +218,84 @@ export class SqliteRegistryStore {
       }
     }
 
-    // ── line_start/line_end NOT NULL → nullable 마이그레이션 ──
-    const lineStartCol = existingCols.get('line_start');
+    // ── v1 → v2: qualified_name 전역 UNIQUE → UNIQUE(project_id, qualified_name) ──
+    // 구 스키마는 qualified_name에 단일 UNIQUE 인덱스가 있어 다른 project_id에서
+    // 같은 파일 경로의 엔티티가 INSERT되면 충돌. 복합 제약으로 교체한다.
+    if (currentVersion < 2) {
+      const indexInfo = this.db.prepare('PRAGMA index_list(code_entities)').all() as Array<{ name: string; unique: number }>;
+      const hasOldUniqueOnQName = indexInfo.some((idx) => {
+        if (idx.unique !== 1) return false;
+        const escapedName = idx.name.replace(/"/g, '""');
+        const columns = this.db.prepare(`PRAGMA index_info("${escapedName}")`).all() as Array<{ name: string }>;
+        return columns.length === 1 && columns[0].name === 'qualified_name';
+      });
+
+      if (hasOldUniqueOnQName) {
+        // 테이블 재생성으로 제약 변경 (SQLite는 DROP CONSTRAINT 미지원)
+        this.db.pragma('foreign_keys = OFF');
+        try {
+          this.db.transaction(() => this.db.exec(`
+          DROP TRIGGER IF EXISTS ce_fts_ai;
+          DROP TRIGGER IF EXISTS ce_fts_ad;
+          DROP TRIGGER IF EXISTS ce_fts_au;
+          DROP TABLE IF EXISTS code_entities_fts;
+          DROP TABLE IF EXISTS code_entities_v2;
+
+          CREATE TABLE code_entities_v2 (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            name TEXT NOT NULL,
+            qualified_name TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            line_start INTEGER,
+            line_end INTEGER,
+            signature TEXT,
+            status TEXT DEFAULT 'active',
+            deprecated_at TEXT,
+            deprecated_reason TEXT,
+            has_tests INTEGER DEFAULT 0,
+            test_file TEXT,
+            author TEXT,
+            maintainer TEXT,
+            complexity_score INTEGER,
+            risk_level TEXT DEFAULT 'low',
+            description TEXT DEFAULT '',
+            notes TEXT DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(project_id, qualified_name)
+          );
+          INSERT OR IGNORE INTO code_entities_v2 SELECT * FROM code_entities;
+          DROP TABLE code_entities;
+          ALTER TABLE code_entities_v2 RENAME TO code_entities;
+          `))();
+        } finally {
+          this.db.pragma('foreign_keys = ON');
+        }
+      }
+    }
+
+    // ── line_start/line_end NOT NULL → nullable 마이그레이션 (레거시) ──
+    const refreshedColInfo = this.db.prepare("PRAGMA table_info(code_entities)").all() as Array<{ name: string; notnull: number }>;
+    const refreshedCols = new Map(refreshedColInfo.map(r => [r.name, r]));
+    const lineStartCol = refreshedCols.get('line_start');
     if (lineStartCol && lineStartCol.notnull === 1) {
-      this.db.exec(`
+      this.db.pragma('foreign_keys = OFF');
+      try {
+        this.db.transaction(() => this.db.exec(`
+        DROP TRIGGER IF EXISTS ce_fts_ai;
+        DROP TRIGGER IF EXISTS ce_fts_ad;
+        DROP TRIGGER IF EXISTS ce_fts_au;
+        DROP TABLE IF EXISTS code_entities_fts;
+        DROP TABLE IF EXISTS code_entities_new;
+
         CREATE TABLE code_entities_new (
           id TEXT PRIMARY KEY,
           project_id TEXT NOT NULL,
           kind TEXT NOT NULL,
           name TEXT NOT NULL,
-          qualified_name TEXT NOT NULL UNIQUE,
+          qualified_name TEXT NOT NULL,
           file_path TEXT NOT NULL,
           line_start INTEGER,
           line_end INTEGER,
@@ -238,32 +312,35 @@ export class SqliteRegistryStore {
           description TEXT DEFAULT '',
           notes TEXT DEFAULT '',
           created_at TEXT NOT NULL DEFAULT (datetime('now')),
-          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+          updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE(project_id, qualified_name)
         );
-        INSERT INTO code_entities_new SELECT
+        INSERT OR IGNORE INTO code_entities_new SELECT
           id, project_id, kind, name, qualified_name, file_path,
           line_start, line_end, signature,
           COALESCE(status, 'active'),
-          ${existingCols.has('deprecated_at') ? 'deprecated_at' : 'NULL'},
-          ${existingCols.has('deprecated_reason') ? 'deprecated_reason' : 'NULL'},
+          ${refreshedCols.has('deprecated_at') ? 'deprecated_at' : 'NULL'},
+          ${refreshedCols.has('deprecated_reason') ? 'deprecated_reason' : 'NULL'},
           COALESCE(has_tests, 0),
-          ${existingCols.has('test_file') ? 'test_file' : 'NULL'},
-          ${existingCols.has('author') ? 'author' : 'NULL'},
-          ${existingCols.has('maintainer') ? 'maintainer' : 'NULL'},
+          ${refreshedCols.has('test_file') ? 'test_file' : 'NULL'},
+          ${refreshedCols.has('author') ? 'author' : 'NULL'},
+          ${refreshedCols.has('maintainer') ? 'maintainer' : 'NULL'},
           COALESCE(complexity_score, 0),
           COALESCE(risk_level, 'low'),
-          ${existingCols.has('description') ? "COALESCE(description, '')" : "''"},
-          ${existingCols.has('notes') ? "COALESCE(notes, '')" : "''"},
+          ${refreshedCols.has('description') ? "COALESCE(description, '')" : "''"},
+          ${refreshedCols.has('notes') ? "COALESCE(notes, '')" : "''"},
           created_at, updated_at
         FROM code_entities;
         DROP TABLE code_entities;
         ALTER TABLE code_entities_new RENAME TO code_entities;
-      `);
+        `))();
+      } finally {
+        this.db.pragma('foreign_keys = ON');
+      }
     }
 
-    // ── 보조 테이블 + FTS + 인덱스 + 트리거 (재)생성 ──
+    // ── 보조 테이블 + 인덱스 (idempotent) ──
     this.db.exec(`
-
       CREATE TABLE IF NOT EXISTS code_entity_tags (
         entity_id TEXT NOT NULL,
         tag TEXT NOT NULL,
@@ -313,24 +390,6 @@ export class SqliteRegistryStore {
         FOREIGN KEY (entity_id) REFERENCES code_entities(id) ON DELETE CASCADE
       );
 
-    `);
-
-    this.db.exec(`
-      CREATE VIRTUAL TABLE IF NOT EXISTS code_entities_fts USING fts5(
-        name, qualified_name, description, notes, signature,
-        content=code_entities, content_rowid=rowid
-      );`);
-
-    // FTS를 새로 생성했으면 기존 데이터로 rebuild
-    try {
-      this.db.exec("INSERT INTO code_entities_fts(code_entities_fts) VALUES('rebuild')");
-    } catch {
-      // rebuild 실패 시 무시 (빈 테이블이면 에러 없음)
-    }
-
-    this.db.exec(`
-
-      -- 인덱스
       CREATE INDEX IF NOT EXISTS idx_ce_project ON code_entities(project_id);
       CREATE INDEX IF NOT EXISTS idx_ce_kind ON code_entities(kind);
       CREATE INDEX IF NOT EXISTS idx_ce_file ON code_entities(file_path);
@@ -342,8 +401,32 @@ export class SqliteRegistryStore {
       CREATE INDEX IF NOT EXISTS idx_ce_tags_tag ON code_entity_tags(tag);
       CREATE INDEX IF NOT EXISTS idx_ce_warnings_sev ON code_entity_warnings(severity);
       CREATE INDEX IF NOT EXISTS idx_ce_warnings_entity ON code_entity_warnings(entity_id);
+    `);
 
-      -- FTS 트리거
+    // ── FTS 가상 테이블 + 트리거 ──
+    // INT-1478: 버전이 올라간 경우(최초 또는 스키마 변경)에만 rebuild 수행.
+    const needsFtsRebuild = currentVersion < SqliteRegistryStore.SCHEMA_VERSION;
+
+    if (needsFtsRebuild) {
+      this.db.exec(`
+        DROP TRIGGER IF EXISTS ce_fts_ai;
+        DROP TRIGGER IF EXISTS ce_fts_ad;
+        DROP TRIGGER IF EXISTS ce_fts_au;
+        DROP TABLE IF EXISTS code_entities_fts;
+      `);
+    }
+
+    this.db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS code_entities_fts USING fts5(
+        name, qualified_name, description, notes, signature,
+        content=code_entities, content_rowid=rowid
+      );`);
+
+    if (needsFtsRebuild) {
+      this.db.exec("INSERT INTO code_entities_fts(code_entities_fts) VALUES('rebuild')");
+    }
+
+    this.db.exec(`
       CREATE TRIGGER IF NOT EXISTS ce_fts_ai AFTER INSERT ON code_entities BEGIN
         INSERT INTO code_entities_fts(rowid, name, qualified_name, description, notes, signature)
         VALUES (new.rowid, new.name, new.qualified_name, new.description, new.notes, new.signature);
@@ -359,9 +442,19 @@ export class SqliteRegistryStore {
         VALUES (new.rowid, new.name, new.qualified_name, new.description, new.notes, new.signature);
       END;
     `);
+
+    // 버전 기록 (마이그레이션이 모두 끝난 뒤)
+    if (needsFtsRebuild) {
+      this.db.pragma(`user_version = ${SqliteRegistryStore.SCHEMA_VERSION}`);
+    }
   }
 
   // ============ 엔티티 CRUD ============
+
+  /** 여러 공개 저장 연산을 하나의 원자적 작업으로 묶는다. */
+  runInTransaction<T>(operation: () => T): T {
+    return this.db.transaction(operation)();
+  }
 
   registerEntity(input: RegisterEntityInput): CodeEntity {
     const id = nanoid(12);
@@ -429,10 +522,12 @@ export class SqliteRegistryStore {
     return this.rowToEntity(row);
   }
 
-  getEntityByName(qualifiedName: string): CodeEntity | null {
-    const row = this.db.prepare(
-      'SELECT * FROM code_entities WHERE qualified_name = ?'
-    ).get(qualifiedName) as EntityRow | undefined;
+  getEntityByName(qualifiedName: string, projectId?: string): CodeEntity | null {
+    const rows = projectId
+      ? this.db.prepare('SELECT * FROM code_entities WHERE qualified_name = ? AND project_id = ? LIMIT 1').all(qualifiedName, projectId) as EntityRow[]
+      : this.db.prepare('SELECT * FROM code_entities WHERE qualified_name = ? LIMIT 2').all(qualifiedName) as EntityRow[];
+    if (!projectId && rows.length !== 1) return null;
+    const row = rows[0];
     if (!row) return null;
     return this.rowToEntity(row);
   }
@@ -525,16 +620,21 @@ export class SqliteRegistryStore {
       params.push(...filter.tags);
     }
 
-    let ftsJoin = '';
+    const ftsJoin = '';
     if (filter?.search) {
-      ftsJoin = 'INNER JOIN code_entities_fts ON code_entities_fts.rowid = e.rowid';
-      conditions.push('code_entities_fts MATCH ?');
-      params.push(filter.search);
+      conditions.push(`(
+        instr(lower(e.name), lower(?)) > 0 OR
+        instr(lower(e.qualified_name), lower(?)) > 0 OR
+        instr(lower(e.description), lower(?)) > 0 OR
+        instr(lower(e.notes), lower(?)) > 0 OR
+        instr(lower(COALESCE(e.signature, '')), lower(?)) > 0
+      )`);
+      params.push(filter.search, filter.search, filter.search, filter.search, filter.search);
     }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-    const limit = filter?.limit ?? 50;
-    const offset = filter?.offset ?? 0;
+    const limit = boundedPagination(filter?.limit, 50, 1, 100_000, 'limit');
+    const offset = boundedPagination(filter?.offset, 0, 0, 10_000_000, 'offset');
 
     const countRow = this.db.prepare(
       `SELECT COUNT(*) as cnt FROM code_entities e ${ftsJoin} ${where}`
@@ -848,6 +948,16 @@ export class SqliteRegistryStore {
     return rows.map(r => this.rowToEntity(r));
   }
 
+  /** qualifiedName 정확 일치 active 엔티티 조회. 전체 레지스트리 페이지 순회를 피한다. */
+  findEntityByQualifiedName(qualifiedName: string, projectId: string): CodeEntity | undefined {
+    const row = this.db.prepare(`
+      SELECT * FROM code_entities
+      WHERE qualified_name = ? AND project_id = ? AND status != 'broken'
+      LIMIT 1
+    `).get(qualifiedName, projectId) as EntityRow | undefined;
+    return row ? this.rowToEntity(row) : undefined;
+  }
+
   /** 프로젝트 전체 relation 수 (검증/통계용). */
   countRelations(projectId: string): number {
     const row = this.db.prepare(`
@@ -918,6 +1028,7 @@ export class SqliteRegistryStore {
   }
 
   getEvents(entityId: string, limit = 50): EntityEvent[] {
+    limit = boundedPagination(limit, 50, 1, 100_000, 'limit');
     return (this.db.prepare(
       'SELECT * FROM code_entity_events WHERE entity_id = ? ORDER BY created_at DESC LIMIT ?'
     ).all(entityId, limit) as EventRow[]).map(this.rowToEvent);
@@ -925,10 +1036,10 @@ export class SqliteRegistryStore {
 
   // ============ 특화 쿼리 ============
 
-  fileBrief(filePath: string): FileBrief {
+  fileBrief(filePath: string, projectId: string): FileBrief {
     const rows = this.db.prepare(
-      'SELECT * FROM code_entities WHERE file_path = ? ORDER BY line_start NULLS LAST, name'
-    ).all(filePath) as EntityRow[];
+      'SELECT * FROM code_entities WHERE file_path = ? AND project_id = ? ORDER BY line_start NULLS LAST, name'
+    ).all(filePath, projectId) as EntityRow[];
 
     const entities = this.rowsToEntities(rows);
 
@@ -954,7 +1065,7 @@ export class SqliteRegistryStore {
     const where = projectId
       ? "WHERE status = 'deprecated' AND project_id = ?"
       : "WHERE status = 'deprecated'";
-    const params = projectId ? [projectId] : [];
+    const params: Array<string | number> = projectId ? [projectId] : [];
 
     const rows = this.db.prepare(
       `SELECT * FROM code_entities ${where} ORDER BY deprecated_at DESC`
@@ -976,47 +1087,58 @@ export class SqliteRegistryStore {
     return this.rowsToEntities(rows);
   }
 
-  highRiskEntities(projectId?: string): CodeEntity[] {
+  highRiskEntities(projectId?: string, limit?: number): CodeEntity[] {
     const where = projectId
       ? "WHERE risk_level = 'high' AND project_id = ?"
       : "WHERE risk_level = 'high'";
-    const params = projectId ? [projectId] : [];
+    const params: Array<string | number> = projectId ? [projectId] : [];
 
+    const limitClause = limit === undefined ? '' : ' LIMIT ?';
+    if (limit !== undefined) params.push(Math.max(0, Math.trunc(limit)));
     const rows = this.db.prepare(
-      `SELECT * FROM code_entities ${where} ORDER BY complexity_score DESC NULLS LAST`
+      `SELECT * FROM code_entities ${where} ORDER BY complexity_score DESC NULLS LAST${limitClause}`
     ).all(...params) as EntityRow[];
     return this.rowsToEntities(rows);
   }
 
-  entitiesByTag(tag: string, value?: string): CodeEntity[] {
+  entitiesByTag(tag: string, value?: string, projectId?: string): CodeEntity[] {
+    const projectClause = projectId ? ' AND e.project_id = ?' : '';
     const query = value
       ? `SELECT e.* FROM code_entities e
          JOIN code_entity_tags t ON t.entity_id = e.id
-         WHERE t.tag = ? AND t.value = ?`
+         WHERE t.tag = ? AND t.value = ?${projectClause}`
       : `SELECT e.* FROM code_entities e
          JOIN code_entity_tags t ON t.entity_id = e.id
-         WHERE t.tag = ?`;
+         WHERE t.tag = ?${projectClause}`;
     const params = value ? [tag, value] : [tag];
+    if (projectId) params.push(projectId);
 
     const rows = this.db.prepare(query).all(...params) as EntityRow[];
     return this.rowsToEntities(rows);
   }
 
-  searchEntities(query: string, limit = 20, projectId?: string): CodeEntity[] {
+  searchEntities(query: string, limit = 20, projectId?: string, dir?: string): CodeEntity[] {
+    limit = boundedPagination(limit, 20, 1, 100_000, 'limit');
     // projectId가 주어지면 해당 프로젝트로 스코프를 좁힌다. 미지정 시 전역 검색.
     const projClause = projectId ? 'AND e.project_id = ?' : '';
     const projClausePlain = projectId ? 'AND project_id = ?' : '';
+    const prefix = dir ? `${dir}/` : undefined;
+    const dirClause = dir ? 'AND (e.file_path = ? OR substr(e.file_path, 1, ?) = ?)' : '';
+    const dirClausePlain = dir ? 'AND (file_path = ? OR substr(file_path, 1, ?) = ?)' : '';
 
     let ftsRows: EntityRow[] = [];
     try {
-      const ftsParams: unknown[] = projectId ? [query, projectId, limit] : [query, limit];
+      const ftsParams: unknown[] = [query];
+      if (projectId) ftsParams.push(projectId);
+      if (dir && prefix) ftsParams.push(dir, prefix.length, prefix);
+      ftsParams.push(limit);
       ftsRows = this.db.prepare(`
         SELECT e.* FROM code_entities e
         INNER JOIN code_entities_fts ON code_entities_fts.rowid = e.rowid
-        WHERE code_entities_fts MATCH ? ${projClause}
+        WHERE code_entities_fts MATCH ? ${projClause} ${dirClause}
         LIMIT ?
       `).all(...ftsParams) as EntityRow[];
-    } catch (err) {
+    } catch (err) { // cxt-ignore: exception_hiding — FTS5 미지원/MATCH 오류 시 LIKE fallback으로 진행
       const msg = err instanceof Error ? err.message : String(err);
       if (!msg.includes('fts5') && !msg.includes('MATCH')) {
         console.warn('[Registry] searchEntities FTS error:', msg);
@@ -1031,10 +1153,11 @@ export class SqliteRegistryStore {
       const existingIds = new Set(results.map(e => e.id));
       const likeParams: unknown[] = [likePattern, likePattern, likePattern, likePattern, likePattern];
       if (projectId) likeParams.push(projectId);
+      if (dir && prefix) likeParams.push(dir, prefix.length, prefix);
       likeParams.push(limit);
       const fallbackRows = this.db.prepare(`
         SELECT * FROM code_entities
-        WHERE (name LIKE ? ESCAPE '\\' OR qualified_name LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR notes LIKE ? ESCAPE '\\' OR signature LIKE ? ESCAPE '\\') ${projClausePlain}
+        WHERE (name LIKE ? ESCAPE '\\' OR qualified_name LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR notes LIKE ? ESCAPE '\\' OR signature LIKE ? ESCAPE '\\') ${projClausePlain} ${dirClausePlain}
         LIMIT ?
       `).all(...likeParams) as EntityRow[];
       const fallback = this.rowsToEntities(fallbackRows)
@@ -1048,9 +1171,12 @@ export class SqliteRegistryStore {
 
   // ============ 통계 ============
 
-  getStats(projectId?: string): RegistryStats {
-    const where = projectId ? 'WHERE project_id = ?' : '';
-    const params = projectId ? [projectId] : [];
+  getStats(projectId?: string, dir?: string): RegistryStats {
+    // INT-1484: broken 엔티티는 stats에서 제외 — 좀비가 total/highRisk를 오염하지 않도록.
+    const prefix = dir ? `${dir}/` : undefined;
+    const where = `${projectId ? 'WHERE project_id = ?' : 'WHERE 1 = 1'} AND status != 'broken'${dir ? ' AND (file_path = ? OR substr(file_path, 1, ?) = ?)' : ''}`;
+    const params: Array<string | number> = projectId ? [projectId] : [];
+    if (dir && prefix) params.push(dir, prefix.length, prefix);
 
     const total = (this.db.prepare(
       `SELECT COUNT(*) as cnt FROM code_entities ${where}`
@@ -1065,26 +1191,83 @@ export class SqliteRegistryStore {
     ).all(...params) as StatusCountRow[]).map(r => ({ status: r.status, count: r.cnt }));
 
     const deprecated = (this.db.prepare(
-      `SELECT COUNT(*) as cnt FROM code_entities ${where ? where + " AND" : "WHERE"} status = 'deprecated'`
+      `SELECT COUNT(*) as cnt FROM code_entities ${where} AND status = 'deprecated'`
     ).get(...params) as CountRow).cnt;
 
     const untested = (this.db.prepare(
-      `SELECT COUNT(*) as cnt FROM code_entities ${where ? where + " AND" : "WHERE"} has_tests = 0 AND status = 'active'`
+      `SELECT COUNT(*) as cnt FROM code_entities ${where} AND has_tests = 0 AND status = 'active'`
     ).get(...params) as CountRow).cnt;
 
     const highRisk = (this.db.prepare(
-      `SELECT COUNT(*) as cnt FROM code_entities ${where ? where + " AND" : "WHERE"} risk_level = 'high'`
+      `SELECT COUNT(*) as cnt FROM code_entities ${where} AND risk_level = 'high'`
     ).get(...params) as CountRow).cnt;
 
+    const warningWhere = `${projectId ? 'AND e.project_id = ?' : ''}${dir ? ' AND (e.file_path = ? OR substr(e.file_path, 1, ?) = ?)' : ''}`;
     const withWarnings = (this.db.prepare(
-      projectId
-        ? `SELECT COUNT(DISTINCT w.entity_id) as cnt FROM code_entity_warnings w
-           JOIN code_entities e ON e.id = w.entity_id
-           WHERE w.resolved = 0 AND e.project_id = ?`
-        : `SELECT COUNT(DISTINCT entity_id) as cnt FROM code_entity_warnings WHERE resolved = 0`
+      `SELECT COUNT(DISTINCT w.entity_id) as cnt FROM code_entity_warnings w
+       JOIN code_entities e ON e.id = w.entity_id
+       WHERE w.resolved = 0 AND e.status != 'broken' ${warningWhere}`
     ).get(...params) as CountRow).cnt;
 
     return { total, byKind, byStatus, deprecated, untested, highRisk, withWarnings };
+  }
+
+  // ============ 프로젝트 위생 (INT-1479) ============
+
+  /** 등록된 프로젝트 목록 반환 — 엔티티 수 포함. */
+  listProjects(): Array<{ projectId: string; entityCount: number; brokenCount: number }> {
+    interface ProjRow { project_id: string; cnt: number; broken: number }
+    const rows = this.db.prepare(`
+      SELECT
+        project_id,
+        COUNT(*) as cnt,
+        SUM(CASE WHEN status = 'broken' THEN 1 ELSE 0 END) as broken
+      FROM code_entities
+      GROUP BY project_id
+      ORDER BY cnt DESC
+    `).all() as ProjRow[];
+    return rows.map(r => ({ projectId: r.project_id, entityCount: r.cnt, brokenCount: r.broken }));
+  }
+
+  /** 특정 프로젝트의 모든 엔티티·이벤트·관계를 삭제한다. */
+  deleteProject(projectId: string): number {
+    const deleteRelations = this.db.prepare(`
+      DELETE FROM code_entity_relations
+      WHERE source_id IN (SELECT id FROM code_entities WHERE project_id = ?)
+         OR target_id IN (SELECT id FROM code_entities WHERE project_id = ?)
+    `);
+    const deleteEntities = this.db.prepare('DELETE FROM code_entities WHERE project_id = ?');
+    const tx = this.db.transaction((id: string) => {
+      deleteRelations.run(id, id);
+      return deleteEntities.run(id).changes;
+    });
+    return tx(projectId);
+  }
+
+  /** broken 엔티티만 제거한다 (stale 참조 정리). */
+  pruneBroken(projectId?: string): number {
+    const stmt = projectId
+      ? this.db.prepare("DELETE FROM code_entities WHERE status = 'broken' AND project_id = ?")
+      : this.db.prepare("DELETE FROM code_entities WHERE status = 'broken'");
+    const result = projectId ? stmt.run(projectId) : stmt.run();
+    return result.changes;
+  }
+
+  /** 지정 일수보다 오래된 events 정리. 삭제된 행 수를 반환한다. */
+  pruneEvents(olderThanDays = 30): number {
+    if (!Number.isFinite(olderThanDays) || olderThanDays < 0) {
+      throw new RangeError('olderThanDays must be a finite non-negative number');
+    }
+    const cutoff = new Date(Date.now() - olderThanDays * 86_400_000).toISOString();
+    const result = this.db.prepare(
+      "DELETE FROM code_entity_events WHERE created_at < ?"
+    ).run(cutoff);
+    return result.changes;
+  }
+
+  /** DB 파일 압축 (SQLite VACUUM). */
+  vacuum(): void {
+    this.db.exec('VACUUM');
   }
 
   // ============ 유틸 ============
@@ -1098,40 +1281,49 @@ export class SqliteRegistryStore {
     return this.buildEntity(row, this.getTags(id), this.getWarnings(id), this.getLinkedIssues(id));
   }
 
+  // SQLite SQLITE_MAX_VARIABLE_NUMBER 한도(999)를 넘지 않도록 ID 배치를 분할.
+  private static readonly BATCH_SIZE = 500;
+
   private rowsToEntities(rows: EntityRow[]): CodeEntity[] {
     if (rows.length === 0) return [];
 
     const ids = rows.map(r => r.id);
-    const placeholders = ids.map(() => '?').join(',');
 
-    const tagRows = this.db.prepare(
-      `SELECT entity_id, tag, value FROM code_entity_tags WHERE entity_id IN (${placeholders})`
-    ).all(...ids) as (TagRow & { entity_id: string })[];
+    // INT-1474: 단일 IN(?,?,...)이 999 변수 한도 초과하면 크래시 — 500개씩 청킹.
     const tagsByEntity = new Map<string, EntityTag[]>();
-    for (const r of tagRows) {
-      const list = tagsByEntity.get(r.entity_id) ?? [];
-      list.push({ tag: r.tag, value: r.value ?? undefined });
-      tagsByEntity.set(r.entity_id, list);
-    }
-
-    const warningRows = this.db.prepare(
-      `SELECT * FROM code_entity_warnings WHERE entity_id IN (${placeholders}) ORDER BY created_at DESC`
-    ).all(...ids) as WarningRow[];
     const warningsByEntity = new Map<string, EntityWarning[]>();
-    for (const r of warningRows) {
-      const list = warningsByEntity.get(r.entity_id) ?? [];
-      list.push(this.rowToWarning(r));
-      warningsByEntity.set(r.entity_id, list);
-    }
-
-    const issueRows = this.db.prepare(
-      `SELECT entity_id, issue_id FROM code_entity_issue_links WHERE entity_id IN (${placeholders}) ORDER BY linked_at`
-    ).all(...ids) as IssueLinkRow[];
     const issuesByEntity = new Map<string, string[]>();
-    for (const r of issueRows) {
-      const list = issuesByEntity.get(r.entity_id) ?? [];
-      list.push(r.issue_id);
-      issuesByEntity.set(r.entity_id, list);
+
+    for (let i = 0; i < ids.length; i += SqliteRegistryStore.BATCH_SIZE) {
+      const chunk = ids.slice(i, i + SqliteRegistryStore.BATCH_SIZE);
+      const ph = chunk.map(() => '?').join(',');
+
+      const tagRows = this.db.prepare(
+        `SELECT entity_id, tag, value FROM code_entity_tags WHERE entity_id IN (${ph})`
+      ).all(...chunk) as (TagRow & { entity_id: string })[];
+      for (const r of tagRows) {
+        const list = tagsByEntity.get(r.entity_id) ?? [];
+        list.push({ tag: r.tag, value: r.value ?? undefined });
+        tagsByEntity.set(r.entity_id, list);
+      }
+
+      const warningRows = this.db.prepare(
+        `SELECT * FROM code_entity_warnings WHERE entity_id IN (${ph}) ORDER BY created_at DESC`
+      ).all(...chunk) as WarningRow[];
+      for (const r of warningRows) {
+        const list = warningsByEntity.get(r.entity_id) ?? [];
+        list.push(this.rowToWarning(r));
+        warningsByEntity.set(r.entity_id, list);
+      }
+
+      const issueRows = this.db.prepare(
+        `SELECT entity_id, issue_id FROM code_entity_issue_links WHERE entity_id IN (${ph}) ORDER BY linked_at`
+      ).all(...chunk) as IssueLinkRow[];
+      for (const r of issueRows) {
+        const list = issuesByEntity.get(r.entity_id) ?? [];
+        list.push(r.issue_id);
+        issuesByEntity.set(r.entity_id, list);
+      }
     }
 
     return rows.map(row => this.buildEntity(
@@ -1206,10 +1398,15 @@ export class SqliteRegistryStore {
 
 // 싱글톤
 let storeInstance: SqliteRegistryStore | null = null;
+let storeInstancePath: string | null = null;
 
 export function getRegistryStore(dbPath?: string): SqliteRegistryStore {
+  const requestedPath = resolve(dbPath ?? DEFAULT_DB_PATH);
   if (!storeInstance) {
-    storeInstance = new SqliteRegistryStore(dbPath);
+    storeInstance = new SqliteRegistryStore(requestedPath);
+    storeInstancePath = requestedPath;
+  } else if (dbPath !== undefined && requestedPath !== storeInstancePath) {
+    throw new Error(`Registry store is already open at ${storeInstancePath}; requested ${requestedPath}`);
   }
   return storeInstance;
 }
@@ -1218,5 +1415,6 @@ export function closeRegistryStore(): void {
   if (storeInstance) {
     storeInstance.close();
     storeInstance = null;
+    storeInstancePath = null;
   }
 }

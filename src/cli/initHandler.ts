@@ -5,9 +5,10 @@
 // Purpose: `cxt init` — inject cxt usage into agent instruction files
 // ============================================
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, lstatSync, renameSync, unlinkSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { homedir } from 'node:os';
+import { escapeTerminal } from './outputSafety.js';
 
 const CXT_SECTION_START = '<!-- cxt:start -->';
 const CXT_SECTION_END = '<!-- cxt:end -->';
@@ -89,22 +90,75 @@ known entities.
 | \`cxt check --kind <kind>\` | Filter by entity kind (function/class/...) |
 | \`cxt check --ci\` | CI mode (JSON output, exit 1 on critical) |
 | \`cxt bs\` | Scan for bad code smells (BS patterns) |
+| \`cxt audit\` | Audit: BS scan + registry integrity (untested/high-risk/deprecated), exit 1 on critical |
+| \`cxt audit --json\` | Audit in CI mode (JSON output) |
 | \`cxt loc\` | File LOC report sorted by size |
 | \`cxt loc --dir <path>\` | LOC for a specific directory |
 | \`cxt loc --no-blank --no-comments\` | Code-only LOC (exclude blank/comment lines) |
 | \`cxt loc --entities\` | LOC with registered entity count per file |
 | \`cxt export\` | GraphQL-like SDL snapshot of codebase structure |
 | \`cxt export -o .cxt/structure.gql\` | Save snapshot to file (LLM-friendly) |
+| \`cxt who-calls <name>\` | Show entities that reference (call/extend/implement) \`<name>\` |
+| \`cxt calls <name>\` | Show entities that \`<name>\` calls/extends/implements |
+| \`cxt impact <name>\` | Transitive callers — all entities affected if \`<name>\` changes |
+| \`cxt who-calls <name> --json\` | Machine-readable JSON output |
+| \`cxt impact <name> --depth 3\` | Limit BFS depth (default: 5) |
+| \`cxt projects\` | List registered projects with entity counts |
+| \`cxt project rm <id or path>\` | Remove a project and all its entities |
+| \`cxt prune\` | Delete all broken (zombie) entities |
+| \`cxt prune --events --days 7\` | Trim event history older than 7 days |
+| \`cxt vacuum\` | Compact registry DB (SQLite VACUUM) |
+| \`cxt bs --json\` | BS scan with JSON output (CI-friendly) |
+| \`cxt bs --dir src/api\` | BS scan limited to a directory |
 | \`cxt annotate <name> --deprecate "reason"\` | Mark entity deprecated |
 | \`cxt annotate <name> --tag key=value\` | Tag entity |
 | \`cxt inject\` | Output registry summary (SessionStart hook) |
 | \`cxt init --target local-claude\` | Inject cxt guide into project CLAUDE.md |
+
+### Call Graph (who-calls / calls / impact)
+
+After \`cxt scan\`, relation queries replace grep for understanding code flow:
+
+\`\`\`
+cxt who-calls rowsToEntities       # who depends on this function?
+cxt calls handleCheck              # what does this call?
+cxt impact SqliteRegistryStore     # if I change this class, what breaks?
+cxt impact migrate --depth 2       # limit transitive depth
+\`\`\`
+
+Use \`--json\` for machine-readable output in scripts. Use \`--type calls|extends|implements\` to filter relation type.
+
+### Project Hygiene
+
+\`\`\`
+cxt projects                       # see all registered projects + entity counts
+cxt project rm old-project         # remove stale project (also accepts a directory path)
+cxt prune                          # delete broken (zombie) entities
+cxt prune --events --days 7        # trim event history older than 7 days
+cxt vacuum --keep-days 7           # drop old events, then compact DB (VACUUM)
+\`\`\`
 
 ### Ignore Rules
 
 - Built-in: skips node_modules, .git, dist, build, target, docker, etc.
 - \`.cxtignore\`: project-specific exclusions (same syntax as .gitignore)
 - Auto-detects vendored subprojects with own package.json + node_modules
+
+### Suppressing BS false positives
+
+When \`cxt bs\`/\`cxt audit\` flags a line you know is fine, suppress it inline
+(works in any comment syntax — \`//\`, \`#\`, \`/* */\`). Suppressed issues vanish
+from the report entirely, like \`eslint-disable\`:
+
+- \`// cxt-ignore\` — suppress every pattern on the same line
+- \`// cxt-ignore: type_safety,fake_execution\` — suppress only those categories
+- \`// cxt-ignore-next-line[: cats]\` — apply to the next line instead
+
+The marker must be in a comment; \`"cxt-ignore"\` in a string literal does nothing.
+Categories: \`type_safety\`, \`fake_execution\`, \`fake_data\`, \`panic_risk\`,
+\`error_swallow\`, \`exception_hiding\`, \`incomplete\`, \`debug_leftover\`,
+\`hardcoded_secret\`, \`security\`, \`magic_number\`, \`readability\`.
+Prefer a category-scoped ignore over a blanket one so other BS still surfaces.
 
 ### When to use cxt
 
@@ -113,7 +167,8 @@ known entities.
 - **Understanding file sizes**: \`cxt loc\` — spot oversized files before reviewing
 - **After major changes**: \`cxt scan\` — update the registry
 - **Code review**: \`cxt bs\` — catch bad patterns before commit
-- **CI pipeline**: \`cxt check --ci\` — JSON output, exit 1 on critical issues
+- **Before commit / gate**: \`cxt audit\` — BS + registry integrity in one pass, exit 1 on critical
+- **CI pipeline**: \`cxt check --ci\` or \`cxt audit --json\` — JSON output, exit 1 on critical issues
 ${CXT_SECTION_END}`;
 }
 
@@ -129,6 +184,25 @@ const c = {
 
 type Action = 'added' | 'updated' | 'unchanged' | 'removed' | 'noop' | 'dry';
 
+function assertRegularTarget(filePath: string): void {
+  if (!existsSync(filePath)) return;
+  const target = lstatSync(filePath);
+  if (target.isSymbolicLink()) throw new Error(`Refusing to modify symlinked instruction file: ${escapeTerminal(filePath)}`);
+  if (!target.isFile()) throw new Error(`Refusing to modify non-regular instruction file: ${escapeTerminal(filePath)}`);
+}
+
+function writeAtomic(filePath: string, content: string): void {
+  const tempPath = join(dirname(filePath), `.${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.cxt.tmp`);
+  const mode = existsSync(filePath) ? lstatSync(filePath).mode : 0o666;
+  try {
+    writeFileSync(tempPath, content, { encoding: 'utf-8', flag: 'wx', mode });
+    renameSync(tempPath, filePath);
+  } catch (error) {
+    if (existsSync(tempPath)) unlinkSync(tempPath);
+    throw error;
+  }
+}
+
 function applyToFile(
   filePath: string,
   label: string,
@@ -136,20 +210,23 @@ function applyToFile(
   opts: { remove?: boolean; dry?: boolean },
 ): Action {
   const dir = dirname(filePath);
+  const safePath = escapeTerminal(filePath);
+  const safeDir = escapeTerminal(dir);
+  const safeLabel = escapeTerminal(label);
+  assertRegularTarget(filePath);
 
   // --remove
   if (opts.remove) {
     if (!existsSync(filePath)) {
-      console.log(`  ${c.dim}${label}: ${filePath} not found — skip${c.reset}`);
+      console.log(`  ${c.dim}${safeLabel}: ${safePath} not found — skip${c.reset}`);
       return 'noop';
     }
 
     const content = readFileSync(filePath, 'utf-8');
-    const startIdx = content.indexOf(CXT_SECTION_START);
-    const endIdx = content.indexOf(CXT_SECTION_END);
+    const { startIdx, endIdx } = locateCxtSection(content, filePath);
 
     if (startIdx === -1 || endIdx === -1) {
-      console.log(`  ${c.dim}${label}: no cxt section in ${filePath} — skip${c.reset}`);
+      console.log(`  ${c.dim}${safeLabel}: no cxt section in ${safePath} — skip${c.reset}`);
       return 'noop';
     }
 
@@ -158,19 +235,19 @@ function applyToFile(
     const newContent = before + (after ? '\n\n' + after : '') + '\n';
 
     if (opts.dry) {
-      console.log(`  ${c.bold}[dry]${c.reset} ${label}: would remove section from ${c.cyan}${filePath}${c.reset}`);
+      console.log(`  ${c.bold}[dry]${c.reset} ${safeLabel}: would remove section from ${c.cyan}${safePath}${c.reset}`);
       return 'dry';
     }
 
-    writeFileSync(filePath, newContent, 'utf-8');
-    console.log(`  ${c.green}removed${c.reset} ${label}: ${c.cyan}${filePath}${c.reset}`);
+    writeAtomic(filePath, newContent);
+    console.log(`  ${c.green}removed${c.reset} ${safeLabel}: ${c.cyan}${safePath}${c.reset}`);
     return 'removed';
   }
 
   // --add / --update
   if (!existsSync(dir)) {
     if (opts.dry) {
-      console.log(`  ${c.bold}[dry]${c.reset} ${label}: would create ${c.cyan}${dir}${c.reset}`);
+      console.log(`  ${c.bold}[dry]${c.reset} ${safeLabel}: would create ${c.cyan}${safeDir}${c.reset}`);
     } else {
       mkdirSync(dir, { recursive: true });
     }
@@ -179,38 +256,47 @@ function applyToFile(
   let existing = '';
   if (existsSync(filePath)) {
     existing = readFileSync(filePath, 'utf-8');
-    const startIdx = existing.indexOf(CXT_SECTION_START);
-    const endIdx = existing.indexOf(CXT_SECTION_END);
+    const { startIdx, endIdx } = locateCxtSection(existing, filePath);
 
     if (startIdx !== -1 && endIdx !== -1) {
       const oldSection = existing.slice(startIdx, endIdx + CXT_SECTION_END.length);
       if (oldSection === cxtSection) {
-        console.log(`  ${c.dim}${label}: already up to date (${filePath})${c.reset}`);
+        console.log(`  ${c.dim}${safeLabel}: already up to date (${safePath})${c.reset}`);
         return 'unchanged';
       }
 
       if (opts.dry) {
-        console.log(`  ${c.bold}[dry]${c.reset} ${label}: would update section in ${c.cyan}${filePath}${c.reset}`);
+        console.log(`  ${c.bold}[dry]${c.reset} ${safeLabel}: would update section in ${c.cyan}${safePath}${c.reset}`);
         return 'dry';
       }
 
       const newContent = existing.slice(0, startIdx) + cxtSection + existing.slice(endIdx + CXT_SECTION_END.length);
-      writeFileSync(filePath, newContent, 'utf-8');
-      console.log(`  ${c.yellow}updated${c.reset} ${label}: ${c.cyan}${filePath}${c.reset}`);
+      writeAtomic(filePath, newContent);
+      console.log(`  ${c.yellow}updated${c.reset} ${safeLabel}: ${c.cyan}${safePath}${c.reset}`);
       return 'updated';
     }
   }
 
   // Append
   if (opts.dry) {
-    console.log(`  ${c.bold}[dry]${c.reset} ${label}: would append section to ${c.cyan}${filePath}${c.reset}`);
+    console.log(`  ${c.bold}[dry]${c.reset} ${safeLabel}: would append section to ${c.cyan}${safePath}${c.reset}`);
     return 'dry';
   }
 
   const separator = existing.length > 0 ? '\n\n' : '';
-  writeFileSync(filePath, existing + separator + cxtSection + '\n', 'utf-8');
-  console.log(`  ${c.green}added${c.reset} ${label}: ${c.cyan}${filePath}${c.reset}`);
+  writeAtomic(filePath, existing + separator + cxtSection + '\n');
+  console.log(`  ${c.green}added${c.reset} ${safeLabel}: ${c.cyan}${safePath}${c.reset}`);
   return 'added';
+}
+
+export function locateCxtSection(content: string, filePath: string): { startIdx: number; endIdx: number } {
+  const starts = [...content.matchAll(new RegExp(CXT_SECTION_START, 'g'))].map((m) => m.index);
+  const ends = [...content.matchAll(new RegExp(CXT_SECTION_END, 'g'))].map((m) => m.index);
+  if (starts.length === 0 && ends.length === 0) return { startIdx: -1, endIdx: -1 };
+  if (starts.length !== 1 || ends.length !== 1 || starts[0] > ends[0]) {
+    throw new Error(`Malformed cxt section delimiters in ${escapeTerminal(filePath)}`);
+  }
+  return { startIdx: starts[0], endIdx: ends[0] };
 }
 
 function resolveTargets(targetOpt: string | undefined, cwd: string): TargetSpec[] {
@@ -236,7 +322,7 @@ function resolveTargets(targetOpt: string | undefined, cwd: string): TargetSpec[
   }
 
   if (invalid.length > 0) {
-    console.error(`${c.red}Unknown target(s): ${invalid.join(', ')}${c.reset}`);
+    console.error(`${c.red}Unknown target(s): ${invalid.map(escapeTerminal).join(', ')}${c.reset}`);
     console.error(`${c.dim}Valid: ${VALID_TARGET_NAMES.join(', ')}, all${c.reset}`);
     process.exit(1);
   }
@@ -295,6 +381,6 @@ export async function handleInit(opts: {
 
   if (!opts.remove && (summary.added > 0 || summary.updated > 0)) {
     console.log(`  ${c.dim}Agents will now see cxt commands in every session.${c.reset}`);
-    console.log(`  ${c.dim}Run \`cxt init --remove --target ${opts.target ?? 'claude'}\` to undo.${c.reset}\n`);
+    console.log(`  ${c.dim}Run \`cxt init --remove --target ${escapeTerminal(opts.target ?? 'claude')}\` to undo.${c.reset}\n`);
   }
 }

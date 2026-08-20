@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 2,
+  "recordedAt": "2026-08-10",
+  "task": "callgraph",
+  "plannedPairs": 50,
+  "completedPairs": 34,
+  "stopReason": "user_requested_stop",
+  "validity": {
+    "status": "superseded",
+    "reason": "The original harness reused one writable workspace between conditions and hashed only src. The results are retained for auditability but are not valid current A/B evidence."
+  },
+  "method": {
+    "conditions": ["cxt_on", "cxt_off"],
+    "order": "alternating by pair",
+    "snapshot": "shared source-only disposable worktree with a consistent SQLite backup",
+    "integrity": "every recorded session exited 0 and retained the src hash; later superseded because conditions were not independently isolated"
+  },
+  "qualityEligibility": "on score >= 0.80 and on score >= off score - 0.05",
+  "summary": {
+    "allPairs": { "meanOnTools": 6, "meanOffTools": 6.0588235294117645, "meanSavedTools": 0.058823529411764705, "medianSavedTools": 1, "onWins": 21, "ties": 5, "offWins": 8, "meanQualityDelta": 0.21200126551783616 },
+    "eligiblePairs": { "count": 29, "meanSavedTools": 0.27586206896551724, "medianSavedTools": 1, "normal95ConfidenceInterval": [-0.9308606771402667, 1.4825848150713012], "meaningful": false }
+  },
+  "sampleColumns": ["run", "onTools", "offTools", "onScore", "offScore", "qualityEligible"],
+  "samples": [
+    [1, 4, 5, 1, 0.7586206896551724, true], [2, 4, 6, 1, 0.7586206896551724, true], [3, 4, 6, 1, 0.7586206896551724, true], [4, 4, 5, 1, 0.7586206896551724, true],
+    [5, 6, 6, 1, 0.7586206896551724, true], [6, 5, 6, 0.9090909090909091, 0.7586206896551724, true], [7, 10, 5, 0.7586206896551724, 0.7586206896551724, false], [8, 5, 7, 1, 0.7333333333333333, true],
+    [9, 7, 5, 0.9375, 0.7096774193548386, true], [10, 4, 6, 1, 0.7333333333333333, true], [11, 5, 5, 1, 0.7333333333333333, true], [12, 7, 6, 0.9090909090909091, 0.7586206896551724, true],
+    [13, 7, 5, 1, 0.7586206896551724, true], [14, 5, 7, 1, 0.7586206896551724, true], [15, 5, 5, 1, 0.7586206896551724, true], [16, 17, 5, 1, 0.7096774193548386, true],
+    [17, 6, 7, 1, 0.7586206896551724, true], [18, 5, 8, 1, 0.7586206896551724, true], [19, 6, 6, 0.7586206896551724, 0.7586206896551724, false], [20, 5, 7, 1, 0.7333333333333333, true],
+    [21, 5, 6, 1, 0.7333333333333333, true], [22, 4, 6, 1, 0.7096774193548386, true], [23, 7, 8, 0.7586206896551724, 0.7586206896551724, false], [24, 7, 6, 0.9090909090909091, 0.7096774193548386, true],
+    [25, 9, 6, 0.7586206896551724, 0.7586206896551724, false], [26, 15, 6, 1, 0.7586206896551724, true], [27, 5, 6, 1, 0.7586206896551724, true], [28, 6, 6, 1, 0.7096774193548386, true],
+    [29, 6, 7, 0.7586206896551724, 0.7586206896551724, false], [30, 2, 5, 1, 0.7333333333333333, true], [31, 5, 6, 1, 0.7096774193548386, true], [32, 4, 7, 1, 0.7586206896551724, true],
+    [33, 4, 7, 1, 0.7096774193548386, true], [34, 4, 6, 1, 0.7096774193548386, true]
+  ]
+}

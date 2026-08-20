@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import Database from 'better-sqlite3';
+import { join } from 'node:path';
 import { createTmpStore, type TmpDbHandle } from '../helpers/tmpDb.js';
+import { SqliteRegistryStore } from '../../src/registry/sqliteStore.js';
 import type { RegisterEntityInput } from '../../src/registry/sqliteStore.js';
 
 let h: TmpDbHandle;
@@ -48,6 +51,13 @@ describe('SqliteRegistryStore — register / get', () => {
   it('returns null for missing entity', () => {
     expect(h.store.getEntity('nope')).toBeNull();
     expect(h.store.getEntityByName('missing::x')).toBeNull();
+  });
+
+  it('requires project scope when qualified names are ambiguous', () => {
+    h.store.registerEntity(baseEntity({ projectId: 'p1' }));
+    h.store.registerEntity(baseEntity({ projectId: 'p2' }));
+    expect(h.store.getEntityByName('src/foo.ts::foo')).toBeNull();
+    expect(h.store.getEntityByName('src/foo.ts::foo', 'p2')?.projectId).toBe('p2');
   });
 
   it('bulk registers multiple entities in a transaction', () => {
@@ -256,10 +266,20 @@ describe('SqliteRegistryStore — fileBrief', () => {
     const ent = h.store.registerEntity(baseEntity({ name: 'c', filePath: 'src/foo.ts' }));
     h.store.deprecateEntity(ent.id);
 
-    const brief = h.store.fileBrief('src/foo.ts');
+    const brief = h.store.fileBrief('src/foo.ts', 'p1');
     expect(brief.entities).toHaveLength(3);
     expect(brief.summary).toContain('3 entities');
     expect(brief.summary).toContain('1 deprecated');
+  });
+
+  it('isolates matching relative paths by project', () => {
+    h.store.registerEntity(baseEntity({ projectId: 'p1', name: 'first', filePath: 'src/shared.ts' }));
+    h.store.registerEntity(baseEntity({ projectId: 'p2', name: 'second', filePath: 'src/shared.ts' }));
+
+    const brief = h.store.fileBrief('src/shared.ts', 'p2');
+
+    expect(brief.entities.map((entity) => entity.name)).toEqual(['second']);
+    expect(brief.summary).toContain('1 entities');
   });
 });
 
@@ -287,6 +307,11 @@ describe('SqliteRegistryStore — convenience queries', () => {
     expect(list.map((e) => e.name)).toEqual(['risky']);
   });
 
+  it('highRiskEntities applies a retrieval limit', () => {
+    h.store.registerEntity(baseEntity({ name: 'risky2', filePath: 'src/r2.ts', riskLevel: 'high' }));
+    expect(h.store.highRiskEntities('p1', 1)).toHaveLength(1);
+  });
+
   it('deprecatedEntities returns deprecated only', () => {
     const list = h.store.deprecatedEntities('p1');
     expect(list.map((e) => e.name)).toEqual(['old']);
@@ -301,5 +326,160 @@ describe('SqliteRegistryStore — events', () => {
     const types = events.map((e) => e.type);
     expect(types).toContain('created');
     expect(types).toContain('deprecated');
+  });
+});
+
+describe('SqliteRegistryStore — schema version + FTS rebuild guard (INT-1478)', () => {
+  it('migrates an inline UNIQUE(qualified_name) autoindex from v1', () => {
+    const dbPath = join(h.dir, 'registry.db');
+    const raw = new Database(dbPath);
+    const schema = (raw.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'code_entities'").get() as { sql: string }).sql;
+    raw.close();
+
+    const legacyPath = join(h.dir, 'legacy.db');
+    const legacy = new Database(legacyPath);
+    legacy.exec(schema.replace('UNIQUE(project_id, qualified_name)', 'UNIQUE(qualified_name)'));
+    legacy.pragma('user_version = 1');
+    legacy.close();
+
+    const migrated = new SqliteRegistryStore(legacyPath);
+    migrated.registerEntity(baseEntity({ projectId: 'p1' }));
+    expect(() => migrated.registerEntity(baseEntity({ projectId: 'p2' }))).not.toThrow();
+    migrated.close();
+  });
+
+  it('migrates a populated v1 database while preserving child rows', () => {
+    const currentPath = join(h.dir, 'registry.db');
+    const current = new Database(currentPath);
+    const entitySchema = (current.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'code_entities'").get() as { sql: string }).sql;
+    const tagSchema = (current.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'code_entity_tags'").get() as { sql: string }).sql;
+    current.close();
+    const legacyPath = join(h.dir, 'legacy-populated.db');
+    const legacy = new Database(legacyPath);
+    legacy.exec(entitySchema.replace('UNIQUE(project_id, qualified_name)', 'UNIQUE(qualified_name)'));
+    legacy.exec(tagSchema);
+    legacy.prepare(`INSERT INTO code_entities
+      (id, project_id, kind, name, qualified_name, file_path, line_start, line_end, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`)
+      .run('legacy-entity', 'legacy-project', 'function', 'legacy', 'src/legacy.ts::legacy', 'src/legacy.ts', 1, 1);
+    legacy.prepare('INSERT INTO code_entity_tags (entity_id, tag, value) VALUES (?, ?, ?)')
+      .run('legacy-entity', 'owner', 'core');
+    legacy.pragma('user_version = 1');
+    legacy.close();
+
+    const migrated = new SqliteRegistryStore(legacyPath);
+    expect(migrated.getEntity('legacy-entity')?.name).toBe('legacy');
+    expect(migrated.getTags('legacy-entity')).toEqual([{ tag: 'owner', value: 'core' }]);
+    migrated.close();
+  });
+
+  it('stamps user_version on first migrate and keeps FTS working across reopen', () => {
+    const dbPath = join(h.dir, 'registry.db');
+    h.store.registerEntity(baseEntity({ name: 'alphaFn', filePath: 'src/a.ts' }));
+    h.store.close();
+
+    const raw = new Database(dbPath);
+    const version = raw.pragma('user_version', { simple: true }) as number;
+    raw.close();
+    expect(version).toBeGreaterThanOrEqual(2);
+
+    // 재오픈 — rebuild는 스킵되어야 하고, 트리거/인덱스는 그대로 동작해야 함
+    const store2 = new SqliteRegistryStore(dbPath);
+    store2.registerEntity(baseEntity({ name: 'betaFn', filePath: 'src/b.ts' }));
+    expect(store2.searchEntities('betaFn', 10).some(e => e.name === 'betaFn')).toBe(true);
+    expect(store2.searchEntities('alphaFn', 10).some(e => e.name === 'alphaFn')).toBe(true);
+    store2.close();
+  });
+
+  it('re-runs FTS rebuild when user_version is reset (legacy DB path)', () => {
+    const dbPath = join(h.dir, 'registry.db');
+    h.store.registerEntity(baseEntity({ name: 'legacyFn', filePath: 'src/l.ts' }));
+    h.store.close();
+
+    // 레거시 DB 시뮬레이션: 버전 0으로 강등
+    const raw = new Database(dbPath);
+    raw.pragma('user_version = 0');
+    raw.close();
+
+    const store2 = new SqliteRegistryStore(dbPath);
+    expect(store2.searchEntities('legacyFn', 10).some(e => e.name === 'legacyFn')).toBe(true);
+    store2.close();
+
+    const raw2 = new Database(dbPath);
+    const version = raw2.pragma('user_version', { simple: true }) as number;
+    raw2.close();
+    expect(version).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('SqliteRegistryStore — registry hygiene (INT-1476/1479)', () => {
+  it('listProjects aggregates entity and broken counts per project', () => {
+    h.store.registerEntity(baseEntity({ projectId: 'p1', name: 'a', filePath: 'src/a.ts' }));
+    const b = h.store.registerEntity(baseEntity({ projectId: 'p1', name: 'b', filePath: 'src/b.ts' }));
+    h.store.registerEntity(baseEntity({ projectId: 'p2', name: 'c', filePath: 'src/c.ts' }));
+    h.store.changeEntityStatus(b.id, 'broken');
+
+    const projects = h.store.listProjects();
+    const p1 = projects.find(p => p.projectId === 'p1');
+    expect(p1?.entityCount).toBe(2);
+    expect(p1?.brokenCount).toBe(1);
+    expect(projects.find(p => p.projectId === 'p2')?.entityCount).toBe(1);
+  });
+
+  it('deleteProject removes entities and their relations', () => {
+    const a = h.store.registerEntity(baseEntity({ projectId: 'p1', name: 'a', filePath: 'src/a.ts' }));
+    const b = h.store.registerEntity(baseEntity({ projectId: 'p1', name: 'b', filePath: 'src/b.ts' }));
+    h.store.addRelation(a.id, b.id, 'calls');
+    expect(h.store.countRelations('p1')).toBe(1);
+
+    const removed = h.store.deleteProject('p1');
+    expect(removed).toBe(2);
+    expect(h.store.listProjects().find(p => p.projectId === 'p1')).toBeUndefined();
+    expect(h.store.countRelations('p1')).toBe(0);
+  });
+
+  it('pruneBroken deletes only broken entities, scoped by project', () => {
+    const a = h.store.registerEntity(baseEntity({ projectId: 'p1', name: 'a', filePath: 'src/a.ts' }));
+    const b = h.store.registerEntity(baseEntity({ projectId: 'p2', name: 'b', filePath: 'src/b.ts' }));
+    h.store.registerEntity(baseEntity({ projectId: 'p1', name: 'alive', filePath: 'src/ok.ts' }));
+    h.store.changeEntityStatus(a.id, 'broken');
+    h.store.changeEntityStatus(b.id, 'broken');
+
+    expect(h.store.pruneBroken('p1')).toBe(1);
+    expect(h.store.getEntity(a.id)).toBeNull();
+    expect(h.store.getEntity(b.id)).not.toBeNull();
+    expect(h.store.pruneBroken()).toBe(1); // 나머지 전역 정리
+    expect(h.store.listProjects().find(p => p.projectId === 'p1')?.entityCount).toBe(1);
+  });
+
+  it('pruneEvents deletes events older than cutoff and returns the count', () => {
+    const ent = h.store.registerEntity(baseEntity());
+    expect(h.store.getEvents(ent.id).length).toBeGreaterThanOrEqual(1);
+
+    // 이벤트를 40일 전으로 백데이트
+    const raw = new Database(join(h.dir, 'registry.db'));
+    raw.prepare('UPDATE code_entity_events SET created_at = ?')
+      .run(new Date(Date.now() - 40 * 86_400_000).toISOString());
+    raw.close();
+
+    expect(h.store.pruneEvents(30)).toBeGreaterThanOrEqual(1);
+    expect(h.store.getEvents(ent.id)).toHaveLength(0);
+    // 새 이벤트는 살아남는다
+    h.store.addEvent(ent.id, 'updated', { content: 'fresh' });
+    expect(h.store.pruneEvents(30)).toBe(0);
+    expect(h.store.getEvents(ent.id)).toHaveLength(1);
+    expect(() => h.store.getEvents(ent.id, -1)).not.toThrow();
+    expect(h.store.getEvents(ent.id, -1)).toHaveLength(1);
+    expect(() => h.store.getEvents(ent.id, Number.NaN)).toThrow('limit must be finite');
+  });
+
+  it('rejects invalid event retention periods', () => {
+    expect(() => h.store.pruneEvents(-1)).toThrow('finite non-negative');
+    expect(() => h.store.pruneEvents(Number.NaN)).toThrow('finite non-negative');
+  });
+
+  it('vacuum runs without error', () => {
+    h.store.registerEntity(baseEntity());
+    expect(() => h.store.vacuum()).not.toThrow();
   });
 });

@@ -9,9 +9,10 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { join, extname, dirname } from 'node:path';
 import { getRegistryStore } from './sqliteStore.js';
-import { buildIgnoreConfig, shouldSkipDir } from './ignoreRules.js';
+import { buildIgnoreConfig, shouldSkipDir, shouldSkipFile } from './ignoreRules.js';
 import type { EntityKind, RiskLevel, RelationType } from './schema.js';
 import type { SqliteRegistryStore } from './sqliteStore.js';
+import { maskLiteralsAndComments } from './lexical.js';
 
 // ============ 상수 ============
 
@@ -20,7 +21,6 @@ const MAX_DEPTH = 15;
 const SCAN_TIMEOUT_MS = 60_000;
 // 블록 끝 탐색 시 한 엔티티가 차지할 수 있는 최대 줄 수(무한루프 방지 backstop).
 // 큰 클래스/함수가 흔하므로 넉넉히. 파일 자체가 512KB로 제한돼 있어 안전.
-const MAX_BLOCK_SCAN = 5000;
 
 // ============ 언어 정의 ============
 
@@ -72,11 +72,24 @@ const TS_CONFIG: LanguageConfig = {
 };
 
 // ---- Python ----
+const PY_METHOD_EXCLUDE = new Set([
+  'if', 'for', 'while', 'with', 'try', 'except', 'finally', 'else', 'elif',
+  'return', 'yield', 'raise', 'assert', 'pass', 'break', 'continue',
+]);
+
 const PY_CONFIG: LanguageConfig = {
   extensions: ['.py', '.pyw'],
   testPatterns: [/_test\.py$/, /test_.*\.py$/, /\.test\.py$/],
   blockStyle: 'indent',
   commentPrefixes: ['#'],
+  // INT-1480: Python 클래스 내 메서드 추출 — def로 시작하는 들여쓰기된 줄.
+  // indent 블록 스타일에서는 extractMethods 대신 여기서 직접 패턴 정의.
+  // brace 언어용 extractMethods는 블록 끝을 brace로 찾으므로 Python에는 미사용.
+  methodPattern: {
+    pattern: /^(?:async\s+)?def\s+(\w+)\s*(\([^)]*\)(?:\s*->\s*[^:]+)?)?\s*:/,
+    sigGroup: 2,
+  },
+  methodExclude: PY_METHOD_EXCLUDE,
   patterns: [
     { pattern: /^(?:async\s+)?def\s+(\w+)\s*(\([^)]*\)(?:\s*->\s*[^:]+)?)?\s*:/, kind: 'function', sigGroup: 2 },
     { pattern: /^class\s+(\w+)/, kind: 'class' },
@@ -246,12 +259,13 @@ export function extractEntities(
   language: Language,
 ): ExtractedEntity[] {
   const lines = content.split('\n');
+  const lexicalLines = maskLiteralsAndComments(content, language).split('\n');
   const entities: ExtractedEntity[] = [];
   const config = LANGUAGE_CONFIGS[language];
   const seen = new Set<string>();
 
   for (let i = 0; i < lines.length; i++) {
-    const trimmed = lines[i].trimStart();
+    const trimmed = (lexicalLines[i] ?? '').trimStart();
     if (!trimmed) continue;
 
     if (config.commentPrefixes.some(p => trimmed.startsWith(p))) continue;
@@ -302,8 +316,19 @@ export function extractEntities(
       });
 
       // 클래스라면 본문 범위에서 직속 메서드를 추출한다 (methodPattern 정의 언어만).
-      if (kind === 'class' && lineEnd !== undefined && config.methodPattern) {
-        for (const method of extractMethods(lines, i, lineEnd, config, filePath, name)) {
+      // indent 스타일에서 lineEnd=undefined는 "클래스가 파일 끝까지 이어짐"(흔함) —
+      // EOF를 본문 끝으로 간주해 메서드 추출을 계속한다. brace 스타일의 undefined는
+      // brace 불균형(파싱 실패)이므로 기존대로 스킵.
+      const classBodyEnd = lineEnd !== undefined
+        ? lineEnd
+        : (config.blockStyle === 'indent'
+          ? lines.length - 1
+          : undefined);
+      if (kind === 'class' && classBodyEnd !== undefined && config.methodPattern) {
+        const methodExtractor = config.blockStyle === 'indent'
+          ? extractIndentMethods  // INT-1480: Python 등 indent 스타일
+          : extractMethods;       // brace 스타일 (TS/JS/Go/...)
+        for (const method of methodExtractor(lines, i, classBodyEnd, config, filePath, name)) {
           const mkey = `${method.name}:${method.lineStart - 1}`;
           if (seen.has(mkey)) continue;
           seen.add(mkey);
@@ -319,6 +344,72 @@ export function extractEntities(
 }
 
 // ============ 블록 끝 추정 ============
+
+/**
+ * INT-1480: Python(indent 스타일) 클래스 본문 직속 메서드 추출.
+ * classStart..classEnd(0-based) 범위 내에서 클래스보다 정확히 한 들여쓰기 단계
+ * 더 들어간 `def`/`async def` 줄만 추출한다. 중첩 클래스·로컬 함수는 delta가
+ * 2단계 이상이므로 자동으로 제외된다.
+ */
+function extractIndentMethods(
+  lines: string[],
+  classStart: number,
+  classEnd: number,
+  config: LanguageConfig,
+  filePath: string,
+  className: string,
+): ExtractedEntity[] {
+  const mp = config.methodPattern;
+  if (!mp) return [];
+  const exclude = config.methodExclude ?? new Set<string>();
+  const methods: ExtractedEntity[] = [];
+
+  const classIndent = lines[classStart].length - lines[classStart].trimStart().length;
+  // Python 관례: 클래스 바디는 classIndent + 4(또는 +2 혼합). 정확한 단계는 첫 줄에서 결정.
+  let methodIndent = -1;
+
+  for (let i = classStart + 1; i <= classEnd; i++) {
+    const raw = lines[i];
+    if (raw === undefined) break;
+    const trimmed = raw.trimStart();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+
+    const indent = raw.length - trimmed.length;
+    if (indent <= classIndent) break; // 클래스 본문 종료
+
+    // 첫 실질 줄로 methodIndent 확정
+    if (methodIndent === -1) methodIndent = indent;
+    // 직속 단계가 아닌 줄(중첩)은 스킵
+    if (indent !== methodIndent) continue;
+
+    const m = trimmed.match(mp.pattern);
+    if (!m) continue;
+    const name = m[1];
+    if (!name || exclude.has(name)) continue;
+
+    const lineEnd = findIndentBlockEnd(lines, i);
+    const signature = mp.sigGroup ? m[mp.sigGroup]?.trim() : undefined;
+    const metrics = computeBlockMetrics(lines, i, lineEnd);
+
+    methods.push({
+      kind: 'function',
+      name,
+      filePath,
+      lineStart: i + 1,
+      lineEnd: lineEnd !== undefined ? lineEnd + 1 : undefined,
+      signature: signature ? `${signature}  // ${className}` : `// ${className}`,
+      isExported: false,
+      loc: metrics.loc,
+      nestingDepth: metrics.nestingDepth,
+      paramCount: metrics.paramCount,
+    });
+
+    // 메서드 본문을 건너뛰어 다음 직속 줄로 이동
+    if (lineEnd !== undefined && lineEnd > i) i = lineEnd;
+  }
+
+  return methods;
+}
 
 /**
  * 클래스 본문(classStart..classEnd, 0-based) 범위에서 직속 메서드를 추출한다.
@@ -407,8 +498,11 @@ function findBraceBlockEnd(lines: string[], startIdx: number): number | undefine
   // 시그니처가 끝나고 본문 `{`가 등장한 적이 있는지(한 줄 함수 판정용).
   let sawAnyBrace = false;
 
-  for (let i = startIdx; i < Math.min(startIdx + MAX_BLOCK_SCAN, lines.length); i++) {
-    for (const ch of lines[i]) {
+  const endLimit = lines.length;
+  const lexicalLines = maskLiteralsAndComments(lines.slice(startIdx, endLimit).join('\n')).split('\n');
+  for (let i = startIdx; i < endLimit; i++) {
+    const lexicalLine = lexicalLines[i - startIdx] ?? '';
+    for (const ch of lexicalLine) {
       if (ch === '{') { depth++; sawAnyBrace = true; }
       if (ch === '}') depth--;
     }
@@ -417,7 +511,9 @@ function findBraceBlockEnd(lines: string[], startIdx: number): number | undefine
       if (depth > 0) { bodyStarted = true; continue; }
       // 한 줄 함수: 이 줄에서 본문 여는 `) {` / `=> {`가 열렸다 닫혔다면 그 줄이 끝.
       // (시그니처의 inline 타입 주석 `{ ... }`은 이 패턴에 안 걸려 제외된다.)
-      if (sawAnyBrace && depth <= 0 && /(\)|=>)\s*\{/.test(lines[i])) return i;
+      const hasInlineBody = /(\)|=>)\s*\{/.test(lexicalLine)
+        || /\b(?:class|interface|enum|namespace|module)\b[^{}]*\{/.test(lexicalLine);
+      if (sawAnyBrace && depth <= 0 && hasInlineBody) return i;
       continue;
     }
     if (depth <= 0) return i;
@@ -429,13 +525,14 @@ function findIndentBlockEnd(lines: string[], startIdx: number): number | undefin
   const startLine = lines[startIdx];
   const baseIndent = startLine.length - startLine.trimStart().length;
 
-  for (let i = startIdx + 1; i < Math.min(startIdx + MAX_BLOCK_SCAN, lines.length); i++) {
+  const endLimit = lines.length;
+  for (let i = startIdx + 1; i < endLimit; i++) {
     const line = lines[i];
     if (line.trim().length === 0) continue;
     const currentIndent = line.length - line.trimStart().length;
     if (currentIndent <= baseIndent) return i - 1;
   }
-  return undefined;
+  return endLimit === lines.length ? lines.length - 1 : undefined;
 }
 
 // ============ 복잡도 산정 ============
@@ -445,11 +542,12 @@ function computeBlockMetrics(
 ): { loc: number; nestingDepth: number; paramCount: number } {
   const end = endIdx ?? Math.min(startIdx + 50, lines.length);
   const blockLines = lines.slice(startIdx, end + 1);
+  const lexicalBlock = maskLiteralsAndComments(blockLines.join('\n'));
   const loc = blockLines.filter(l => l.trim().length > 0).length;
 
   let maxNesting = 0;
   let currentNesting = 0;
-  for (const line of blockLines) {
+  for (const line of lexicalBlock.split('\n')) {
     for (const ch of line) {
       if (ch === '{' || ch === '(') currentNesting++;
       if (ch === '}' || ch === ')') currentNesting--;
@@ -457,8 +555,8 @@ function computeBlockMetrics(
     if (currentNesting > maxNesting) maxNesting = currentNesting;
   }
 
-  const firstLine = blockLines[0] ?? '';
-  const paramMatch = firstLine.match(/\(([^)]*)\)/);
+  const signature = lexicalBlock.slice(0, lexicalBlock.indexOf('{') === -1 ? undefined : lexicalBlock.indexOf('{'));
+  const paramMatch = signature.match(/\(([\s\S]*?)\)/);
   const paramCount = paramMatch
     ? paramMatch[1].split(',').filter(p => p.trim().length > 0).length
     : 0;
@@ -547,15 +645,22 @@ export function extractReferences(
   language: Language,
 ): Map<number, ReferenceSet> {
   const lines = content.split('\n');
+  const lexicalLines = maskLiteralsAndComments(content, language).split('\n');
   const result = new Map<number, ReferenceSet>();
 
   // 파일 단위 import 경로 (모든 엔티티가 공유).
   const fileImports = new Set<string>();
-  for (const re of IMPORT_PATTERNS[language] ?? []) {
-    re.lastIndex = 0;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(content)) !== null) {
-      if (m[1]) fileImports.add(m[1].trim());
+  if (language === 'typescript') {
+    for (const { importPath } of extractTypeScriptNamedImports(content)) {
+      if (importPath.startsWith('.')) fileImports.add(importPath);
+    }
+  }
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^\s*(?:import|from|use|#include|using)\b/.test(lexicalLines[i] ?? '')) continue;
+    for (const re of IMPORT_PATTERNS[language] ?? []) {
+      re.lastIndex = 0;
+      const m = re.exec(lines[i]);
+      if (m?.[1]) fileImports.add(m[1].trim());
     }
   }
 
@@ -565,7 +670,25 @@ export function extractReferences(
     if (ent.kind !== 'function' && ent.kind !== 'class') continue;
     const start = ent.lineStart - 1;
     const end = (ent.lineEnd ?? ent.lineStart) - 1;
-    const body = lines.slice(start, end + 1).join('\n');
+    const bodyLines = lexicalLines.slice(start, end + 1);
+
+    // INT-1848: 클래스 컨테이너가 멤버 메서드 본문의 호출을 흡수하면
+    // `클래스 → 메서드내부호출대상` 가짜 calls edge가 생긴다 (예: SqliteRegistryStore →
+    // rowsToEntities). 이 흡수가 impact의 transitive BFS를 오염시켜 FP를 낳는다.
+    // 메서드는 개별 엔티티로 자기 calls를 이미 보유하므로, 클래스 body에서 멤버 메서드
+    // 라인을 비워 클래스 직속 코드(필드 이니셜라이저 등)만 남긴다.
+    if (ent.kind === 'class') {
+      for (const inner of entities) {
+        if (inner === ent || inner.kind !== 'function') continue;
+        if (inner.lineStart <= ent.lineStart) continue;
+        const innerEnd = inner.lineEnd ?? inner.lineStart;
+        if (innerEnd > end + 1) continue; // 클래스 범위를 벗어난 엔티티는 건드리지 않음
+        const from = Math.max(0, inner.lineStart - 1 - start);
+        const to = Math.min(bodyLines.length - 1, innerEnd - 1 - start);
+        for (let k = from; k <= to; k++) bodyLines[k] = '';
+      }
+    }
+    const body = bodyLines.join('\n');
 
     const callNames = new Set<string>();
     for (const re of [CALL_PATTERN, MEMBER_CALL_PATTERN]) {
@@ -580,7 +703,7 @@ export function extractReferences(
     }
 
     const baseNames = new Set<string>();
-    const head = lines.slice(start, Math.min(start + 3, end + 1)).join('\n');
+    const head = lexicalLines.slice(start, Math.min(start + 3, end + 1)).join('\n');
     for (const re of basePatterns) {
       re.lastIndex = 0;
       let m: RegExpExecArray | null;
@@ -614,6 +737,30 @@ interface TestFileInfo {
 
 const TS_IMPORT_FROM = /import\s+\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]/g;
 
+interface TypeScriptNamedImport {
+  symbols: string[];
+  importPath: string;
+}
+
+/** 문자열·주석 속 가짜 import를 제외하고 멀티라인 named import를 추출한다. */
+export function extractTypeScriptNamedImports(content: string): TypeScriptNamedImport[] {
+  const lexical = maskLiteralsAndComments(content, 'typescript');
+  const imports: TypeScriptNamedImport[] = [];
+  TS_IMPORT_FROM.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = TS_IMPORT_FROM.exec(content)) !== null) {
+    if (!/^import\b/.test(lexical.slice(match.index, match.index + 'import'.length))) continue;
+    imports.push({
+      symbols: match[1].split(',')
+        .map(s => s.trim())
+        .filter(s => s && !s.startsWith('type '))
+        .map(s => s.split(/\s+as\s+/)[0].trim()),
+      importPath: match[2],
+    });
+  }
+  return imports;
+}
+
 const RESERVED_NAMES = new Set([
   'describe', 'it', 'test', 'expect', 'beforeEach', 'afterEach',
   'beforeAll', 'afterAll', 'vi', 'jest', 'mock', 'fn', 'spyOn',
@@ -641,13 +788,7 @@ function parseTestFile(content: string, testFilePath: string, language: Language
   const referencedNames = new Set<string>();
 
   if (language === 'typescript') {
-    TS_IMPORT_FROM.lastIndex = 0;
-    let match;
-    while ((match = TS_IMPORT_FROM.exec(content)) !== null) {
-      const symbols = match[1].split(',')
-        .map(s => s.trim().split(/\s+as\s+/)[0].trim())
-        .filter(s => s && !s.startsWith('type '));
-      const importPath = match[2];
+    for (const { symbols, importPath } of extractTypeScriptNamedImports(content)) {
       if (importPath.startsWith('.')) {
         const resolved = resolveImportPath(testFilePath, importPath);
         if (resolved) {
@@ -659,7 +800,7 @@ function parseTestFile(content: string, testFilePath: string, language: Language
     }
   }
 
-  for (const line of content.split('\n')) {
+  for (const line of maskLiteralsAndComments(content, language).split('\n')) {
     const trimmed = line.trim();
     const calls = trimmed.matchAll(/\b([a-zA-Z_]\w+)\s*\(/g);
     for (const c of calls) {
@@ -819,8 +960,13 @@ export async function scanRepository(
   options?: { maxDepth?: number; timeoutMs?: number; verbose?: boolean },
 ): Promise<ScanResult> {
   const startTime = Date.now();
-  const maxDepth = options?.maxDepth ?? MAX_DEPTH;
-  const timeoutMs = options?.timeoutMs ?? SCAN_TIMEOUT_MS;
+  const requestedDepth = options?.maxDepth ?? MAX_DEPTH;
+  const requestedTimeout = options?.timeoutMs ?? SCAN_TIMEOUT_MS;
+  if (!Number.isFinite(requestedDepth) || requestedDepth < 0 || !Number.isFinite(requestedTimeout) || requestedTimeout <= 0) {
+    throw new RangeError('maxDepth must be finite and non-negative; timeoutMs must be finite and positive');
+  }
+  const maxDepth = Math.min(Math.trunc(requestedDepth), MAX_DEPTH);
+  const timeoutMs = Math.min(requestedTimeout, SCAN_TIMEOUT_MS);
   const verbose = options?.verbose ?? false;
   const store = getRegistryStore();
   const ignoreConfig = buildIgnoreConfig(projectPath);
@@ -832,29 +978,36 @@ export async function scanRepository(
   const errors: string[] = [];
   const languageBreakdown: Record<string, number> = {};
   let scannedFiles = 0;
+  let completeScan = true;
 
   async function walk(dirPath: string, relPath: string, depth: number): Promise<void> {
-    if (depth > maxDepth) return;
-    if (Date.now() - startTime > timeoutMs) return;
+    if (depth > maxDepth) { completeScan = false; errors.push(`scan depth exceeded at ${relPath}`); return; }
+    if (Date.now() - startTime > timeoutMs) { completeScan = false; errors.push(`scan timed out at ${relPath}`); return; }
 
     let entries;
     try {
       entries = await readdir(dirPath, { withFileTypes: true });
-    } catch (err) {
+    } catch (err) { // cxt-ignore: exception_hiding — 디렉터리 접근 실패 시 해당 디렉터리 스킵 (verbose 로깅)
+      completeScan = false;
+      errors.push(`${relPath || '.'}: ${err instanceof Error ? err.message : 'access denied'}`);
       if (verbose) console.log(`  [scan] skip dir ${relPath}: ${err instanceof Error ? err.message : 'access denied'}`);
       return;
     }
 
     for (const entry of entries) {
-      if (Date.now() - startTime > timeoutMs) return;
+      if (Date.now() - startTime > timeoutMs) { completeScan = false; errors.push(`scan timed out at ${relPath || '.'}`); return; }
 
       const fullPath = join(dirPath, entry.name);
       const entryRelPath = relPath ? `${relPath}/${entry.name}` : entry.name;
+
+      // 저장소 밖 탈출과 순환을 막기 위해 링크는 파일/디렉터리 모두 순회하지 않는다.
+      if (entry.isSymbolicLink()) continue;
 
       if (entry.isDirectory()) {
         if (shouldSkipDir(entry.name, relPath, ignoreConfig)) continue;
         await walk(fullPath, entryRelPath, depth + 1);
       } else if (entry.isFile()) {
+        if (shouldSkipFile(entryRelPath, ignoreConfig)) continue;
         const ext = extname(entry.name);
         if (!SOURCE_EXTENSIONS.has(ext)) continue;
 
@@ -863,8 +1016,10 @@ export async function scanRepository(
 
         try {
           const fileStat = await stat(fullPath);
-          if (fileStat.size > MAX_FILE_SIZE) continue;
-        } catch (err) {
+          if (fileStat.size > MAX_FILE_SIZE) { completeScan = false; errors.push(`${entryRelPath}: file exceeds scan size limit`); continue; }
+        } catch (err) { // cxt-ignore: exception_hiding — stat 실패 시 해당 파일 스킵 (verbose 로깅)
+          completeScan = false;
+          errors.push(`${entryRelPath}: ${err instanceof Error ? err.message : 'access denied'}`);
           if (verbose) console.log(`  [scan] skip stat ${entryRelPath}: ${err instanceof Error ? err.message : 'access denied'}`);
           continue;
         }
@@ -892,7 +1047,8 @@ export async function scanRepository(
               console.log(`  [scan] ${entryRelPath}: ${entities.length} entities (${language})`);
             }
           }
-        } catch (err) {
+        } catch (err) { // cxt-ignore: exception_hiding — err는 errors[]에 수집되어 ScanResult로 보고됨
+          completeScan = false;
           errors.push(`${entryRelPath}: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
@@ -903,18 +1059,44 @@ export async function scanRepository(
 
   const testMap = buildTestMap(allExtracted, testFiles);
   if (verbose && testMap.size > 0) {
-    console.log(`  [test-map] ${testMap.size} entities mapped to tests`);
+    console.log(`  [test-map] ${testMap.size} entities mapped to tests`); // cxt-ignore: debug_leftover
   }
 
-  const existing = store.listEntities({ projectId, limit: 100_000, offset: 0 });
-  const existingByQName = new Map(existing.entities.map(e => [e.qualifiedName, e]));
+  // 실패한 스캔은 기존 스냅샷과 섞지 않는다. 모든 파일 추출이 끝난 뒤에만
+  // 레지스트리를 변경하므로 여기서 중단하면 이전의 일관된 상태가 그대로 보존된다.
+  if (!completeScan) {
+    return {
+      scanned: scannedFiles,
+      extracted: allExtracted.length,
+      registered: 0,
+      updated: 0,
+      removed: 0,
+      relationsLoaded: 0,
+      testsMapped: 0,
+      errors,
+      durationMs: Date.now() - startTime,
+      languageBreakdown,
+    };
+  }
+
+  const existingEntities = [];
+  for (let offset = 0; ; offset += 10_000) {
+    const page = store.listEntities({ projectId, limit: 10_000, offset });
+    existingEntities.push(...page.entities);
+    if (existingEntities.length >= page.total || page.entities.length === 0) break;
+  }
+  const existingByQName = new Map(existingEntities.map(e => [e.qualifiedName, e]));
   const extractedQNames = new Set<string>();
 
   let registered = 0;
   let updated = 0;
   let testsMapped = 0;
+  let removed = 0;
+  let relationsLoaded = 0;
 
-  for (const ext of allExtracted) {
+  try {
+    store.runInTransaction(() => {
+    for (const ext of allExtracted) {
     const qualifiedName = `${ext.filePath}::${ext.name}`;
     extractedQNames.add(qualifiedName);
 
@@ -946,12 +1128,19 @@ export async function scanRepository(
           author: 'scanner',
         });
         registered++;
-      } catch (err) {
+      } catch (err) { // cxt-ignore: exception_hiding — UNIQUE 충돌은 의도적 무시, 그 외 err는 errors[]에 수집됨
         if (!(err instanceof Error && err.message.includes('UNIQUE'))) {
-          errors.push(`register ${qualifiedName}: ${err instanceof Error ? err.message : String(err)}`);
+          throw new Error(`register ${qualifiedName}: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
     } else {
+      // INT-1477: broken 엔티티를 재발견했으면 active로 복원.
+      // scanner가 broken으로 전환했던 엔티티만 대상(수동 annotate 제외).
+      if (existingEntity.status === 'broken' && existingEntity.author === 'scanner') {
+        store.changeEntityStatus(existingEntity.id, 'active', 'scanner');
+        updated++;
+      }
+
       const needsUpdate =
         existingEntity.lineStart !== ext.lineStart ||
         existingEntity.lineEnd !== ext.lineEnd ||
@@ -971,24 +1160,36 @@ export async function scanRepository(
           complexityScore: score,
           riskLevel,
         }, 'scanner');
-        updated++;
+        if (existingEntity.status !== 'broken') updated++;
       }
     }
-  }
-
-  let removed = 0;
-  for (const [qName, entity] of existingByQName) {
-    if (!extractedQNames.has(qName) && entity.author === 'scanner' && entity.status === 'active') {
-      store.changeEntityStatus(entity.id, 'broken', 'scanner');
-      removed++;
     }
-  }
 
-  // ============ 관계 그래프 적재 (2-pass) ============
-  const relations = resolveRelations(store, projectId, refsByQName);
-  const relationsLoaded = store.replaceRelationsForProject(projectId, relations);
+    if (completeScan) {
+    for (const [qName, entity] of existingByQName) {
+      if (!extractedQNames.has(qName) && entity.author === 'scanner' && entity.status === 'active') {
+        store.changeEntityStatus(entity.id, 'broken', 'scanner');
+        removed++;
+      }
+    }
+    }
+
+    // ============ 관계 그래프 적재 (2-pass) ============
+    const relations = completeScan ? resolveRelations(store, projectId, refsByQName) : [];
+    relationsLoaded = completeScan ? store.replaceRelationsForProject(projectId, relations) : 0;
+    });
+  } catch (err) {
+    errors.push(err instanceof Error ? err.message : String(err));
+    registered = 0;
+    updated = 0;
+    testsMapped = 0;
+    removed = 0;
+    relationsLoaded = 0;
+    completeScan = false;
+  }
   if (verbose) {
-    console.log(`  [relations] ${relationsLoaded} edges loaded (${refsByQName.size} entities scanned for refs)`);
+    const status = completeScan ? `${relationsLoaded} edges loaded` : 'preserved (scan incomplete)';
+    console.log(`  [relations] ${status} (${refsByQName.size} entities scanned for refs)`);
   }
 
   return {
@@ -1022,12 +1223,18 @@ export function resolveRelations(
   projectId: string,
   refsByQName: Map<string, ReferenceSet>,
 ): Array<{ sourceId: string; targetId: string; relationType: RelationType }> {
-  // 최신 active 엔티티 목록을 조회해 인덱스 구축.
-  const { entities } = store.listEntities({ projectId, limit: 200_000, offset: 0 });
+  // active/experimental/deprecated 엔티티로 인덱스 구축.
+  // broken은 제외 — 해당 파일이 사라진 것이므로 관계 해소 대상 아님.
+  const entities = [];
+  for (let offset = 0; ; offset += 10_000) {
+    const page = store.listEntities({ projectId, limit: 10_000, offset });
+    entities.push(...page.entities);
+    if (entities.length >= page.total || page.entities.length === 0) break;
+  }
   const byName = new Map<string, RelResolveEntity[]>();
   const byQName = new Map<string, RelResolveEntity>();
   for (const e of entities) {
-    if (e.status === 'broken') continue;
+    if (e.status === 'broken') continue; // cxt-ignore: incomplete
     const re: RelResolveEntity = { id: e.id, name: e.name, kind: e.kind, filePath: e.filePath };
     byQName.set(e.qualifiedName, re);
     const arr = byName.get(e.name);
@@ -1061,17 +1268,28 @@ export function resolveRelations(
     for (const callName of refs.callNames) {
       const target = resolve(callName, source.filePath);
       if (!target || target.id === source.id) continue;
-      const key = `${source.id}|${target.id}|calls`;
+      // INT-1481: constant/type 참조는 'uses', 함수/클래스 호출은 'calls'.
+      const relType: RelationType =
+        (target.kind === 'constant' || target.kind === 'type') ? 'uses' : 'calls';
+      const key = `${source.id}|${target.id}|${relType}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      edges.push({ sourceId: source.id, targetId: target.id, relationType: 'calls' });
+      edges.push({ sourceId: source.id, targetId: target.id, relationType: relType });
     }
 
     for (const baseName of refs.baseNames) {
       const target = resolve(baseName, source.filePath);
       if (!target || target.id === source.id) continue;
       // 인터페이스/타입이면 implements, 클래스면 extends.
-      const relType: RelationType = target.kind === 'type' ? 'implements' : 'extends';
+      // overrides: 함수 엔티티가 다른 함수와 같은 이름을 상속 관계로 참조하는 경우.
+      let relType: RelationType;
+      if (target.kind === 'type') {
+        relType = 'implements';
+      } else if (target.kind === 'class') {
+        relType = source.kind === 'function' ? 'overrides' : 'extends';
+      } else {
+        relType = 'extends';
+      }
       const key = `${source.id}|${target.id}|${relType}`;
       if (seen.has(key)) continue;
       seen.add(key);

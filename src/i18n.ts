@@ -1,4 +1,6 @@
 // ============================================
+
+import { escapeTerminal } from './cli/outputSafety.js';
 // ctx - i18n (Internationalization)
 // Created: 2026-04-11
 // Purpose: Multi-language support for CLI output
@@ -89,6 +91,12 @@ interface Messages {
   bsFakeUrl: string;
   bsMagicNumber: string;
   bsLongLine: string;
+  bsRustUnwrap: string;
+  bsRustTodo: string;
+  bsFakeSuccess: string;
+  bsFakeData: string;
+  bsRustSilentError: string;
+  bsCatchSwallow: string;
 
   // ── Annotate ──
   annotating: string;
@@ -111,6 +119,49 @@ interface Messages {
   // ── Inject ──
   injectHeader: (name: string) => string;
   highRiskHeader: string;
+  callGraph: string;
+  callGraphReady: (n: number) => string;
+  callGraphMissing: string;
+  injectTest: string;
+  injectRiskHigh: string;
+
+  // ── Audit ──
+  auditHeader: string;
+  auditTracks: string;
+
+  // ── Relation (who-calls / calls / impact) ──
+  relNotFound: (name: string) => string;
+  relScanFirst: string;
+  relAmbiguous: (name: string, n: number) => string;
+  relUseQualified: string;
+  relNotFoundQualified: (name: string) => string;
+  relWhoCalls: (name: string, file: string, line?: number) => string;
+  relNone: string;
+  relTotal: (n: number) => string;
+  relCalls: (name: string, file: string, line?: number) => string;
+  relCallsNone: string;
+  relImpact: (name: string, file: string, line?: number) => string;
+  relImpactNone: string;
+  relImpactDirect: string;
+  relImpactIndirect: (depth: number) => string;
+  relImpactTotal: (n: number) => string;
+
+  // ── Project hygiene ──
+  projNoProjects: string;
+  projHeader: (n: number) => string;
+  projNotFound: (id: string) => string;
+  projRmConfirm: (id: string, n: number) => string;
+  projRmDone: (id: string, n: number) => string;
+  projCancelled: string;
+  projAllScope: string;
+  projPruneNone: string;
+  projPruneConfirm: (scope: string, n: number) => string;
+  projPruneEventsConfirm: (days: number) => string;
+  projPruneDone: (n: number) => string;
+  projPruneEventsDone: (n: number, days: number) => string;
+  projVacuumRunning: string;
+  projVacuumEventsRunning: (days: number) => string;
+  projVacuumDone: string;
 }
 
 const en: Messages = {
@@ -196,6 +247,12 @@ const en: Messages = {
   bsFakeUrl: 'Fake URL (example.com, localhost) — not production-ready',
   bsMagicNumber: 'Magic number — unclear hardcoded value',
   bsLongLine: 'Line over 200 chars — poor readability',
+  bsRustUnwrap: 'unwrap()/expect() in production — runtime panic risk',
+  bsRustTodo: 'todo!()/unimplemented!() — incomplete, must not ship',
+  bsFakeSuccess: 'Fake success print — claims done without real verification',
+  bsFakeData: 'np.random/faker in production — fabricated data',
+  bsRustSilentError: 'Silent error swallow (let _ = / .ok();) — error ignored',
+  bsCatchSwallow: 'catch block swallows exception (no throw/reject) — make it explicit or cxt-ignore',
 
   // Annotate
   annotating: 'Annotating:',
@@ -218,6 +275,49 @@ const en: Messages = {
   // Inject
   injectHeader: (name) => `[Code Registry] ${name} — skip exploratory Read/Grep, use this map`,
   highRiskHeader: 'High-risk (untested + complex):',
+  callGraph: 'Call graph:',
+  callGraphReady: (n) => `${n} edges — use \`cxt who-calls <name>\` / \`cxt impact <name>\` instead of grep`,
+  callGraphMissing: 'none — run `cxt scan` to enable who-calls/impact relation queries',
+  injectTest: 'test',
+  injectRiskHigh: 'risk:HIGH',
+
+  // Audit
+  auditHeader: 'Code Audit',
+  auditTracks: 'Tracks:',
+
+  // Relation
+  relNotFound: (name) => `✗ Entity '${name}' not found in registry. (Run cxt scan first?)`,
+  relScanFirst: '(run `cxt scan` first?)',
+  relAmbiguous: (name, n) => `⚠ '${name}' matches ${n} entities — use qualified name:`,
+  relUseQualified: 'Specify with file::name format.',
+  relNotFoundQualified: (name) => `✗ '${name}' not found.`,
+  relWhoCalls: (name, file, line) => `\n${name} (${file}${line ? ':' + line : ''}) referenced by:`,
+  relNone: '(none — entry point or called only from outside)',
+  relTotal: (n) => `total ${n}`,
+  relCalls: (name, file, line) => `\n${name} (${file}${line ? ':' + line : ''}) references:`,
+  relCallsNone: '(none — leaf function)',
+  relImpact: (name, file, line) => `\nImpact analysis: ${name} (${file}${line ? ':' + line : ''}) — if changed:`,
+  relImpactNone: '✓ No impacted entities (nobody references this)',
+  relImpactDirect: 'direct',
+  relImpactIndirect: (depth) => `indirect (${depth} hops)`,
+  relImpactTotal: (n) => `${n} entities in impact set`,
+
+  // Project hygiene
+  projNoProjects: '(registry is empty)',
+  projHeader: (n) => `Registered projects (${n})`,
+  projNotFound: (id) => `✗ Project '${id}' not found in registry.`,
+  projRmConfirm: (id, n) => `⚠ This deletes ${n} entities of project '${id}'. Continue?`,
+  projRmDone: (id, n) => `✓ Removed '${id}' (${n} entities deleted)`,
+  projCancelled: 'Cancelled.',
+  projAllScope: 'all projects',
+  projPruneNone: '✓ No broken entities — nothing to prune',
+  projPruneConfirm: (scope, n) => `⚠ This deletes ${n} broken entities in ${scope}. Continue?`,
+  projPruneEventsConfirm: (days) => `⚠ Delete events older than ${days} days?`,
+  projPruneDone: (n) => `✓ Pruned ${n} broken entities`,
+  projPruneEventsDone: (n, days) => `✓ Pruned ${n} events older than ${days} days`,
+  projVacuumRunning: 'Running VACUUM...',
+  projVacuumEventsRunning: (days) => `Pruning events older than ${days} days + VACUUM...`,
+  projVacuumDone: '✓ vacuum complete',
 };
 
 const ko: Messages = {
@@ -256,7 +356,7 @@ const ko: Messages = {
   statsScopeProject: (id) => `범위: 프로젝트 "${id}"`,
   statsScopeGlobal: '범위: 전체 프로젝트 (--global)',
   totalEntities: '전체 엔티티:',
-  deprecated: 'Deprecated:',
+  deprecated: '사용 중단:',
   untested: '테스트 없음:',
   highRisk: '고위험:',
   withWarnings: '경고 있음:',
@@ -303,6 +403,12 @@ const ko: Messages = {
   bsFakeUrl: 'example.com 등 가짜 URL — 실 운영 불가',
   bsMagicNumber: '매직 넘버 — 의미 불명확한 하드코딩 숫자',
   bsLongLine: '200자 이상 긴 줄 — 가독성 저하',
+  bsRustUnwrap: 'production unwrap()/expect() — runtime panic 위험',
+  bsRustTodo: 'todo!()/unimplemented!() — 미완성, release 금지',
+  bsFakeSuccess: '가짜 성공 출력 — 실제 검증 없이 완료 선언',
+  bsFakeData: 'np.random/faker로 위장 데이터 생성 (production)',
+  bsRustSilentError: '에러 silent 무시 (let _ = / .ok();) — 예외 은폐',
+  bsCatchSwallow: 'catch 블록이 예외를 삼킴 (throw/reject 없음) — 명시하거나 cxt-ignore',
 
   // Annotate
   annotating: '어노테이션:',
@@ -323,15 +429,61 @@ const ko: Messages = {
   warnExample: '예시: --warn "error/security: SQL injection risk"',
 
   // Inject
-  injectHeader: (name) => `[Code Registry] ${name} — skip exploratory Read/Grep, use this map`,
-  highRiskHeader: 'High-risk (untested + complex):',
+  injectHeader: (name) => `[코드 레지스트리] ${name} — 탐색적 Read/Grep 대신 이 맵 사용`,
+  highRiskHeader: '고위험 (테스트 없음 + 복잡):',
+  callGraph: '호출 그래프:',
+  callGraphReady: (n) => `${n}개 엣지 — grep 대신 \`cxt who-calls <name>\` / \`cxt impact <name>\` 사용`,
+  callGraphMissing: '없음 — who-calls/impact 관계 조회를 활성화하려면 `cxt scan` 실행',
+  injectTest: '테스트',
+  injectRiskHigh: '위험:높음',
+
+  // Audit
+  auditHeader: '코드 감사',
+  auditTracks: '트랙:',
+
+  // Relation
+  relNotFound: (name) => `✗ 엔티티 '${name}' 를 레지스트리에서 찾을 수 없습니다. (cxt scan 먼저 실행?)`,
+  relScanFirst: '(cxt scan 먼저 실행?)',
+  relAmbiguous: (name, n) => `⚠ '${name}' 동명 엔티티 ${n}개 — qualified name으로 지정하세요:`,
+  relUseQualified: 'file::name 형식으로 지정하세요.',
+  relNotFoundQualified: (name) => `✗ '${name}' 없음.`,
+  relWhoCalls: (name, file, line) => `\n${name} (${file}${line ? ':' + line : ''}) 를 참조하는 엔티티:`,
+  relNone: '(없음 — 진입점이거나 외부에서만 호출)',
+  relTotal: (n) => `총 ${n}개`,
+  relCalls: (name, file, line) => `\n${name} (${file}${line ? ':' + line : ''}) 가 참조하는 엔티티:`,
+  relCallsNone: '(없음 — leaf 함수)',
+  relImpact: (name, file, line) => `\n영향 분석: ${name} (${file}${line ? ':' + line : ''}) 를 변경하면 —`,
+  relImpactNone: '✓ 영향받는 엔티티 없음 (아무도 참조하지 않음)',
+  relImpactDirect: '직접',
+  relImpactIndirect: (depth) => `간접(${depth}홉)`,
+  relImpactTotal: (n) => `총 ${n}개 엔티티가 영향권`,
+
+  // Project hygiene
+  projNoProjects: '(레지스트리가 비어 있습니다)',
+  projHeader: (n) => `등록 프로젝트 (${n}개)`,
+  projNotFound: (id) => `✗ 프로젝트 '${id}'를 찾을 수 없습니다.`,
+  projRmConfirm: (id, n) => `⚠ '${id}' 프로젝트의 엔티티 ${n}개를 삭제합니다. 계속?`,
+  projRmDone: (id, n) => `✓ '${id}' 제거 완료 (${n}개 삭제됨)`,
+  projCancelled: '취소됨.',
+  projAllScope: '전체 프로젝트',
+  projPruneNone: '✓ broken 엔티티 없음 — 정리 불필요',
+  projPruneConfirm: (scope, n) => `⚠ ${scope}의 broken 엔티티 ${n}개를 삭제합니다. 계속?`,
+  projPruneEventsConfirm: (days) => `⚠ ${days}일보다 오래된 이벤트를 삭제합니다. 계속?`,
+  projPruneDone: (n) => `✓ broken 엔티티 ${n}개 정리 완료`,
+  projPruneEventsDone: (n, days) => `✓ ${days}일 이전 이벤트 ${n}개 정리 완료`,
+  projVacuumRunning: 'DB VACUUM 실행 중...',
+  projVacuumEventsRunning: (days) => `이벤트 정리 (${days}일 이전) + DB VACUUM 중...`,
+  projVacuumDone: '✓ vacuum 완료',
 };
 
 const locales: Record<Locale, Messages> = { en, ko };
 
 let currentLocale: Locale = 'en';
 
-export function setLocale(locale: Locale): void {
+export function setLocale(locale: Locale | string): void {
+  if (locale !== 'en' && locale !== 'ko') {
+    throw new RangeError(`Unsupported locale: ${escapeTerminal(locale)}`);
+  }
   currentLocale = locale;
 }
 
@@ -339,10 +491,17 @@ export function getLocale(): Locale {
   return currentLocale;
 }
 
-/** Detect locale from environment (LANG, LC_ALL, LANGUAGE) */
+/** Detect locale from environment (LC_ALL, LANGUAGE, LANG) */
 export function detectLocale(): Locale {
-  const envLang = process.env.LC_ALL || process.env.LANG || process.env.LANGUAGE || '';
-  if (/^ko/i.test(envLang)) return 'ko';
+  const isLocale = (value: string, language: Locale): boolean =>
+    new RegExp(`^${language}(?:[-_.@]|$)`, 'i').test(value);
+  const lcAll = process.env.LC_ALL;
+  if (lcAll) return isLocale(lcAll, 'ko') ? 'ko' : 'en';
+  for (const preference of process.env.LANGUAGE?.split(':') ?? []) {
+    if (isLocale(preference, 'ko')) return 'ko';
+    if (isLocale(preference, 'en')) return 'en';
+  }
+  if (isLocale(process.env.LANG ?? '', 'ko')) return 'ko';
   return 'en';
 }
 

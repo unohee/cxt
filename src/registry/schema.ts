@@ -95,8 +95,8 @@ export const CodeEntitySchema = z.object({
   name: z.string().min(1),
   qualifiedName: z.string(), // file_path::name
   filePath: z.string(),
-  lineStart: z.number().optional(),
-  lineEnd: z.number().optional(),
+  lineStart: z.number().int().positive().optional(),
+  lineEnd: z.number().int().positive().optional(),
   signature: z.string().optional(),
   status: EntityStatusSchema.default('active'),
   deprecatedAt: z.string().optional(),
@@ -117,6 +117,10 @@ export const CodeEntitySchema = z.object({
 
   createdAt: z.string(),
   updatedAt: z.string(),
+}).superRefine((entity, ctx) => {
+  if (entity.lineStart !== undefined && entity.lineEnd !== undefined && entity.lineEnd < entity.lineStart) {
+    ctx.addIssue({ code: 'custom', path: ['lineEnd'], message: 'lineEnd must be greater than or equal to lineStart' });
+  }
 });
 
 // 엔티티 필터
@@ -130,8 +134,8 @@ export const CodeEntityFilterSchema = z.object({
   tags: z.array(z.string()).optional(),
   author: z.string().optional(),
   search: z.string().optional(),
-  limit: z.number().default(50),
-  offset: z.number().default(0),
+  limit: z.number().int().min(1).max(100_000).default(50),
+  offset: z.number().int().min(0).max(10_000_000).default(0),
 });
 
 // 파일 브리핑

@@ -6,10 +6,11 @@
 // ============================================
 
 import { writeFileSync, mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import { getRegistryStore, closeRegistryStore } from '../registry/sqliteStore.js';
 import { resolveProjectId } from './checkHandler.js';
 import type { CodeEntity } from '../registry/schema.js';
+import { escapeTerminal, pathMatchesDir, resolveProjectDirFilter } from './outputSafety.js';
 
 interface ExportOptions {
   output?: string;
@@ -57,13 +58,18 @@ function insertEntity(root: DirNode, e: CodeEntity): void {
 }
 
 function escapeString(s: string): string {
-  return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, ' ').trim();
+  return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/[\r\n\u2028\u2029]/g, ' ').replace(/[\u0000-\u001f\u007f-\u009f]/g, '').trim();
 }
+
+const quoted = (s: string): string => `"${escapeString(s)}"`;
+const token = (s: string): string => escapeString(s).replace(/[^A-Za-z0-9_.:/-]/g, (ch) =>
+  `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`
+);
 
 function entityAttrs(e: CodeEntity): string {
   const attrs: string[] = [];
-  attrs.push(`status:${e.status}`);
-  attrs.push(`risk:${e.riskLevel}`);
+  attrs.push(`status:${token(e.status)}`);
+  attrs.push(`risk:${token(e.riskLevel)}`);
   attrs.push(`tested:${e.hasTests ? 'yes' : 'no'}`);
   if (e.lineStart) {
     attrs.push(`lines:${e.lineStart}${e.lineEnd ? `-${e.lineEnd}` : ''}`);
@@ -79,8 +85,8 @@ type EdgeMap = Map<string, Array<{ name: string; type: string }>>;
 
 function renderEntity(e: CodeEntity, indent: string, edges?: EdgeMap): string[] {
   const lines: string[] = [];
-  const sig = e.signature ? ` ${escapeString(e.signature)}` : '';
-  const head = `${indent}${e.kind} ${e.name}${sig} [${entityAttrs(e)}]`;
+  const sig = e.signature ? ` signature:${quoted(e.signature)}` : '';
+  const head = `${indent}${token(e.kind)} ${token(e.name)}${sig} [${entityAttrs(e)}]`;
 
   const inner: string[] = [];
   if (e.deprecatedReason) {
@@ -91,14 +97,14 @@ function renderEntity(e: CodeEntity, indent: string, edges?: EdgeMap): string[] 
   }
   const unresolvedWarnings = (e.warnings ?? []).filter((w) => !w.resolved);
   for (const w of unresolvedWarnings) {
-    inner.push(`${indent}  warning [${w.severity}/${w.category}]: "${escapeString(w.message)}"`);
+    inner.push(`${indent}  warning [${quoted(w.severity)}/${quoted(w.category)}]: ${quoted(w.message)}`);
   }
   const outEdges = edges?.get(e.id);
   if (outEdges && outEdges.length > 0) {
     const calls = outEdges.filter((r) => r.type === 'calls').map((r) => r.name);
     const inherits = outEdges.filter((r) => r.type !== 'calls').map((r) => `${r.type}:${r.name}`);
-    if (calls.length > 0) inner.push(`${indent}  calls: ${calls.join(', ')}`);
-    if (inherits.length > 0) inner.push(`${indent}  ${inherits.join(', ')}`);
+    if (calls.length > 0) inner.push(`${indent}  calls: ${calls.map(quoted).join(', ')}`);
+    if (inherits.length > 0) inner.push(`${indent}  relations: ${inherits.map(quoted).join(', ')}`);
   }
 
   if (inner.length === 0) {
@@ -149,7 +155,7 @@ function renderDir(node: DirNode, indent: string, edges?: EdgeMap): string[] {
   if (agg.deprecated > 0) flags.push(`deprecated:${agg.deprecated}`);
 
   const dirLabel = node.path === '' ? '.' : `${node.name}/`;
-  lines.push(`${indent}directory "${dirLabel}" [${flags.join(', ')}] {`);
+  lines.push(`${indent}directory ${quoted(dirLabel)} [${flags.join(', ')}] {`);
 
   const childIndent = indent + '  ';
 
@@ -171,7 +177,7 @@ function renderDir(node: DirNode, indent: string, edges?: EdgeMap): string[] {
     if (untested > 0) fileFlags.push(`untested:${untested}`);
     if (highRisk > 0) fileFlags.push(`high_risk:${highRisk}`);
 
-    lines.push(`${childIndent}file "${file.fileName}" [${fileFlags.join(', ')}] {`);
+    lines.push(`${childIndent}file ${quoted(file.fileName)} [${fileFlags.join(', ')}] {`);
     for (const e of ents) {
       lines.push(...renderEntity(e, childIndent + '  ', edges));
     }
@@ -187,16 +193,26 @@ export async function handleExport(opts: ExportOptions): Promise<void> {
     const store = getRegistryStore();
     const projectPath = process.cwd();
     const projectId = opts.project ?? resolveProjectId(projectPath);
-    const projectName = projectPath.split('/').pop() ?? 'unknown';
+    const projectName = basename(projectPath) || 'unknown';
 
-    const { entities } = store.listEntities({ projectId, limit: 100000, offset: 0 });
+    const entities: CodeEntity[] = [];
+    const pageSize = 5_000;
+    for (let offset = 0; ; offset += pageSize) {
+      const page = store.listEntities({ projectId, limit: pageSize, offset }).entities;
+      entities.push(...page);
+      if (page.length < pageSize) break;
+    }
 
-    const filtered = opts.dir
-      ? entities.filter((e) => e.filePath.startsWith(opts.dir!))
-      : entities;
+    // INT-1476: broken(좀비) 엔티티는 스냅샷에서 제외 — 사라진 코드가 구조도를 오염하지 않도록.
+    const alive = entities.filter((e) => e.status !== 'broken');
+
+    const dirFilter = resolveProjectDirFilter(projectPath, opts.dir);
+    const filtered = dirFilter
+      ? alive.filter((e) => pathMatchesDir(e.filePath, dirFilter))
+      : alive;
 
     if (filtered.length === 0) {
-      console.error(`# cxt export — no entities found${opts.dir ? ` under "${opts.dir}"` : ''}`);
+      console.error(`# cxt export — no entities found${opts.dir ? ` under "${escapeTerminal(opts.dir)}"` : ''}`);
       console.error(`# Run \`cxt scan\` first.`);
       process.exitCode = 1;
       return;
@@ -205,15 +221,15 @@ export async function handleExport(opts: ExportOptions): Promise<void> {
     const root = makeDir('', '');
     for (const e of filtered) insertEntity(root, e);
 
-    const stats = store.getStats(projectId);
+    const stats = store.getStats(projectId, dirFilter);
     const generatedAt = new Date().toISOString();
 
     const header: string[] = [
       `# cxt snapshot`,
-      `# project: ${projectName} (${projectId})`,
+      `# project: ${escapeString(projectName)} (${escapeString(projectId)})`,
       `# generated: ${generatedAt}`,
       `# entities: ${filtered.length}/${stats.total}` +
-        (opts.dir ? ` (filtered by dir: ${opts.dir})` : ''),
+        (opts.dir ? ` (filtered by dir: ${JSON.stringify(opts.dir)})` : ''),
       `# stats: deprecated=${stats.deprecated}, untested=${stats.untested}, high_risk=${stats.highRisk}, with_warnings=${stats.withWarnings}`,
       `#`,
       `# Format: GraphQL-inspired tree. Each entity carries [status, risk, tested, lines].`,
@@ -230,7 +246,7 @@ export async function handleExport(opts: ExportOptions): Promise<void> {
       const outPath = resolve(opts.output);
       mkdirSync(dirname(outPath), { recursive: true });
       writeFileSync(outPath, out, 'utf-8');
-      console.error(`# wrote ${filtered.length} entities → ${outPath}`);
+      console.error(`# wrote ${filtered.length} entities → ${escapeTerminal(outPath)}`);
     } else {
       process.stdout.write(out);
     }

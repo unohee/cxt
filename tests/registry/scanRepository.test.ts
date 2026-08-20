@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, beforeEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -78,6 +78,18 @@ describe('scanRepository — file walking + test mapping', () => {
 
     const result = await scanRepository(projectDir, 'tproj-4');
     expect(result.scanned).toBe(1);
+  });
+
+  it('applies ordered file ignore rules before extracting entities', async () => {
+    write('.cxtignore', '*.generated.ts\n!keep.generated.ts\n');
+    write('drop.generated.ts', 'export function dropped() {}');
+    write('keep.generated.ts', 'export function kept() {}');
+
+    const result = await scanRepository(projectDir, 'tproj-ignore-files');
+    const store = getRegistryStore();
+    expect(result.scanned).toBe(1);
+    expect(store.findEntitiesByName('dropped', 'tproj-ignore-files')).toHaveLength(0);
+    expect(store.findEntitiesByName('kept', 'tproj-ignore-files')).toHaveLength(1);
   });
 
   it('returns language breakdown for multiple languages', async () => {
@@ -245,5 +257,93 @@ export function user() { return 99; }
     await scanRepository(projectDir, 'rel-6');
     const store = getRegistryStore();
     expect(store.countRelations('rel-6')).toBe(0);
+  });
+
+  it('preserves existing edges when an oversized file makes the scan incomplete', async () => {
+    write('src/r.ts', `
+export function target() { return 1; }
+export function user() { return target(); }
+`.trim());
+    await scanRepository(projectDir, 'rel-partial');
+    const store = getRegistryStore();
+    const before = store.countRelations('rel-partial');
+    expect(before).toBeGreaterThan(0);
+
+    write('src/oversized.ts', 'export const huge = "' + 'x'.repeat(600 * 1024) + '";');
+    const result = await scanRepository(projectDir, 'rel-partial');
+
+    expect(result.errors.some((error) => error.includes('oversized.ts'))).toBe(true);
+    expect(result.relationsLoaded).toBe(0);
+    expect(store.countRelations('rel-partial')).toBe(before);
+  });
+
+  it('rolls back reconciliation when registering the new snapshot fails', async () => {
+    write('src/r.ts', 'export function target() { return 1; }\nexport function user() { return target(); }');
+    await scanRepository(projectDir, 'rel-persist-failure');
+    const store = getRegistryStore();
+    const relationsBefore = store.countRelations('rel-persist-failure');
+
+    write('src/r.ts', 'export function target() { return 2; }\nexport function replacement() { return target(); }');
+    const register = vi.spyOn(store, 'registerEntity').mockImplementationOnce(() => {
+      throw new Error('database is full');
+    });
+    const result = await scanRepository(projectDir, 'rel-persist-failure');
+    register.mockRestore();
+
+    expect(result.errors).toContain('register src/r.ts::replacement: database is full');
+    expect(result.registered).toBe(0);
+    expect(result.relationsLoaded).toBe(0);
+    expect(store.getEntityByName('src/r.ts::user', 'rel-persist-failure')?.status).toBe('active');
+    expect(store.countRelations('rel-persist-failure')).toBe(relationsBefore);
+  });
+});
+
+describe('scanRepository — broken zombie restore (INT-1477)', () => {
+  it('restores scanner-authored broken entities to active when rediscovered, reviving relations and name lookup', async () => {
+    const store = getRegistryStore();
+    const code = 'export function alpha() { return 1; }\nexport function beta() { return alpha(); }';
+
+    // 1차 스캔: alpha/beta 등록 + beta→alpha edge
+    write('src/a.ts', code);
+    await scanRepository(projectDir, 'tproj-restore');
+    expect(store.getEntityByName('src/a.ts::beta', 'tproj-restore')?.status).toBe('active');
+    expect(store.countRelations('tproj-restore')).toBeGreaterThanOrEqual(1);
+
+    // beta 삭제 → broken + edge 소멸 + 이름 검색에서 제외
+    write('src/a.ts', 'export function alpha() { return 1; }');
+    await scanRepository(projectDir, 'tproj-restore');
+    expect(store.getEntityByName('src/a.ts::beta', 'tproj-restore')?.status).toBe('broken');
+    expect(store.findEntitiesByName('beta', 'tproj-restore')).toHaveLength(0);
+    expect(store.countRelations('tproj-restore')).toBe(0);
+
+    // beta 복구 → active 복원 + edge 부활 + 이름 검색 복귀
+    write('src/a.ts', code);
+    const r3 = await scanRepository(projectDir, 'tproj-restore');
+    expect(r3.registered).toBe(0); // 새 등록이 아니라 기존 행 복원이어야 함
+    const beta = store.getEntityByName('src/a.ts::beta', 'tproj-restore');
+    expect(beta?.status).toBe('active');
+    expect(store.findEntitiesByName('beta', 'tproj-restore')).toHaveLength(1);
+
+    const alpha = store.findEntitiesByName('alpha', 'tproj-restore')[0];
+    const callers = store.getIncomingRelations(alpha.id, 'calls');
+    expect(callers.some(r => r.sourceName === 'beta')).toBe(true);
+  });
+
+  it('does not restore broken entities that were not authored by the scanner', async () => {
+    const store = getRegistryStore();
+    const manual = store.registerEntity({
+      projectId: 'tproj-manual',
+      kind: 'function',
+      name: 'gamma',
+      filePath: 'src/m.ts',
+      status: 'active',
+      author: 'human',
+    });
+    store.changeEntityStatus(manual.id, 'broken');
+
+    write('src/m.ts', 'export function gamma() { return 3; }');
+    await scanRepository(projectDir, 'tproj-manual');
+
+    expect(store.getEntity(manual.id)?.status).toBe('broken');
   });
 });

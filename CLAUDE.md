@@ -23,7 +23,12 @@ src/
 ├── index.ts                  # Public API export
 ├── i18n.ts                   # i18n (en/ko) with LANG auto-detection
 ├── cli/
-│   └── checkHandler.ts       # check/annotate handlers
+│   ├── checkHandler.ts       # check/scan/bs/annotate handlers
+│   ├── auditHandler.ts       # audit handler (BS scan + registry integrity)
+│   ├── relationHandler.ts    # who-calls/calls/impact (call-graph queries)
+│   ├── exportHandler.ts      # GraphQL-like SDL snapshot
+│   ├── locHandler.ts         # LOC report
+│   └── initHandler.ts        # AI agent instruction injection
 └── registry/
     ├── schema.ts             # Zod schemas + type definitions
     ├── sqliteStore.ts        # SQLite + FTS5 registry (better-sqlite3)

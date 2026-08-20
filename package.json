@@ -19,6 +19,8 @@
     "dev": "node --import=tsx src/cli.ts",
     "lint": "tsc --noEmit",
     "test": "vitest run",
+    "test:bench-harness": "node --test testing/cxt_bench_codex.test.mjs",
+    "bench:codex": "node testing/cxt_bench_codex.mjs",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "prepublishOnly": "npm run build && npm test"
