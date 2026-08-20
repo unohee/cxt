@@ -42,6 +42,10 @@ export interface RegisterEntityInput {
   maintainer?: string;
   complexityScore?: number;
   riskLevel?: RiskLevel;
+  isExported?: boolean;
+  loc?: number;
+  nestingDepth?: number;
+  paramCount?: number;
   description?: string;
   notes?: string;
   tags?: { tag: string; value?: string }[];
@@ -57,6 +61,10 @@ export interface UpdateEntityInput {
   maintainer?: string;
   complexityScore?: number;
   riskLevel?: RiskLevel;
+  isExported?: boolean;
+  loc?: number;
+  nestingDepth?: number;
+  paramCount?: number;
   description?: string;
   notes?: string;
 }
@@ -89,6 +97,10 @@ interface EntityRow {
   maintainer: string | null;
   complexity_score: number | null;
   risk_level: string;
+  is_exported: number | null;
+  loc: number | null;
+  nesting_depth: number | null;
+  param_count: number | null;
   description: string | null;
   notes: string | null;
   created_at: string;
@@ -166,14 +178,34 @@ export class SqliteRegistryStore {
   // 스키마 버전 — 변경 시 반드시 증가. migrate()의 핵심 마이그레이션 단계와 1:1 대응.
   // INT-1478: user_version 가드로 FTS rebuild를 최초 1회만 수행.
   // INT-1475: v2 = qualified_name 전역 UNIQUE → UNIQUE(project_id, qualified_name) 복합 제약.
-  private static readonly SCHEMA_VERSION = 2;
+  // INT-3881: v3 = relations 역방향 인덱스 + scanner 메트릭 컬럼 회수(is_exported/loc/
+  //           nesting_depth/param_count) + status/risk_level CHECK 제약(테이블 리빌드).
+  //           kind CHECK는 의도적으로 제외 — P1(tree-sitter 프론트엔드)에서 EntityKind가
+  //           확장될 가능성이 높아 지금 고정하면 또 한 번의 리빌드를 강제한다.
+  //           relations의 relation_type CHECK는 P2 v4(code_call_sites 신설)에서 함께 처리.
+  private static readonly SCHEMA_VERSION = 3;
 
-  private migrate(): void {
-    const currentVersion = (this.db.pragma('user_version', { simple: true }) as number) ?? 0;
+  // FTS 인덱스 스키마(인덱싱 컬럼 집합)가 마지막으로 바뀐 버전. user_version 승급과
+  // 분리한다 — v2까지는 "버전이 오르면 무조건 rebuild"였는데, 그 결합은 FTS와 무관한
+  // 마이그레이션(v3+)까지 전체 rebuild를 강제한다(396k 엔티티에서 3.3s, INT-1478).
+  private static readonly FTS_SCHEMA_VERSION = 2;
 
-    // ── 초기 테이블 생성 (idempotent) ──
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS code_entities (
+  // 엔티티 테이블의 정본 컬럼 목록 — DDL·리빌드 INSERT가 전부 여기서 파생된다.
+  // 복제된 DDL 3벌(초기/v2/v3)이 조용히 어긋나는 드리프트를 차단.
+  private static readonly ENTITY_COLUMNS = [
+    'id', 'project_id', 'kind', 'name', 'qualified_name', 'file_path',
+    'line_start', 'line_end', 'signature', 'status',
+    'deprecated_at', 'deprecated_reason', 'has_tests', 'test_file',
+    'author', 'maintainer', 'complexity_score', 'risk_level',
+    'is_exported', 'loc', 'nesting_depth', 'param_count',
+    'description', 'notes', 'created_at', 'updated_at',
+  ] as const;
+
+  // 정본 테이블 DDL. kind CHECK는 의도적으로 없다 — P1(tree-sitter 프론트엔드)에서
+  // EntityKind 확장이 예정돼 있어 지금 고정하면 또 한 번의 테이블 리빌드를 강제한다.
+  private static entityTableDdl(tableName: string, ifNotExists = false): string {
+    return `
+      CREATE TABLE ${ifNotExists ? 'IF NOT EXISTS ' : ''}${tableName} (
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL,
         kind TEXT NOT NULL,
@@ -191,13 +223,39 @@ export class SqliteRegistryStore {
         author TEXT,
         maintainer TEXT,
         complexity_score INTEGER,
-        risk_level TEXT DEFAULT 'low',
+        risk_level TEXT DEFAULT 'low' CHECK (risk_level IN ('low', 'medium', 'high')),
+        is_exported INTEGER DEFAULT 0,
+        loc INTEGER,
+        nesting_depth INTEGER,
+        param_count INTEGER,
         description TEXT DEFAULT '',
         notes TEXT DEFAULT '',
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-        UNIQUE(project_id, qualified_name)
-      );`);
+        UNIQUE(project_id, qualified_name),
+        CHECK (status IN ('active', 'deprecated', 'experimental', 'planned', 'broken'))
+      );`;
+  }
+
+  // 리빌드 대상 테이블에 CHECK가 걸리므로, 위반이 될 행을 먼저 유효값으로 정정한다.
+  // 행을 떨어뜨리는 INSERT OR IGNORE의 침묵 유실 대신 명시적 정정 + stderr 1줄 고지.
+  private coerceInvalidEnumRows(): void {
+    const coercedStatus = this.db.prepare(
+      "UPDATE code_entities SET status = 'active' WHERE status IS NULL OR status NOT IN ('active','deprecated','experimental','planned','broken')"
+    ).run().changes;
+    const coercedRisk = this.db.prepare(
+      "UPDATE code_entities SET risk_level = 'low' WHERE risk_level IS NULL OR risk_level NOT IN ('low','medium','high')"
+    ).run().changes;
+    if (coercedStatus + coercedRisk > 0) {
+      console.error(`[cxt migrate] coerced ${coercedStatus} invalid status / ${coercedRisk} invalid risk_level rows to defaults`);
+    }
+  }
+
+  private migrate(): void {
+    const currentVersion = (this.db.pragma('user_version', { simple: true }) as number) ?? 0;
+
+    // ── 초기 테이블 생성 (idempotent) ──
+    this.db.exec(SqliteRegistryStore.entityTableDdl('code_entities', true));
 
     // ── 이전 스키마에서 누락된 컬럼 추가 ──
     const colInfo = this.db.prepare("PRAGMA table_info(code_entities)").all() as Array<{ name: string; notnull: number }>;
@@ -212,11 +270,19 @@ export class SqliteRegistryStore {
       ['description', "ALTER TABLE code_entities ADD COLUMN description TEXT DEFAULT ''"],
       ['notes', "ALTER TABLE code_entities ADD COLUMN notes TEXT DEFAULT ''"],
     ];
+    // 주의: v3 신규 컬럼(is_exported 등)은 여기가 아니라 아래 v3 단계에서 추가한다.
+    // 레거시 리빌드(v1→v2, line_start)가 `SELECT *`로 복사하므로, 리빌드 전에 컬럼을
+    // 추가하면 대상 테이블(22컬럼)과 소스(26컬럼)의 컬럼 수가 어긋나 마이그레이션이 깨진다.
     for (const [col, sql] of addColMigrations) {
       if (!existingCols.has(col)) {
         this.db.exec(sql);
       }
     }
+
+    // 테이블 리빌드 발생 추적 — 리빌드는 rowid를 재할당하므로 external-content FTS의
+    // rowid 매핑이 깨진다. 리빌드가 하나라도 발생하면 FTS rebuild를 강제해야 한다.
+    // (v2까지는 "버전 승급 = 무조건 rebuild"라 우연히 안전했던 결합을 명시적으로 대체.)
+    let tableRebuilt = false;
 
     // ── v1 → v2: qualified_name 전역 UNIQUE → UNIQUE(project_id, qualified_name) ──
     // 구 스키마는 qualified_name에 단일 UNIQUE 인덱스가 있어 다른 project_id에서
@@ -231,7 +297,19 @@ export class SqliteRegistryStore {
       });
 
       if (hasOldUniqueOnQName) {
-        // 테이블 재생성으로 제약 변경 (SQLite는 DROP CONSTRAINT 미지원)
+        // 테이블 재생성으로 제약 변경 (SQLite는 DROP CONSTRAINT 미지원).
+        // 타깃은 현행 정본 DDL(v3 형태, CHECK 포함) — 이 경로를 지난 DB는 v3 리빌드가
+        // 다시 필요 없다. CHECK 위반이 될 행은 복사 전에 정정한다.
+        this.coerceInvalidEnumRows();
+
+        // 소스 컬럼 집합은 DB 세대에 따라 다르다(진짜 v1 = 22개, 현행 스키마에서 파생된
+        // 테스트 픽스처 = 26개). SELECT * 는 컬럼 수/순서 불일치로 깨지므로, 정본 컬럼
+        // 목록과 소스의 교집합을 명시 나열한다. 이름은 고정 allowlist에서만 나온다.
+        const v2SrcCols = new Set(
+          (this.db.prepare("PRAGMA table_info(code_entities)").all() as Array<{ name: string }>).map(r => r.name)
+        );
+        const v2CopyCols = SqliteRegistryStore.ENTITY_COLUMNS.filter(c => v2SrcCols.has(c)).join(', ');
+
         this.db.pragma('foreign_keys = OFF');
         try {
           this.db.transaction(() => this.db.exec(`
@@ -241,35 +319,13 @@ export class SqliteRegistryStore {
           DROP TABLE IF EXISTS code_entities_fts;
           DROP TABLE IF EXISTS code_entities_v2;
 
-          CREATE TABLE code_entities_v2 (
-            id TEXT PRIMARY KEY,
-            project_id TEXT NOT NULL,
-            kind TEXT NOT NULL,
-            name TEXT NOT NULL,
-            qualified_name TEXT NOT NULL,
-            file_path TEXT NOT NULL,
-            line_start INTEGER,
-            line_end INTEGER,
-            signature TEXT,
-            status TEXT DEFAULT 'active',
-            deprecated_at TEXT,
-            deprecated_reason TEXT,
-            has_tests INTEGER DEFAULT 0,
-            test_file TEXT,
-            author TEXT,
-            maintainer TEXT,
-            complexity_score INTEGER,
-            risk_level TEXT DEFAULT 'low',
-            description TEXT DEFAULT '',
-            notes TEXT DEFAULT '',
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-            UNIQUE(project_id, qualified_name)
-          );
-          INSERT OR IGNORE INTO code_entities_v2 SELECT * FROM code_entities;
+          ${SqliteRegistryStore.entityTableDdl('code_entities_v2')}
+          INSERT OR IGNORE INTO code_entities_v2 (${v2CopyCols})
+            SELECT ${v2CopyCols} FROM code_entities;
           DROP TABLE code_entities;
           ALTER TABLE code_entities_v2 RENAME TO code_entities;
           `))();
+          tableRebuilt = true;
         } finally {
           this.db.pragma('foreign_keys = ON');
         }
@@ -334,8 +390,62 @@ export class SqliteRegistryStore {
         DROP TABLE code_entities;
         ALTER TABLE code_entities_new RENAME TO code_entities;
         `))();
+        tableRebuilt = true;
       } finally {
         this.db.pragma('foreign_keys = ON');
+      }
+    }
+
+    // ── v2 → v3 (INT-3881): scanner 메트릭 컬럼 회수 + status/risk_level CHECK ──
+    // 반드시 레거시 리빌드(v1→v2, line_start) 뒤에서 실행 — 그 단계들은 SELECT * 복사라
+    // 새 컬럼이 먼저 추가되면 컬럼 수가 어긋난다. 컬럼 추가는 idempotent하게 항상 검사.
+    {
+      const v3ColInfo = this.db.prepare("PRAGMA table_info(code_entities)").all() as Array<{ name: string }>;
+      const v3Cols = new Set(v3ColInfo.map(r => r.name));
+      const v3AddCols: Array<[string, string]> = [
+        ['is_exported', 'ALTER TABLE code_entities ADD COLUMN is_exported INTEGER DEFAULT 0'],
+        ['loc', 'ALTER TABLE code_entities ADD COLUMN loc INTEGER'],
+        ['nesting_depth', 'ALTER TABLE code_entities ADD COLUMN nesting_depth INTEGER'],
+        ['param_count', 'ALTER TABLE code_entities ADD COLUMN param_count INTEGER'],
+      ];
+      for (const [col, sql] of v3AddCols) {
+        if (!v3Cols.has(col)) this.db.exec(sql);
+      }
+
+      // CHECK 제약은 CREATE TABLE에서만 선언 가능 → 없는 기존 테이블은 리빌드로 교체.
+      // kind CHECK는 의도적으로 제외(P1에서 EntityKind 확장 예정 — 지금 고정하면 또 리빌드).
+      const tableSqlRow = this.db.prepare(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='code_entities'"
+      ).get() as { sql: string } | undefined;
+      const hasStatusCheck = !!tableSqlRow && /CHECK\s*\(\s*status\s+IN/i.test(tableSqlRow.sql);
+
+      if (currentVersion < 3 && !hasStatusCheck) {
+        // 보존 우선: CHECK 위반이 될 행을 먼저 유효값으로 정정한 뒤 straight INSERT로
+        // 복사한다 — 행을 떨어뜨리는 INSERT OR IGNORE의 침묵 유실을 차단.
+        this.coerceInvalidEnumRows();
+
+        // 위에서 v3 컬럼 4개를 보강했으므로 소스는 정본 컬럼 전체를 보유한다.
+        const v3CopyCols = SqliteRegistryStore.ENTITY_COLUMNS.join(', ');
+
+        this.db.pragma('foreign_keys = OFF');
+        try {
+          this.db.transaction(() => this.db.exec(`
+          DROP TRIGGER IF EXISTS ce_fts_ai;
+          DROP TRIGGER IF EXISTS ce_fts_ad;
+          DROP TRIGGER IF EXISTS ce_fts_au;
+          DROP TABLE IF EXISTS code_entities_fts;
+          DROP TABLE IF EXISTS code_entities_v3;
+
+          ${SqliteRegistryStore.entityTableDdl('code_entities_v3')}
+          INSERT INTO code_entities_v3 (${v3CopyCols})
+            SELECT ${v3CopyCols} FROM code_entities;
+          DROP TABLE code_entities;
+          ALTER TABLE code_entities_v3 RENAME TO code_entities;
+          `))();
+          tableRebuilt = true;
+        } finally {
+          this.db.pragma('foreign_keys = ON');
+        }
       }
     }
 
@@ -401,11 +511,16 @@ export class SqliteRegistryStore {
       CREATE INDEX IF NOT EXISTS idx_ce_tags_tag ON code_entity_tags(tag);
       CREATE INDEX IF NOT EXISTS idx_ce_warnings_sev ON code_entity_warnings(severity);
       CREATE INDEX IF NOT EXISTS idx_ce_warnings_entity ON code_entity_warnings(entity_id);
+      -- INT-3881(v3): 역방향 조회 인덱스. relations의 유일한 인덱스였던 PK는 선두가
+      -- source_id라 who-calls/impact의 WHERE target_id = ? 가 매 홉 풀스캔이었다.
+      CREATE INDEX IF NOT EXISTS idx_cer_target ON code_entity_relations(target_id, relation_type);
     `);
 
     // ── FTS 가상 테이블 + 트리거 ──
-    // INT-1478: 버전이 올라간 경우(최초 또는 스키마 변경)에만 rebuild 수행.
-    const needsFtsRebuild = currentVersion < SqliteRegistryStore.SCHEMA_VERSION;
+    // INT-1478: 최초 1회 또는 FTS 인덱싱 컬럼이 실제로 바뀐 버전에서만 rebuild.
+    // INT-3881: user_version 승급과 분리 — FTS 무관 마이그레이션(v3+)이 전체 rebuild를
+    // 강제하지 않도록. 단 테이블 리빌드가 일어났다면 rowid가 재할당됐으므로 강제 rebuild.
+    const needsFtsRebuild = currentVersion < SqliteRegistryStore.FTS_SCHEMA_VERSION || tableRebuilt;
 
     if (needsFtsRebuild) {
       this.db.exec(`
@@ -443,8 +558,8 @@ export class SqliteRegistryStore {
       END;
     `);
 
-    // 버전 기록 (마이그레이션이 모두 끝난 뒤)
-    if (needsFtsRebuild) {
+    // 버전 기록 (마이그레이션이 모두 끝난 뒤) — FTS rebuild 여부와 무관하게 승급한다.
+    if (currentVersion < SqliteRegistryStore.SCHEMA_VERSION) {
       this.db.pragma(`user_version = ${SqliteRegistryStore.SCHEMA_VERSION}`);
     }
   }
@@ -466,9 +581,11 @@ export class SqliteRegistryStore {
         id, project_id, kind, name, qualified_name, file_path,
         line_start, line_end, signature, status,
         has_tests, test_file, author, maintainer,
-        complexity_score, risk_level, description, notes,
+        complexity_score, risk_level,
+        is_exported, loc, nesting_depth, param_count,
+        description, notes,
         created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const insertTag = this.db.prepare(
@@ -488,6 +605,8 @@ export class SqliteRegistryStore {
         input.hasTests ? 1 : 0, input.testFile ?? null,
         input.author ?? null, input.maintainer ?? null,
         input.complexityScore ?? null, input.riskLevel ?? 'low',
+        input.isExported ? 1 : 0, input.loc ?? null,
+        input.nestingDepth ?? null, input.paramCount ?? null,
         input.description ?? '', input.notes ?? '',
         now, now,
       );
@@ -544,14 +663,17 @@ export class SqliteRegistryStore {
       name: 'name', lineStart: 'line_start', lineEnd: 'line_end',
       signature: 'signature', hasTests: 'has_tests', testFile: 'test_file',
       maintainer: 'maintainer', complexityScore: 'complexity_score',
-      riskLevel: 'risk_level', description: 'description', notes: 'notes',
+      riskLevel: 'risk_level',
+      isExported: 'is_exported', loc: 'loc',
+      nestingDepth: 'nesting_depth', paramCount: 'param_count',
+      description: 'description', notes: 'notes',
     };
 
     for (const [key, col] of Object.entries(fieldMap)) {
       if (key in patch && (patch as Record<string, unknown>)[key] !== undefined) {
         const val = (patch as Record<string, unknown>)[key];
         fields.push(`${col} = ?`);
-        values.push(key === 'hasTests' ? (val ? 1 : 0) : (val ?? null));
+        values.push(key === 'hasTests' || key === 'isExported' ? (val ? 1 : 0) : (val ?? null));
       }
     }
 
@@ -887,36 +1009,39 @@ export class SqliteRegistryStore {
   }
 
   /**
-   * transitive 역방향 BFS — "X를 고치면 영향받는 엔티티 전체".
-   * depth별로 grouping해 반환. 사이클 안전.
+   * transitive 역방향 도달 집합 — "X를 고치면 영향받는 엔티티 전체".
+   * INT-3881(v3): JS BFS → 재귀 CTE. 홉마다 prepared statement를 재실행하던 왕복을
+   * 단일 쿼리로 대체하고, idx_cer_target 인덱스가 JOIN을 서비스한다.
+   *
+   * BFS 시맨틱 보존 노트:
+   * - UNION(not ALL)이 (id, depth) 튜플을 dedup하고 depth < maxDepth가 사이클을 종결.
+   * - MIN(depth)가 기존 visited-set BFS의 "최단 거리" 시맨틱을 재현.
+   * - root 제외는 depth 조건이 아니라 id != root — 사이클로 root에 depth>0으로
+   *   재도달한 행이 GROUP BY 전에 depth 필터를 통과해 살아남는 것을 막는다.
+   * - 결과는 depth 오름차순(같은 depth 내 이름순) — 소비자는 depth 그룹핑만 가정한다.
    */
   getImpactSet(
     rootEntityId: string,
     maxDepth = 5,
   ): Array<{ id: string; name: string; filePath: string; depth: number }> {
-    const visited = new Set<string>([rootEntityId]);
-    const result: Array<{ id: string; name: string; filePath: string; depth: number }> = [];
-    let frontier = [rootEntityId];
-    const stmt = this.db.prepare(`
-      SELECT DISTINCT r.source_id, e.name, e.file_path
-      FROM code_entity_relations r
-      JOIN code_entities e ON e.id = r.source_id
-      WHERE r.target_id = ?
-    `);
-    for (let depth = 1; depth <= maxDepth && frontier.length > 0; depth++) {
-      const next: string[] = [];
-      for (const id of frontier) {
-        const callers = stmt.all(id) as Array<{ source_id: string; name: string; file_path: string }>;
-        for (const c of callers) {
-          if (visited.has(c.source_id)) continue;
-          visited.add(c.source_id);
-          result.push({ id: c.source_id, name: c.name, filePath: c.file_path, depth });
-          next.push(c.source_id);
-        }
-      }
-      frontier = next;
-    }
-    return result;
+    const rows = this.db.prepare(`
+      WITH RECURSIVE impact(id, depth) AS (
+        SELECT ?, 0
+        UNION
+        SELECT r.source_id, i.depth + 1
+        FROM code_entity_relations r
+        JOIN impact i ON r.target_id = i.id
+        WHERE i.depth < ?
+      )
+      SELECT i.id, e.name, e.file_path, MIN(i.depth) AS depth
+      FROM impact i
+      JOIN code_entities e ON e.id = i.id
+      WHERE i.id != ?
+      GROUP BY i.id
+      ORDER BY depth ASC, e.name ASC
+    `).all(rootEntityId, maxDepth, rootEntityId) as Array<{ id: string; name: string; file_path: string; depth: number }>;
+
+    return rows.map(r => ({ id: r.id, name: r.name, filePath: r.file_path, depth: r.depth }));
   }
 
   /** 프로젝트 전체 정방향 edge를 source_id별로 그룹핑해 일괄 반환 (export N+1 방지). */
@@ -1359,6 +1484,10 @@ export class SqliteRegistryStore {
       maintainer: row.maintainer ?? undefined,
       complexityScore: row.complexity_score ?? undefined,
       riskLevel: row.risk_level as RiskLevel,
+      isExported: row.is_exported == null ? undefined : row.is_exported === 1,
+      loc: row.loc ?? undefined,
+      nestingDepth: row.nesting_depth ?? undefined,
+      paramCount: row.param_count ?? undefined,
       description: row.description ?? '',
       notes: row.notes ?? '',
       tags,

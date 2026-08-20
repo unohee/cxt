@@ -1125,6 +1125,10 @@ export async function scanRepository(
           testFile,
           complexityScore: score,
           riskLevel,
+          isExported: ext.isExported,
+          loc: ext.loc,
+          nestingDepth: ext.nestingDepth,
+          paramCount: ext.paramCount,
           author: 'scanner',
         });
         registered++;
@@ -1148,7 +1152,12 @@ export async function scanRepository(
         existingEntity.hasTests !== hasTests ||
         existingEntity.testFile !== testFile ||
         existingEntity.complexityScore !== score ||
-        existingEntity.riskLevel !== riskLevel;
+        existingEntity.riskLevel !== riskLevel ||
+        // v3 컬럼: 구 스캔의 NULL(undefined)과 신규 값이 다르면 채워 넣는다.
+        existingEntity.isExported !== ext.isExported ||
+        existingEntity.loc !== ext.loc ||
+        existingEntity.nestingDepth !== ext.nestingDepth ||
+        existingEntity.paramCount !== ext.paramCount;
 
       if (needsUpdate) {
         store.updateEntity(existingEntity.id, {
@@ -1159,6 +1168,10 @@ export async function scanRepository(
           testFile,
           complexityScore: score,
           riskLevel,
+          isExported: ext.isExported,
+          loc: ext.loc,
+          nestingDepth: ext.nestingDepth,
+          paramCount: ext.paramCount,
         }, 'scanner');
         if (existingEntity.status !== 'broken') updated++;
       }

@@ -483,3 +483,241 @@ describe('SqliteRegistryStore — registry hygiene (INT-1476/1479)', () => {
     expect(() => h.store.vacuum()).not.toThrow();
   });
 });
+
+describe('SqliteRegistryStore — v3 migration (INT-3881)', () => {
+  /** Exact v2-era table shape: 22 columns, composite UNIQUE, no CHECK constraints. */
+  const V2_ENTITY_DDL = `
+    CREATE TABLE code_entities (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      name TEXT NOT NULL,
+      qualified_name TEXT NOT NULL,
+      file_path TEXT NOT NULL,
+      line_start INTEGER,
+      line_end INTEGER,
+      signature TEXT,
+      status TEXT DEFAULT 'active',
+      deprecated_at TEXT,
+      deprecated_reason TEXT,
+      has_tests INTEGER DEFAULT 0,
+      test_file TEXT,
+      author TEXT,
+      maintainer TEXT,
+      complexity_score INTEGER,
+      risk_level TEXT DEFAULT 'low',
+      description TEXT DEFAULT '',
+      notes TEXT DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(project_id, qualified_name)
+    );
+    CREATE TABLE code_entity_tags (
+      entity_id TEXT NOT NULL,
+      tag TEXT NOT NULL,
+      value TEXT,
+      PRIMARY KEY (entity_id, tag),
+      FOREIGN KEY (entity_id) REFERENCES code_entities(id) ON DELETE CASCADE
+    );
+  `;
+
+  function buildV2Db(path: string): void {
+    const legacy = new Database(path);
+    legacy.exec(V2_ENTITY_DDL);
+    const ins = legacy.prepare(`INSERT INTO code_entities
+      (id, project_id, kind, name, qualified_name, file_path, line_start, line_end, status, risk_level, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`);
+    ins.run('e-keeper', 'p1', 'function', 'keeperFn', 'src/k.ts::keeperFn', 'src/k.ts', 1, 5, 'active', 'low');
+    // corrupted enum values that would violate the new CHECK constraints
+    ins.run('e-bogus', 'p1', 'function', 'bogusFn', 'src/b.ts::bogusFn', 'src/b.ts', 1, 3, 'totally-bogus', 'extreme');
+    legacy.prepare('INSERT INTO code_entity_tags (entity_id, tag, value) VALUES (?, ?, ?)')
+      .run('e-keeper', 'owner', 'core');
+    legacy.pragma('user_version = 2');
+    legacy.close();
+  }
+
+  it('rebuilds a v2 database to v3: preserves rows/tags, coerces invalid enums, adds columns, stamps version', () => {
+    const legacyPath = join(h.dir, 'v2-legacy.db');
+    buildV2Db(legacyPath);
+
+    const migrated = new SqliteRegistryStore(legacyPath);
+    // rows preserved — straight INSERT copy must not drop anything
+    expect(migrated.getEntity('e-keeper')?.name).toBe('keeperFn');
+    expect(migrated.getTags('e-keeper')).toEqual([{ tag: 'owner', value: 'core' }]);
+    // invalid enum rows coerced instead of silently dropped
+    const bogus = migrated.getEntity('e-bogus');
+    expect(bogus?.status).toBe('active');
+    expect(bogus?.riskLevel).toBe('low');
+    // FTS rebuilt after the table rebuild (rowids were reassigned)
+    expect(migrated.searchEntities('keeperFn', 10).some(e => e.id === 'e-keeper')).toBe(true);
+    migrated.close();
+
+    const raw = new Database(legacyPath);
+    const cols = new Set((raw.prepare('PRAGMA table_info(code_entities)').all() as Array<{ name: string }>).map(r => r.name));
+    expect(cols.has('is_exported')).toBe(true);
+    expect(cols.has('loc')).toBe(true);
+    expect(cols.has('nesting_depth')).toBe(true);
+    expect(cols.has('param_count')).toBe(true);
+    expect(raw.pragma('user_version', { simple: true })).toBe(3);
+    // CHECK now enforced at the DB layer
+    expect(() => raw.prepare(`INSERT INTO code_entities
+      (id, project_id, kind, name, qualified_name, file_path, status, created_at, updated_at)
+      VALUES ('x', 'p', 'function', 'x', 'f::x', 'f', 'nonsense', datetime('now'), datetime('now'))`).run())
+      .toThrow(/CHECK/);
+    raw.close();
+  });
+
+  it('fresh DBs get CHECK constraints, the reverse relation index, and version 3 without a rebuild', () => {
+    const raw = new Database(join(h.dir, 'registry.db'));
+    const tableSql = (raw.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='code_entities'").get() as { sql: string }).sql;
+    expect(tableSql).toMatch(/CHECK\s*\(\s*status\s+IN/i);
+    expect(tableSql).toMatch(/CHECK\s*\(risk_level\s+IN/i);
+    const indexes = (raw.prepare('PRAGMA index_list(code_entity_relations)').all() as Array<{ name: string }>).map(r => r.name);
+    expect(indexes).toContain('idx_cer_target');
+    expect(raw.pragma('user_version', { simple: true })).toBe(3);
+    raw.close();
+  });
+
+  it('round-trips the recovered scanner metric columns through register/get/update', () => {
+    const ent = h.store.registerEntity(baseEntity({
+      isExported: true, loc: 42, nestingDepth: 3, paramCount: 2,
+    }));
+    const got = h.store.getEntity(ent.id);
+    expect(got?.isExported).toBe(true);
+    expect(got?.loc).toBe(42);
+    expect(got?.nestingDepth).toBe(3);
+    expect(got?.paramCount).toBe(2);
+
+    const updated = h.store.updateEntity(ent.id, { isExported: false, loc: 99, paramCount: 4 });
+    expect(updated?.isExported).toBe(false);
+    expect(updated?.loc).toBe(99);
+    expect(updated?.paramCount).toBe(4);
+    expect(updated?.nestingDepth).toBe(3); // untouched field survives
+  });
+
+  it('reopening a v3 database is a no-op migration that keeps FTS intact', () => {
+    const dbPath = join(h.dir, 'registry.db');
+    h.store.registerEntity(baseEntity({ name: 'stableFn', filePath: 'src/s.ts' }));
+    h.store.close();
+
+    const store2 = new SqliteRegistryStore(dbPath);
+    expect(store2.searchEntities('stableFn', 10).some(e => e.name === 'stableFn')).toBe(true);
+    store2.close();
+
+    const raw = new Database(dbPath);
+    expect(raw.pragma('user_version', { simple: true })).toBe(3);
+    raw.close();
+  });
+});
+
+describe('SqliteRegistryStore — getImpactSet CTE equivalence (INT-3881)', () => {
+  /** Deterministic PRNG so failures are reproducible by seed. */
+  function mulberry32(seed: number): () => number {
+    let a = seed >>> 0;
+    return () => {
+      a |= 0; a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  /** Reference implementation: the pre-v3 JS BFS semantics (visited set, shortest depth, root excluded). */
+  function referenceImpact(
+    edges: Array<[string, string]>,
+    root: string,
+    maxDepth: number,
+  ): Map<string, number> {
+    const incoming = new Map<string, string[]>(); // target -> sources
+    for (const [s, t] of edges) {
+      const arr = incoming.get(t);
+      if (arr) arr.push(s);
+      else incoming.set(t, [s]);
+    }
+    const visited = new Set<string>([root]);
+    const out = new Map<string, number>();
+    let frontier = [root];
+    for (let depth = 1; depth <= maxDepth && frontier.length > 0; depth++) {
+      const next: string[] = [];
+      for (const id of frontier) {
+        for (const src of incoming.get(id) ?? []) {
+          if (visited.has(src)) continue;
+          visited.add(src);
+          out.set(src, depth);
+          next.push(src);
+        }
+      }
+      frontier = next;
+    }
+    return out;
+  }
+
+  it('matches the reference BFS on 200 seeded random graphs (cycles + self-loops included)', () => {
+    for (let g = 0; g < 200; g++) {
+      const rng = mulberry32(g + 1);
+      const n = 4 + Math.floor(rng() * 12); // 4..15 nodes
+      const project = `graph-${g}`;
+      const ids: string[] = [];
+      for (let j = 0; j < n; j++) {
+        ids.push(h.store.registerEntity(baseEntity({
+          projectId: project, name: `n${j}`, filePath: `src/g${g}/f${j}.ts`,
+        })).id);
+      }
+      const edges: Array<[string, string]> = [];
+      const m = Math.floor(rng() * n * 2);
+      for (let e = 0; e < m; e++) {
+        const s = ids[Math.floor(rng() * n)];
+        const t = ids[Math.floor(rng() * n)];
+        edges.push([s, t]);
+        h.store.addRelation(s, t, 'calls');
+      }
+      // every 3rd graph gets a guaranteed 3-cycle among callers
+      if (g % 3 === 0 && n >= 3) {
+        const cyc: Array<[string, string]> = [[ids[0], ids[1]], [ids[1], ids[2]], [ids[2], ids[0]]];
+        for (const [s, t] of cyc) {
+          edges.push([s, t]);
+          h.store.addRelation(s, t, 'calls');
+        }
+      }
+      const maxDepth = 1 + Math.floor(rng() * 5); // 1..5
+      const root = ids[Math.floor(rng() * n)];
+
+      const expected = referenceImpact(edges, root, maxDepth);
+      const got = h.store.getImpactSet(root, maxDepth);
+      const gotMap = new Map(got.map(r => [r.id, r.depth]));
+
+      expect(gotMap.size, `graph ${g}: size mismatch`).toBe(expected.size);
+      for (const [id, depth] of expected) {
+        expect(gotMap.get(id), `graph ${g}: depth mismatch for ${id}`).toBe(depth);
+      }
+    }
+  }, 60_000);
+
+  it('a cycle back through the root never resurfaces the root itself', () => {
+    const a = h.store.registerEntity(baseEntity({ name: 'a', filePath: 'src/ca.ts' }));
+    const b = h.store.registerEntity(baseEntity({ name: 'b', filePath: 'src/cb.ts' }));
+    // b calls a (b is a's caller), a calls b (cycle) — impact(a) must be {b@1} only
+    h.store.addRelation(b.id, a.id, 'calls');
+    h.store.addRelation(a.id, b.id, 'calls');
+    const got = h.store.getImpactSet(a.id, 5);
+    expect(got).toHaveLength(1);
+    expect(got[0]).toMatchObject({ id: b.id, depth: 1 });
+  });
+
+  it('truncates a caller chain deeper than maxDepth', () => {
+    const chain = Array.from({ length: 6 }, (_, i) =>
+      h.store.registerEntity(baseEntity({ name: `c${i}`, filePath: `src/chain${i}.ts` })));
+    // c1→c0, c2→c1, ... c5→c4  (each calls the previous: c0's transitive callers = c1..c5)
+    for (let i = 1; i < chain.length; i++) {
+      h.store.addRelation(chain[i].id, chain[i - 1].id, 'calls');
+    }
+    const got = h.store.getImpactSet(chain[0].id, 3);
+    expect(got.map(r => r.depth).sort()).toEqual([1, 2, 3]);
+    expect(got.find(r => r.id === chain[4].id)).toBeUndefined(); // depth 4 cut off
+  });
+
+  it('returns an empty set for an entity with no callers', () => {
+    const lone = h.store.registerEntity(baseEntity({ name: 'lone', filePath: 'src/lone.ts' }));
+    expect(h.store.getImpactSet(lone.id, 5)).toEqual([]);
+  });
+});
