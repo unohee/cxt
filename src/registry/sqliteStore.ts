@@ -550,16 +550,24 @@ export class SqliteRegistryStore {
     // INT-1478: 최초 1회 또는 FTS 인덱싱 컬럼이 실제로 바뀐 버전에서만 rebuild.
     // INT-3881: user_version 승급과 분리 — FTS 무관 마이그레이션(v3+)이 전체 rebuild를
     // 강제하지 않도록. 단 테이블 리빌드가 일어났다면 rowid가 재할당됐으므로 강제 rebuild.
-    // 크래시 윈도우 치유(F1): 리빌드 트랜잭션(FTS drop 포함) 커밋 직후 ~ FTS 재생성 전에
-    // 프로세스가 죽으면, 재오픈 시 버전/리빌드 조건이 모두 false라 빈 FTS가 영구 고착된다.
-    // "FTS 테이블이 없는데 엔티티는 있다"는 상태 자체를 rebuild 사유로 삼아 자가 치유한다.
+    // 크래시 윈도우 치유(F1+R1): 리빌드 트랜잭션(FTS drop 포함) 커밋 이후 어느 지점에서
+    // 죽어도 — FTS 재생성 전(테이블 부재) 또는 CREATE 직후 'rebuild' 전(존재하되 빈) —
+    // 재오픈 시 버전/리빌드 조건이 모두 false라 stale FTS가 영구 고착된다.
+    // "엔티티는 있는데 FTS가 없거나 비어 있다"는 상태 자체를 rebuild 사유로 삼아
+    // 자가 치유한다. 프로브는 LIMIT 1 존재 검사라 O(1) — 매 오픈 비용 무시 가능.
     const ftsExisted = !!this.db.prepare(
       "SELECT name FROM sqlite_master WHERE type='table' AND name='code_entities_fts'"
     ).get();
-    const ftsMissingWithData = !ftsExisted
-      && ((this.db.prepare('SELECT COUNT(*) as cnt FROM code_entities').get() as { cnt: number }).cnt > 0);
+    const hasAnyEntity = !!this.db.prepare('SELECT rowid FROM code_entities LIMIT 1').get();
+    // 주의: external-content FTS5는 MATCH 없는 SELECT를 content 테이블 스캔으로
+    // 처리하므로 본체를 조회하면 빈 인덱스도 "행 있음"으로 보인다. 인덱스의 실제
+    // 문서 수는 shadow 테이블 _docsize(문서당 1행, columnsize 기본값에서 항상 존재)로
+    // 프로브한다 — O(1).
+    const ftsEmpty = ftsExisted
+      && !this.db.prepare('SELECT rowid FROM code_entities_fts_docsize LIMIT 1').get();
+    const ftsStaleWithData = hasAnyEntity && (!ftsExisted || ftsEmpty);
     const needsFtsRebuild = currentVersion < SqliteRegistryStore.FTS_SCHEMA_VERSION
-      || tableRebuilt || ftsMissingWithData;
+      || tableRebuilt || ftsStaleWithData;
 
     if (needsFtsRebuild) {
       this.db.exec(`

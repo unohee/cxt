@@ -918,3 +918,76 @@ describe('SqliteRegistryStore — L2 review fixes (F1/F3 regression)', () => {
     migrated.close();
   });
 });
+
+describe('SqliteRegistryStore — L2 addendum (R1 micro-window, F5 guard regression)', () => {
+  it('R1: heals an FTS table that exists but is empty while entities exist', () => {
+    // 크래시 지점이 CREATE VIRTUAL TABLE 직후 ~ rebuild INSERT 직전이면 "존재하되 빈"
+    // FTS가 남는다. 테이블 부재만 검사하면 이 상태는 영구 stale — 행 존재 프로브로 치유.
+    const p = join(h.dir, 'empty-fts.db');
+    const s1 = new SqliteRegistryStore(p);
+    s1.registerEntity(baseEntity({ name: 'emptyFtsFn', filePath: 'src/ef.ts' }));
+    s1.close();
+
+    const raw = new Database(p);
+    raw.exec(`
+      DROP TRIGGER IF EXISTS ce_fts_ai;
+      DROP TRIGGER IF EXISTS ce_fts_ad;
+      DROP TRIGGER IF EXISTS ce_fts_au;
+      DROP TABLE IF EXISTS code_entities_fts;
+      CREATE VIRTUAL TABLE code_entities_fts USING fts5(
+        name, qualified_name, description, notes, signature,
+        content=code_entities, content_rowid=rowid
+      );
+    `);
+    // 버전은 이미 3인 최악 케이스 — 순수하게 상태 프로브만으로 치유돼야 한다.
+    raw.close();
+
+    const s2 = new SqliteRegistryStore(p);
+    s2.close();
+
+    const raw2 = new Database(p);
+    const hits = (raw2.prepare(
+      "SELECT COUNT(*) as cnt FROM code_entities_fts WHERE code_entities_fts MATCH 'emptyFtsFn'"
+    ).get() as { cnt: number }).cnt;
+    expect(hits).toBe(1);
+    raw2.close();
+  });
+
+  it('F5 guard: a future v4 database is never rebuilt down to the v3 shape', () => {
+    // v4 가정: CHECK 구성이 바뀌고(여기선 부재로 모사) v4 전용 컬럼을 가짐.
+    // 가드가 없으면 상태 게이트가 이를 "비정상 v3"로 보고 정본 26컬럼으로 리빌드하며
+    // call_sites_count 데이터를 드랍한다.
+    const p = join(h.dir, 'future-v4.db');
+    const db = new Database(p);
+    db.exec(`
+      CREATE TABLE code_entities (
+        id TEXT PRIMARY KEY, project_id TEXT NOT NULL, kind TEXT NOT NULL,
+        name TEXT NOT NULL, qualified_name TEXT NOT NULL, file_path TEXT NOT NULL,
+        line_start INTEGER, line_end INTEGER, signature TEXT,
+        status TEXT DEFAULT 'active', deprecated_at TEXT, deprecated_reason TEXT,
+        has_tests INTEGER DEFAULT 0, test_file TEXT, author TEXT, maintainer TEXT,
+        complexity_score INTEGER, risk_level TEXT DEFAULT 'low',
+        is_exported INTEGER, loc INTEGER, nesting_depth INTEGER, param_count INTEGER,
+        call_sites_count INTEGER,
+        description TEXT DEFAULT '', notes TEXT DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(project_id, qualified_name)
+      );
+    `);
+    db.prepare(`INSERT INTO code_entities
+      (id, project_id, kind, name, qualified_name, file_path, call_sites_count, created_at, updated_at)
+      VALUES ('e-v4', 'p1', 'function', 'futureFn', 'src/f4.ts::futureFn', 'src/f4.ts', 42, datetime('now'), datetime('now'))`).run();
+    db.pragma('user_version = 4');
+    db.close();
+
+    const opened = new SqliteRegistryStore(p);
+    opened.close();
+
+    const raw = new Database(p);
+    expect(raw.pragma('user_version', { simple: true })).toBe(4); // 다운스탬프 없음
+    const row = raw.prepare("SELECT call_sites_count FROM code_entities WHERE id = 'e-v4'").get() as { call_sites_count: number };
+    expect(row.call_sites_count).toBe(42); // v4 데이터 보존 — 리빌드 미발동
+    raw.close();
+  });
+});
