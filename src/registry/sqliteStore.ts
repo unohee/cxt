@@ -292,7 +292,7 @@ export class SqliteRegistryStore {
   private migrate(): void {
     const currentVersion = (this.db.pragma('user_version', { simple: true }) as number) ?? 0;
 
-    // ── 초기 테이블 생성 (idempotent) ──
+    // ── Initial table creation (idempotent) ──
     this.db.exec(SqliteRegistryStore.entityTableDdl('code_entities', true));
 
     // ── 이전 스키마에서 누락된 컬럼 추가 ──
