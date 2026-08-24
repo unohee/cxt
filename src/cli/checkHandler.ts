@@ -260,6 +260,7 @@ export async function handleCheck(
           for (const issue of criticals) {
             console.log(`    ${c.red}${escapeTerminal(issue.filePath)}:${issue.line}${c.reset} — ${escapeTerminal(issue.message)}`);
             console.log(`      ${c.dim}${escapeTerminal(issue.matchedText)}${c.reset}`);
+            if (issue.rationale) console.log(`      ${c.dim}${escapeTerminal(issue.rationale)}${c.reset}`);
           }
         }
 

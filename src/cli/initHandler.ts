@@ -68,6 +68,20 @@ function getCxtSection(): string {
 Codebase entity registry, BS detector, LOC reporter, and AI context injection CLI.
 Installed globally as \`cxt\`. Registry stored at \`~/.cxt/registry.db\`.
 
+### Start here — pick the command by task
+
+| Task | Command |
+|------|---------|
+| Static review / audit / "find the defects" | \`cxt bs\` (\`--json\` for machine output) |
+| Change impact — "what breaks if I change X" | \`cxt scan\`, then \`cxt preflight <name>\` |
+| Unfamiliar repository | \`cxt export\` once |
+
+Severity is a policy, not a suggestion. Every CRITICAL finding prints a \`why:\`
+line giving the reason it is critical, and reachability is deliberately excluded
+from that judgement: a committed credential is exposed whether or not its code
+path runs. Report criticals as criticals. Disagree explicitly and cite evidence
+if you must — do not quietly drop one from the count.
+
 ### SessionStart Hook
 
 \`cxt inject\` is configured as a SessionStart hook. It outputs a concise

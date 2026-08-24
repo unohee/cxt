@@ -47,6 +47,7 @@ export async function handleBs(opts: BsOptions): Promise<void> {
         category: i.category,
         message: i.message,
         matched: i.matchedText,
+        rationale: i.rationale,
       })),
     }, null, 2));
     if (result.critical > 0 || result.warning > 0 || result.errors.length > 0) process.exitCode = 1;
@@ -74,6 +75,7 @@ export async function handleBs(opts: BsOptions): Promise<void> {
       for (const issue of criticals) {
         console.log(`    ${c.red}${escapeTerminal(issue.filePath)}:${issue.line}${c.reset} — ${escapeTerminal(issue.message)}`);
         console.log(`      ${c.dim}${escapeTerminal(issue.matchedText)}${c.reset}`);
+        if (issue.rationale) console.log(`      ${c.dim}${escapeTerminal(issue.rationale)}${c.reset}`);
       }
     }
 

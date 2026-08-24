@@ -15,6 +15,56 @@ node dist/cli.js bs          # BS detection
 node dist/cli.js inject      # Claude Code context injection
 ```
 
+## Static Analysis Usage
+
+Run `scan` before registry-backed analysis so entity metadata and call relations reflect the current checkout:
+
+```bash
+cxt scan
+cxt audit
+```
+
+Use the commands according to the question being answered:
+
+| Goal | Command |
+|------|---------|
+| Detect bad-code patterns such as swallowed errors, fake execution, and hardcoded secrets | `cxt bs` |
+| Run the default combined audit: BS detection plus registry integrity checks | `cxt audit` |
+| Run the audit in CI and fail on critical findings | `cxt audit --json` |
+| Inspect entities registered for one file before editing it | `cxt check <file>` |
+| Find direct callers or callees | `cxt who-calls <name>` / `cxt calls <name>` |
+| Find transitive callers affected by a change | `cxt impact <name> --depth 5` |
+| Review impact, risk, tests, and warnings before changing an entity | `cxt preflight <name>` |
+| Enforce preflight findings in automation | `cxt preflight <name> --strict --json` |
+| Run registry integrity checks in CI | `cxt check --ci` |
+
+Recommended agent workflow:
+
+```bash
+# 1. Refresh facts after checkout changes or before repository-wide analysis.
+cxt scan
+
+# 2. Inspect the target before modifying production code.
+cxt check src/path/to/file.ts
+cxt preflight targetEntity
+
+# 3. Run focused analysis while implementing.
+cxt bs --dir src/path
+cxt impact targetEntity --depth 5
+
+# 4. Run the full gate before declaring the work complete.
+cxt audit
+```
+
+For CI:
+
+```bash
+cxt scan
+cxt audit --json
+```
+
+`audit` does not replace `scan`: BS detection reads source files directly, while integrity, call-graph, impact, and preflight results use the persisted registry at `~/.cxt/registry.db`. Refresh the registry whenever the checkout has changed. The current analyzer uses the lexical/regex frontend; AST, symbol-resolution, CFG, and dataflow phases are roadmap work and must not be claimed as active capabilities.
+
 ## Architecture
 
 ```

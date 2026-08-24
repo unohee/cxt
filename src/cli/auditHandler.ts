@@ -51,6 +51,19 @@ export interface AuditResult {
     warning: number;
     minor: number;
     errors: string[];
+    /**
+     * The critical findings themselves. Counts alone force a second command to
+     * learn what failed, and a caller that cannot see the finding cannot weigh
+     * its rationale before deciding what to report.
+     */
+    criticals: Array<{
+      file: string;
+      line: number;
+      category: string;
+      message: string;
+      matched: string;
+      rationale?: string;
+    }>;
   };
   registry: {
     total: number;
@@ -94,7 +107,20 @@ export async function handleAudit(opts: {
       project: projectId,
       path: projectPath,
       tracks,
-      bs: { filesScanned, score, critical, warning, minor, errors: bs.errors.map(escapeTerminal) },
+      bs: {
+        filesScanned, score, critical, warning, minor,
+        errors: bs.errors.map(escapeTerminal),
+        criticals: issues
+          .filter(issue => issue.severity === 'critical')
+          .map(issue => ({
+            file: issue.filePath,
+            line: issue.line,
+            category: issue.category,
+            message: issue.message,
+            matched: issue.matchedText,
+            rationale: issue.rationale,
+          })),
+      },
       registry: {
         total: stats.total,
         deprecated: stats.deprecated,
@@ -147,6 +173,7 @@ export async function handleAudit(opts: {
       for (const issue of criticals) {
         console.log(`    ${c.red}${escapeTerminal(issue.filePath)}:${issue.line}${c.reset} — ${escapeTerminal(issue.message)}`);
         console.log(`      ${c.dim}${escapeTerminal(issue.matchedText)}${c.reset}`);
+        if (issue.rationale) console.log(`      ${c.dim}${escapeTerminal(issue.rationale)}${c.reset}`);
       }
     }
 
