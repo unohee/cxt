@@ -401,6 +401,20 @@ export async function handleCheck(
           warning: bsResult.warning,
           minor: bsResult.minor,
           errors: bsResult.errors,
+          // The guide promises every critical states why it is critical. A CI
+          // surface that emits only a count would make that promise false here,
+          // and a pipeline that cannot see the finding cannot weigh its reason
+          // before deciding whether to fail the build.
+          criticals: bsResult.issues
+            .filter(issue => issue.severity === 'critical')
+            .map(issue => ({
+              file: issue.filePath,
+              line: issue.line,
+              category: issue.category,
+              message: issue.message,
+              matched: issue.matchedText,
+              rationale: issue.rationale,
+            })),
         },
         pass: isBsScanPassing(bsResult),
       };
