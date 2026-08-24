@@ -42,6 +42,10 @@ export interface RegisterEntityInput {
   maintainer?: string;
   complexityScore?: number;
   riskLevel?: RiskLevel;
+  isExported?: boolean;
+  loc?: number;
+  nestingDepth?: number;
+  paramCount?: number;
   description?: string;
   notes?: string;
   tags?: { tag: string; value?: string }[];
@@ -57,6 +61,10 @@ export interface UpdateEntityInput {
   maintainer?: string;
   complexityScore?: number;
   riskLevel?: RiskLevel;
+  isExported?: boolean;
+  loc?: number;
+  nestingDepth?: number;
+  paramCount?: number;
   description?: string;
   notes?: string;
 }
@@ -89,6 +97,10 @@ interface EntityRow {
   maintainer: string | null;
   complexity_score: number | null;
   risk_level: string;
+  is_exported: number | null;
+  loc: number | null;
+  nesting_depth: number | null;
+  param_count: number | null;
   description: string | null;
   notes: string | null;
   created_at: string;
@@ -159,6 +171,10 @@ export class SqliteRegistryStore {
 
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('foreign_keys = ON');
+    // Migration rebuilds on a large registry can hold the write lock for
+    // several seconds; the 5s default made concurrent first opens die with
+    // SQLITE_BUSY (SessionStart hook + manual run is a real usage pattern).
+    this.db.pragma('busy_timeout = 30000');
 
     this.migrate();
   }
@@ -166,14 +182,38 @@ export class SqliteRegistryStore {
   // 스키마 버전 — 변경 시 반드시 증가. migrate()의 핵심 마이그레이션 단계와 1:1 대응.
   // INT-1478: user_version 가드로 FTS rebuild를 최초 1회만 수행.
   // INT-1475: v2 = qualified_name 전역 UNIQUE → UNIQUE(project_id, qualified_name) 복합 제약.
-  private static readonly SCHEMA_VERSION = 2;
+  // INT-3881: v3 = reverse relation index + recovered scanner metric columns
+  //           (is_exported/loc/nesting_depth/param_count) + status/risk_level
+  //           CHECK constraints (table rebuild). kind CHECK is deliberately
+  //           omitted — P1 (tree-sitter frontend) is expected to extend
+  //           EntityKind and pinning it now would force another rebuild.
+  //           relations' relation_type CHECK moves to P2 v4 (code_call_sites).
+  private static readonly SCHEMA_VERSION = 3;
 
-  private migrate(): void {
-    const currentVersion = (this.db.pragma('user_version', { simple: true }) as number) ?? 0;
+  // The last version in which the FTS index schema (set of indexed columns)
+  // changed. Decoupled from the user_version bump: through v2 "version went up"
+  // implied "always rebuild", and that coupling would force a full FTS rebuild
+  // for FTS-unrelated migrations (v3+) — 3.3s at 396k entities (INT-1478).
+  private static readonly FTS_SCHEMA_VERSION = 2;
 
-    // ── 초기 테이블 생성 (idempotent) ──
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS code_entities (
+  // Canonical column list for the entity table — every DDL and rebuild INSERT
+  // derives from it, preventing the three duplicated DDL copies (initial/v2/v3)
+  // from silently drifting apart.
+  private static readonly ENTITY_COLUMNS = [
+    'id', 'project_id', 'kind', 'name', 'qualified_name', 'file_path',
+    'line_start', 'line_end', 'signature', 'status',
+    'deprecated_at', 'deprecated_reason', 'has_tests', 'test_file',
+    'author', 'maintainer', 'complexity_score', 'risk_level',
+    'is_exported', 'loc', 'nesting_depth', 'param_count',
+    'description', 'notes', 'created_at', 'updated_at',
+  ] as const;
+
+  // Canonical table DDL. No kind CHECK on purpose — P1 (tree-sitter frontend)
+  // is expected to extend EntityKind, and pinning it now would force yet
+  // another table rebuild.
+  private static entityTableDdl(tableName: string, ifNotExists = false): string {
+    return `
+      CREATE TABLE ${ifNotExists ? 'IF NOT EXISTS ' : ''}${tableName} (
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL,
         kind TEXT NOT NULL,
@@ -183,7 +223,7 @@ export class SqliteRegistryStore {
         line_start INTEGER,
         line_end INTEGER,
         signature TEXT,
-        status TEXT DEFAULT 'active',
+        status TEXT NOT NULL DEFAULT 'active',
         deprecated_at TEXT,
         deprecated_reason TEXT,
         has_tests INTEGER DEFAULT 0,
@@ -191,13 +231,69 @@ export class SqliteRegistryStore {
         author TEXT,
         maintainer TEXT,
         complexity_score INTEGER,
-        risk_level TEXT DEFAULT 'low',
+        risk_level TEXT NOT NULL DEFAULT 'low' CHECK (risk_level IN ('low', 'medium', 'high')),
+        is_exported INTEGER,
+        loc INTEGER,
+        nesting_depth INTEGER,
+        param_count INTEGER,
         description TEXT DEFAULT '',
         notes TEXT DEFAULT '',
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-        UNIQUE(project_id, qualified_name)
-      );`);
+        UNIQUE(project_id, qualified_name),
+        CHECK (status IN ('active', 'deprecated', 'experimental', 'planned', 'broken'))
+      );`;
+  }
+
+  // Concurrent-first-open mitigation: between the PRAGMA table_info check and
+  // the ALTER, another process may add the same column first (TOCTOU) and the
+  // ALTER dies with "duplicate column". SessionStart hook + a manual run firing
+  // together is a real usage pattern, so swallow exactly that error, rethrow the rest.
+  private addColumnTolerantly(sql: string): void {
+    try {
+      this.db.exec(sql);
+    } catch (err) { // cxt-ignore: exception_hiding — only absorbs duplicate-column (concurrent migration race); everything else rethrows
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.includes('duplicate column name')) throw err;
+    }
+  }
+
+  // Rebuild targets carry CHECK / NOT NULL constraints, so rows that would
+  // violate them are repaired to valid defaults first — an explicit coerce
+  // instead of INSERT OR IGNORE silently dropping rows.
+  //
+  // MUST be called inside the rebuild transaction, after the legacy FTS
+  // triggers have been dropped: (a) if the rebuild fails, the coercion rolls
+  // back with it instead of permanently flattening data in autocommit mode;
+  // (b) running UPDATEs while a desynced external-content FTS trigger is live
+  // raises SQLITE_CORRUPT_VTAB and bricks the constructor.
+  // Returns counts; the caller logs them only after the transaction commits.
+  private coerceInvalidEnumRows(): { status: number; risk: number; timestamps: number } {
+    const status = this.db.prepare(
+      "UPDATE code_entities SET status = 'active' WHERE status IS NULL OR status NOT IN ('active','deprecated','experimental','planned','broken')"
+    ).run().changes;
+    const risk = this.db.prepare(
+      "UPDATE code_entities SET risk_level = 'low' WHERE risk_level IS NULL OR risk_level NOT IN ('low','medium','high')"
+    ).run().changes;
+    // Rust-era rows may carry NULL timestamps; the rebuild target declares
+    // NOT NULL and an explicit NULL bypasses column DEFAULTs on INSERT..SELECT.
+    const timestamps = this.db.prepare(
+      "UPDATE code_entities SET created_at = COALESCE(created_at, datetime('now')), updated_at = COALESCE(updated_at, datetime('now')) WHERE created_at IS NULL OR updated_at IS NULL"
+    ).run().changes;
+    return { status, risk, timestamps };
+  }
+
+  private static logCoerced(c: { status: number; risk: number; timestamps: number }): void {
+    if (c.status + c.risk + c.timestamps > 0) {
+      console.error(`[cxt migrate] coerced ${c.status} invalid status / ${c.risk} invalid risk_level / ${c.timestamps} NULL timestamp rows to defaults`);
+    }
+  }
+
+  private migrate(): void {
+    const currentVersion = (this.db.pragma('user_version', { simple: true }) as number) ?? 0;
+
+    // ── Initial table creation (idempotent) ──
+    this.db.exec(SqliteRegistryStore.entityTableDdl('code_entities', true));
 
     // ── 이전 스키마에서 누락된 컬럼 추가 ──
     const colInfo = this.db.prepare("PRAGMA table_info(code_entities)").all() as Array<{ name: string; notnull: number }>;
@@ -212,11 +308,21 @@ export class SqliteRegistryStore {
       ['description', "ALTER TABLE code_entities ADD COLUMN description TEXT DEFAULT ''"],
       ['notes', "ALTER TABLE code_entities ADD COLUMN notes TEXT DEFAULT ''"],
     ];
+    // NOTE: the new v3 columns (is_exported etc.) are added in the v3 step
+    // below, not here — the legacy rebuilds (v1→v2, line_start) copy with
+    // SELECT * / fixed lists, and adding columns before them desyncs the
+    // column counts (22-column target vs 26-column source) and breaks migration.
     for (const [col, sql] of addColMigrations) {
       if (!existingCols.has(col)) {
-        this.db.exec(sql);
+        this.addColumnTolerantly(sql);
       }
     }
+
+    // Track whether any table rebuild happened — rebuilds reassign rowids,
+    // which invalidates the external-content FTS rowid mapping, so any rebuild
+    // must force an FTS rebuild. (Through v2 "version bump = always rebuild"
+    // made this accidentally safe; this flag replaces that coupling explicitly.)
+    let tableRebuilt = false;
 
     // ── v1 → v2: qualified_name 전역 UNIQUE → UNIQUE(project_id, qualified_name) ──
     // 구 스키마는 qualified_name에 단일 UNIQUE 인덱스가 있어 다른 project_id에서
@@ -231,45 +337,46 @@ export class SqliteRegistryStore {
       });
 
       if (hasOldUniqueOnQName) {
-        // 테이블 재생성으로 제약 변경 (SQLite는 DROP CONSTRAINT 미지원)
+        // Constraint change requires a table rebuild (SQLite cannot DROP
+        // CONSTRAINT). The target is the current canonical DDL (v3 shape with
+        // CHECKs), so DBs that take this path never need the v3 rebuild again.
+        //
+        // Source column sets differ by DB generation (true v1 = 22 columns,
+        // fixtures derived from the current schema = 26). SELECT * breaks on
+        // column count/order mismatches, so copy the intersection of the
+        // canonical list and the source; names only ever come from the fixed
+        // allowlist.
+        const v2SrcCols = new Set(
+          (this.db.prepare("PRAGMA table_info(code_entities)").all() as Array<{ name: string }>).map(r => r.name)
+        );
+        const v2CopyCols = SqliteRegistryStore.ENTITY_COLUMNS.filter(c => v2SrcCols.has(c)).join(', ');
+
         this.db.pragma('foreign_keys = OFF');
         try {
-          this.db.transaction(() => this.db.exec(`
-          DROP TRIGGER IF EXISTS ce_fts_ai;
-          DROP TRIGGER IF EXISTS ce_fts_ad;
-          DROP TRIGGER IF EXISTS ce_fts_au;
-          DROP TABLE IF EXISTS code_entities_fts;
-          DROP TABLE IF EXISTS code_entities_v2;
-
-          CREATE TABLE code_entities_v2 (
-            id TEXT PRIMARY KEY,
-            project_id TEXT NOT NULL,
-            kind TEXT NOT NULL,
-            name TEXT NOT NULL,
-            qualified_name TEXT NOT NULL,
-            file_path TEXT NOT NULL,
-            line_start INTEGER,
-            line_end INTEGER,
-            signature TEXT,
-            status TEXT DEFAULT 'active',
-            deprecated_at TEXT,
-            deprecated_reason TEXT,
-            has_tests INTEGER DEFAULT 0,
-            test_file TEXT,
-            author TEXT,
-            maintainer TEXT,
-            complexity_score INTEGER,
-            risk_level TEXT DEFAULT 'low',
-            description TEXT DEFAULT '',
-            notes TEXT DEFAULT '',
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-            UNIQUE(project_id, qualified_name)
-          );
-          INSERT OR IGNORE INTO code_entities_v2 SELECT * FROM code_entities;
-          DROP TABLE code_entities;
-          ALTER TABLE code_entities_v2 RENAME TO code_entities;
-          `))();
+          let coerced = { status: 0, risk: 0, timestamps: 0 };
+          // Coerce runs INSIDE the transaction, after the FTS triggers are
+          // dropped: it must roll back with a failed rebuild, and it must not
+          // fire legacy triggers against a possibly-desynced FTS index.
+          const tx = this.db.transaction(() => {
+            this.db.exec(`
+            DROP TRIGGER IF EXISTS ce_fts_ai;
+            DROP TRIGGER IF EXISTS ce_fts_ad;
+            DROP TRIGGER IF EXISTS ce_fts_au;
+            DROP TABLE IF EXISTS code_entities_fts;
+            DROP TABLE IF EXISTS code_entities_v2;
+            `);
+            coerced = this.coerceInvalidEnumRows();
+            this.db.exec(`
+            ${SqliteRegistryStore.entityTableDdl('code_entities_v2')}
+            INSERT OR IGNORE INTO code_entities_v2 (${v2CopyCols})
+              SELECT ${v2CopyCols} FROM code_entities;
+            DROP TABLE code_entities;
+            ALTER TABLE code_entities_v2 RENAME TO code_entities;
+            `);
+          });
+          tx.immediate();
+          SqliteRegistryStore.logCoerced(coerced);
+          tableRebuilt = true;
         } finally {
           this.db.pragma('foreign_keys = ON');
         }
@@ -334,8 +441,117 @@ export class SqliteRegistryStore {
         DROP TABLE code_entities;
         ALTER TABLE code_entities_new RENAME TO code_entities;
         `))();
+        tableRebuilt = true;
       } finally {
         this.db.pragma('foreign_keys = ON');
+      }
+    }
+
+    // ── v2 → v3 (INT-3881): recover scanner metric columns + status/risk_level CHECKs ──
+    // Must run AFTER the legacy rebuilds (v1→v2, line_start): those copy with
+    // SELECT * / fixed column lists, and adding the new columns first would
+    // desync column counts. Column adds are re-checked idempotently every open.
+    {
+      const v3ColInfo = this.db.prepare("PRAGMA table_info(code_entities)").all() as Array<{ name: string }>;
+      const v3Cols = new Set(v3ColInfo.map(r => r.name));
+      // is_exported is nullable with no DEFAULT on purpose: backfilling legacy
+      // rows with 0 would collapse "unmeasured" into "confirmed not exported".
+      // NULL = not scanned yet, 0/1 = measured value.
+      const v3AddCols: Array<[string, string]> = [
+        ['is_exported', 'ALTER TABLE code_entities ADD COLUMN is_exported INTEGER'],
+        ['loc', 'ALTER TABLE code_entities ADD COLUMN loc INTEGER'],
+        ['nesting_depth', 'ALTER TABLE code_entities ADD COLUMN nesting_depth INTEGER'],
+        ['param_count', 'ALTER TABLE code_entities ADD COLUMN param_count INTEGER'],
+      ];
+      for (const [col, sql] of v3AddCols) {
+        if (!v3Cols.has(col)) this.addColumnTolerantly(sql);
+      }
+
+      // CHECK constraints can only be declared at CREATE TABLE time, so tables
+      // lacking them are replaced via rebuild. kind CHECK is deliberately
+      // omitted — P1 (tree-sitter frontend) will extend EntityKind, and pinning
+      // it now would force yet another rebuild.
+      //
+      // v3 schema detection is TABLE-STATE based, not version based:
+      // (1) both CHECKs individually — treating the status CHECK alone as proof
+      //     would seal a half-schema without the risk_level CHECK;
+      // (2) both NOT NULLs — SQLite CHECK passes NULL (3-valued logic), so
+      //     without NOT NULL an explicit NULL bypasses the enum invariant.
+      // State-based healing means any mis-stamped version-3 DB self-repairs on
+      // the next open. Defined as a closure so it can be RE-CHECKED under the
+      // write lock (see below).
+      const readsV3Schema = (): boolean => {
+        const tableSqlRow = this.db.prepare(
+          "SELECT sql FROM sqlite_master WHERE type='table' AND name='code_entities'"
+        ).get() as { sql: string } | undefined;
+        if (!tableSqlRow) return false;
+        const hasStatusCheck = /CHECK\s*\(\s*status\s+IN/i.test(tableSqlRow.sql);
+        const hasRiskCheck = /CHECK\s*\(\s*risk_level\s+IN/i.test(tableSqlRow.sql);
+        const notNull = new Map(
+          (this.db.prepare("PRAGMA table_info(code_entities)").all() as Array<{ name: string; notnull: number }>)
+            .map(r => [r.name, r.notnull === 1])
+        );
+        return hasStatusCheck && hasRiskCheck
+          && notNull.get('status') === true && notNull.get('risk_level') === true;
+      };
+
+      // Forward-compat guard: a future (v4+) DB whose schema legitimately
+      // differs must never be "healed" down to the canonical 26 columns by an
+      // older binary. State-based healing applies only to versions we know (≤3).
+      if (currentVersion <= SqliteRegistryStore.SCHEMA_VERSION && !readsV3Schema()) {
+        // Copy only columns the source actually has (mirrors the v1→v2 path):
+        // a degraded legacy table missing e.g. `signature` must not crash the
+        // rebuild with "no such column". Missing columns take their DDL defaults.
+        const v3SrcCols = new Set(
+          (this.db.prepare("PRAGMA table_info(code_entities)").all() as Array<{ name: string }>).map(r => r.name)
+        );
+        const v3CopyCols = SqliteRegistryStore.ENTITY_COLUMNS.filter(c => v3SrcCols.has(c)).join(', ');
+
+        this.db.pragma('foreign_keys = OFF');
+        try {
+          let coerced = { status: 0, risk: 0, timestamps: 0 };
+          let didRebuild = false;
+          const tx = this.db.transaction(() => {
+            // Double-checked under the write lock: a concurrent open may have
+            // completed this exact rebuild while we waited on busy_timeout.
+            if (readsV3Schema()) return;
+            this.db.exec(`
+            DROP TRIGGER IF EXISTS ce_fts_ai;
+            DROP TRIGGER IF EXISTS ce_fts_ad;
+            DROP TRIGGER IF EXISTS ce_fts_au;
+            DROP TABLE IF EXISTS code_entities_fts;
+            DROP TABLE IF EXISTS code_entities_v3;
+            `);
+            // Inside the transaction and after the trigger drops: the coercion
+            // must roll back with a failed rebuild, and must not fire legacy
+            // triggers against a possibly-desynced FTS index.
+            coerced = this.coerceInvalidEnumRows();
+            this.db.exec(`
+            ${SqliteRegistryStore.entityTableDdl('code_entities_v3')}
+            INSERT INTO code_entities_v3 (${v3CopyCols})
+              SELECT ${v3CopyCols} FROM code_entities;
+            DROP TABLE code_entities;
+            ALTER TABLE code_entities_v3 RENAME TO code_entities;
+            `);
+            didRebuild = true;
+          });
+          try {
+            tx.immediate();
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            // A straight INSERT is intentional (no silent row drops), so give
+            // the operator a recovery path instead of a bare constraint error.
+            throw new Error(
+              `cxt registry v3 migration failed and was rolled back (database unchanged): ${msg}. `
+              + `If this registry predates the composite UNIQUE constraint and holds duplicate entities, `
+              + `restore a backup, or remove the affected project with 'cxt project rm <id>' and re-scan.`
+            );
+          }
+          SqliteRegistryStore.logCoerced(coerced);
+          if (didRebuild) tableRebuilt = true;
+        } finally {
+          this.db.pragma('foreign_keys = ON');
+        }
       }
     }
 
@@ -401,11 +617,36 @@ export class SqliteRegistryStore {
       CREATE INDEX IF NOT EXISTS idx_ce_tags_tag ON code_entity_tags(tag);
       CREATE INDEX IF NOT EXISTS idx_ce_warnings_sev ON code_entity_warnings(severity);
       CREATE INDEX IF NOT EXISTS idx_ce_warnings_entity ON code_entity_warnings(entity_id);
+      -- INT-3881(v3): reverse-lookup index. The PK (leading source_id) was the
+      -- only index on relations, so who-calls/impact full-scanned on every hop
+      -- of WHERE target_id = ?.
+      CREATE INDEX IF NOT EXISTS idx_cer_target ON code_entity_relations(target_id, relation_type);
     `);
 
-    // ── FTS 가상 테이블 + 트리거 ──
-    // INT-1478: 버전이 올라간 경우(최초 또는 스키마 변경)에만 rebuild 수행.
-    const needsFtsRebuild = currentVersion < SqliteRegistryStore.SCHEMA_VERSION;
+    // ── FTS virtual table + triggers ──
+    // INT-1478: rebuild only on first open or when the FTS-indexed column set
+    // actually changed. INT-3881: decoupled from the user_version bump so that
+    // FTS-unrelated migrations (v3+) don't force a full rebuild — but a table
+    // rebuild reassigns rowids, so it always forces one.
+    // Crash-window healing: if the process dies anywhere after the rebuild
+    // transaction commits (which drops FTS) — before FTS recreation (table
+    // absent) or right after CREATE but before 'rebuild' (table exists, empty)
+    // — every reopen condition would be false and a stale FTS would be sealed
+    // forever. So "entities exist but FTS is missing OR empty" is itself a
+    // rebuild trigger. Probes are LIMIT-1 existence checks — O(1) per open.
+    const ftsExisted = !!this.db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='code_entities_fts'"
+    ).get();
+    const hasAnyEntity = !!this.db.prepare('SELECT rowid FROM code_entities LIMIT 1').get();
+    // Caveat: external-content FTS5 answers non-MATCH SELECTs by scanning the
+    // content table, so probing the fts table itself reports rows even when the
+    // index is empty. The _docsize shadow table (one row per indexed document,
+    // always present at the default columnsize) is the O(1) truthful probe.
+    const ftsEmpty = ftsExisted
+      && !this.db.prepare('SELECT rowid FROM code_entities_fts_docsize LIMIT 1').get();
+    const ftsStaleWithData = hasAnyEntity && (!ftsExisted || ftsEmpty);
+    const needsFtsRebuild = currentVersion < SqliteRegistryStore.FTS_SCHEMA_VERSION
+      || tableRebuilt || ftsStaleWithData;
 
     if (needsFtsRebuild) {
       this.db.exec(`
@@ -443,8 +684,9 @@ export class SqliteRegistryStore {
       END;
     `);
 
-    // 버전 기록 (마이그레이션이 모두 끝난 뒤)
-    if (needsFtsRebuild) {
+    // Stamp the version once all migrations finished — independent of whether
+    // an FTS rebuild ran.
+    if (currentVersion < SqliteRegistryStore.SCHEMA_VERSION) {
       this.db.pragma(`user_version = ${SqliteRegistryStore.SCHEMA_VERSION}`);
     }
   }
@@ -466,9 +708,11 @@ export class SqliteRegistryStore {
         id, project_id, kind, name, qualified_name, file_path,
         line_start, line_end, signature, status,
         has_tests, test_file, author, maintainer,
-        complexity_score, risk_level, description, notes,
+        complexity_score, risk_level,
+        is_exported, loc, nesting_depth, param_count,
+        description, notes,
         created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const insertTag = this.db.prepare(
@@ -488,6 +732,9 @@ export class SqliteRegistryStore {
         input.hasTests ? 1 : 0, input.testFile ?? null,
         input.author ?? null, input.maintainer ?? null,
         input.complexityScore ?? null, input.riskLevel ?? 'low',
+        // Preserve the tri-state: undefined (unmeasured) → NULL, never collapsed to 0.
+        input.isExported == null ? null : (input.isExported ? 1 : 0), input.loc ?? null,
+        input.nestingDepth ?? null, input.paramCount ?? null,
         input.description ?? '', input.notes ?? '',
         now, now,
       );
@@ -544,14 +791,17 @@ export class SqliteRegistryStore {
       name: 'name', lineStart: 'line_start', lineEnd: 'line_end',
       signature: 'signature', hasTests: 'has_tests', testFile: 'test_file',
       maintainer: 'maintainer', complexityScore: 'complexity_score',
-      riskLevel: 'risk_level', description: 'description', notes: 'notes',
+      riskLevel: 'risk_level',
+      isExported: 'is_exported', loc: 'loc',
+      nestingDepth: 'nesting_depth', paramCount: 'param_count',
+      description: 'description', notes: 'notes',
     };
 
     for (const [key, col] of Object.entries(fieldMap)) {
       if (key in patch && (patch as Record<string, unknown>)[key] !== undefined) {
         const val = (patch as Record<string, unknown>)[key];
         fields.push(`${col} = ?`);
-        values.push(key === 'hasTests' ? (val ? 1 : 0) : (val ?? null));
+        values.push(key === 'hasTests' || key === 'isExported' ? (val ? 1 : 0) : (val ?? null));
       }
     }
 
@@ -887,8 +1137,20 @@ export class SqliteRegistryStore {
   }
 
   /**
-   * transitive 역방향 BFS — "X를 고치면 영향받는 엔티티 전체".
-   * depth별로 grouping해 반환. 사이클 안전.
+   * Transitive reverse reachability — "everything affected if X changes".
+   * Visited-set BFS over the reverse edges, served by idx_cer_target (v3).
+   *
+   * Why BFS and not a recursive CTE (tried in this PR, then reverted):
+   * - A recursive CTE can only dedup (id, depth) tuples, not visited ids, so
+   *   cyclic/dense graphs re-expand each node once per distinct depth —
+   *   O(E × maxDepth) work. Measured 16.1s at --depth 100 on a 20k-entity
+   *   cyclic graph vs ~5ms for this BFS (review finding #5). maxDepth up to
+   *   100 is user-reachable via `cxt impact --depth`.
+   * - The per-hop JOIN against code_entities makes dangling relation rows
+   *   (ghost endpoints) dead-end the traversal instead of acting as invisible
+   *   pass-through hops (review finding #6).
+   * The index alone delivers the v3 perf win: 52.55ms → ~3ms p95 on the DoD
+   * fixture (see testing/bench_impact_v3_260820.mjs).
    */
   getImpactSet(
     rootEntityId: string,
@@ -1359,6 +1621,10 @@ export class SqliteRegistryStore {
       maintainer: row.maintainer ?? undefined,
       complexityScore: row.complexity_score ?? undefined,
       riskLevel: row.risk_level as RiskLevel,
+      isExported: row.is_exported == null ? undefined : row.is_exported === 1,
+      loc: row.loc ?? undefined,
+      nestingDepth: row.nesting_depth ?? undefined,
+      paramCount: row.param_count ?? undefined,
       description: row.description ?? '',
       notes: row.notes ?? '',
       tags,

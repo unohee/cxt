@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import {
@@ -127,6 +127,62 @@ describe('bsDetector — CRITICAL patterns', () => {
     const src = `function ok() { return true; // always }`;
     const issues = scanFileContent(src, 'src/x.ts', 'typescript');
     expect(issues.find((i) => i.category === 'fake_execution')).toBeDefined();
+  });
+});
+
+describe('bsDetector — critical severity rationale', () => {
+  it('attaches a rationale to a hardcoded secret so it cannot be re-graded silently', () => {
+    const src = 'const api_key = "live-secret-123456789";';
+    const issues = scanFileContent(src, 'src/auth.ts', 'typescript');
+    const issue = issues.find((i) => i.category === 'hardcoded_secret');
+    expect(issue).toBeDefined();
+    expect(issue?.rationale).toBeTruthy();
+    // Reachability is deliberately excluded from the severity judgement, so the
+    // rationale must say so rather than leaving the reader to infer it.
+    expect(issue?.rationale).toMatch(/version history|형상 이력/);
+  });
+
+  it('attaches a rationale to a swallowed Python exception', () => {
+    const src = 'try:\n    x()\nexcept: pass';
+    const issues = scanFileContent(src, 'src/legacy.py', 'python');
+    const issue = issues.find((i) => i.category === 'exception_hiding' && i.severity === 'critical');
+    expect(issue).toBeDefined();
+    expect(issue?.rationale).toBeTruthy();
+  });
+
+  it('leaves non-critical findings without a rationale', () => {
+    const src = 'console.log("hi");';
+    const issues = scanFileContent(src, 'src/x.ts', 'typescript');
+    const nonCritical = issues.filter((i) => i.severity !== 'critical');
+    expect(nonCritical.length).toBeGreaterThan(0);
+    expect(nonCritical.every((i) => i.rationale === undefined)).toBe(true);
+  });
+
+  it('gives every critical finding a rationale', () => {
+    const cases: Array<[string, string, string]> = [
+      ['const api_key = "live-secret-123456789";', 'src/a.ts', 'typescript'],
+      ['debugger;', 'src/b.ts', 'typescript'],
+      ['try:\n    x()\nexcept: pass', 'src/c.py', 'python'],
+    ];
+    for (const [src, file, lang] of cases) {
+      for (const issue of scanFileContent(src, file, lang).filter((i) => i.severity === 'critical')) {
+        expect(issue.rationale, `${issue.category} has no rationale`).toBeTruthy();
+      }
+    }
+  });
+
+  it('does not report itself: the rationale table must not look like a secret', () => {
+    // The table maps category names to message keys. Written as an object literal
+    // it spells `secret: '<long string>'`, which the hardcoded-secret pattern
+    // matches, so `cxt bs` would fail on this repository over a table of nouns.
+    // Scan the real file rather than a copy so a refactor cannot silently undo it.
+    const self = readFileSync(
+      join(__dirname, '..', '..', 'src', 'registry', 'bsDetector.ts'),
+      'utf-8',
+    );
+    const criticals = scanFileContent(self, 'src/registry/bsDetector.ts', 'typescript')
+      .filter((i) => i.severity === 'critical');
+    expect(criticals.map((i) => `${i.line}:${i.category}`)).toEqual([]);
   });
 });
 

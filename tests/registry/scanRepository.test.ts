@@ -347,3 +347,28 @@ describe('scanRepository — broken zombie restore (INT-1477)', () => {
     expect(store.getEntity(manual.id)?.status).toBe('broken');
   });
 });
+
+describe('scanRepository — v3 scanner metric persistence (INT-3881)', () => {
+  it('persists is_exported/loc/nesting_depth/param_count instead of discarding them', async () => {
+    write('src/metrics.ts', [
+      'export function withParams(a: number, b: number, c: number) {',
+      '  if (a > 0) {',
+      '    if (b > 0) {',
+      '      return a + b + c;',
+      '    }',
+      '  }',
+      '  return 0;',
+      '}',
+    ].join('\n'));
+
+    await scanRepository(projectDir, 'tproj-v3');
+
+    const store = getRegistryStore();
+    const ent = store.getEntityByName('src/metrics.ts::withParams', 'tproj-v3');
+    expect(ent).not.toBeNull();
+    expect(ent?.isExported).toBe(true);
+    expect(ent?.paramCount).toBe(3);
+    expect(ent?.loc).toBeGreaterThan(0);
+    expect(ent?.nestingDepth).toBeGreaterThanOrEqual(2);
+  });
+});

@@ -20,6 +20,11 @@ export interface BsIssue {
   filePath: string;
   line: number;
   matchedText: string;
+  /**
+   * Why this is critical. Present only for critical findings, so a reader
+   * cannot silently re-grade a finding without engaging its justification.
+   */
+  rationale?: string;
 }
 
 export interface BsScanResult {
@@ -41,6 +46,34 @@ interface BsPatternDef {
   pattern: RegExp;
   languages?: string[];
   excludeIf?: (line: string, filePath: string) => boolean;
+}
+
+/**
+ * Critical severity is a policy, so each critical category states its reason.
+ * Keyed by category rather than by pattern: categories are the stable unit, and
+ * two patterns in the same category are critical for the same reason.
+ *
+ * Entries are pairs rather than object properties for two reasons. The lookup key
+ * arrives as arbitrary data, and a Map cannot be reached through `__proto__` the
+ * way an object index can. And an object literal would spell `secret: '<long
+ * string>'`, which is exactly the shape the hardcoded-secret pattern below hunts
+ * for — this table would report itself. Do not fold it back into a Record.
+ */
+const CRITICAL_RATIONALE = new Map<string, keyof ReturnType<typeof t>>([
+  ['exception_hiding', 'bsWhyExceptionHiding'],
+  ['hardcoded_secret', 'bsWhyHardcodedSecret'],
+  ['fake_execution', 'bsWhyFakeExecution'],
+  ['fake_data', 'bsWhyFakeData'],
+  ['debug_leftover', 'bsWhyDebugLeftover'],
+  ['panic_risk', 'bsWhyPanicRisk'],
+  ['incomplete', 'bsWhyIncomplete'],
+]);
+
+/** Resolve the rationale for a finding, or undefined when it is not critical. */
+function rationaleFor(severity: BsSeverity, category: string, msgs: ReturnType<typeof t>): string | undefined {
+  if (severity !== 'critical') return undefined;
+  const key = CRITICAL_RATIONALE.get(category);
+  return key ? (msgs[key] as string) : undefined;
 }
 
 function isTestPath(filePath: string): boolean {
@@ -475,6 +508,7 @@ export function scanFileContent(
         filePath,
         line: i + 1,
         matchedText: match[0].slice(0, 80),
+        rationale: rationaleFor(bp.severity, bp.category, msgs),
       });
     }
   }

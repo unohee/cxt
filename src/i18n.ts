@@ -98,6 +98,14 @@ interface Messages {
   bsRustSilentError: string;
   bsCatchSwallow: string;
 
+  bsWhyExceptionHiding: string;
+  bsWhyHardcodedSecret: string;
+  bsWhyFakeExecution: string;
+  bsWhyFakeData: string;
+  bsWhyDebugLeftover: string;
+  bsWhyPanicRisk: string;
+  bsWhyIncomplete: string;
+
   // ── Annotate ──
   annotating: string;
   deprecatedStatus: string;
@@ -254,6 +262,14 @@ const en: Messages = {
   bsRustSilentError: 'Silent error swallow (let _ = / .ok();) — error ignored',
   bsCatchSwallow: 'catch block swallows exception (no throw/reject) — make it explicit or cxt-ignore',
 
+  bsWhyExceptionHiding: 'why: the handler discards every exception, so the failure never surfaces at runtime — being unreached today does not fix it',
+  bsWhyHardcodedSecret: 'why: the credential is already exposed in source and version history whether or not the code path runs — it must be rotated, not argued away',
+  bsWhyFakeExecution: 'why: the code reports success without doing the work, so callers and tests cannot detect the gap',
+  bsWhyFakeData: 'why: fabricated values are returned as real output, which makes every downstream result unverifiable',
+  bsWhyDebugLeftover: 'why: the statement halts or pollutes execution in any environment that honors it',
+  bsWhyPanicRisk: 'why: it aborts the process on Err/None, so the caller is given no chance to recover',
+  bsWhyIncomplete: 'why: the path is unimplemented and fails the moment it is first reached',
+
   // Annotate
   annotating: 'Annotating:',
   deprecatedStatus: 'Deprecated',
@@ -409,6 +425,14 @@ const ko: Messages = {
   bsFakeData: 'np.random/faker로 위장 데이터 생성 (production)',
   bsRustSilentError: '에러 silent 무시 (let _ = / .ok();) — 예외 은폐',
   bsCatchSwallow: 'catch 블록이 예외를 삼킴 (throw/reject 없음) — 명시하거나 cxt-ignore',
+
+  bsWhyExceptionHiding: '근거: 모든 예외를 버리므로 실패가 런타임에 드러나지 않는다 — 지금 호출되지 않는다는 사실은 해결이 아니다',
+  bsWhyHardcodedSecret: '근거: 코드 경로 실행 여부와 무관하게 소스와 형상 이력에 이미 노출되어 있다 — 논증이 아니라 교체가 필요하다',
+  bsWhyFakeExecution: '근거: 실제 작업 없이 성공을 보고하므로 호출자도 테스트도 결함을 감지할 수 없다',
+  bsWhyFakeData: '근거: 조작된 값이 실제 출력으로 반환되어 이후 모든 결과를 검증 불가능하게 만든다',
+  bsWhyDebugLeftover: '근거: 이를 해석하는 실행 환경에서 실행을 중단시키거나 오염시킨다',
+  bsWhyPanicRisk: '근거: Err/None에서 프로세스를 중단시켜 호출자가 복구할 기회를 얻지 못한다',
+  bsWhyIncomplete: '근거: 구현되지 않은 경로로, 처음 도달하는 순간 실패한다',
 
   // Annotate
   annotating: '어노테이션:',

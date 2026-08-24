@@ -151,3 +151,46 @@ describe('handleAudit — dir filter', () => {
     expect(parsed.bs.critical).toBe(1);
   });
 });
+
+// Counts alone force a second command to learn what failed. A caller that cannot
+// see the finding cannot weigh its rationale before deciding what to report, so
+// the audit surface must carry both the findings and their justification.
+describe('handleAudit — critical findings and rationale', () => {
+  it('lists each critical finding with its rationale in JSON mode', async () => {
+    write('src/auth.ts', 'const api_key = "live-secret-123456789";\n');
+    captureLogs();
+
+    await handleAudit({ json: true, quick: true });
+    const parsed = JSON.parse(flushed());
+
+    expect(parsed.bs.critical).toBe(1);
+    expect(parsed.bs.criticals).toHaveLength(1);
+    const [finding] = parsed.bs.criticals;
+    expect(finding.file).toBe('src/auth.ts');
+    expect(finding.line).toBe(1);
+    expect(finding.category).toBe('hardcoded_secret');
+    expect(finding.rationale).toBeTruthy();
+  });
+
+  it('prints the rationale beneath the finding in text mode', async () => {
+    write('src/auth.ts', 'const api_key = "live-secret-123456789";\n');
+    captureLogs();
+
+    await handleAudit({ quick: true });
+    const out = plain(flushed());
+
+    expect(out).toContain('src/auth.ts:1');
+    expect(out).toMatch(/version history|형상 이력/);
+  });
+
+  it('reports an empty criticals list on a clean repository', async () => {
+    write('src/clean.ts', 'export const x = 1;\n');
+    captureLogs();
+
+    await handleAudit({ json: true, quick: true });
+    const parsed = JSON.parse(flushed());
+
+    expect(parsed.bs.critical).toBe(0);
+    expect(parsed.bs.criticals).toEqual([]);
+  });
+});

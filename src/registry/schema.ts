@@ -107,6 +107,11 @@ export const CodeEntitySchema = z.object({
   maintainer: z.string().optional(),
   complexityScore: z.number().min(0).max(10).optional(),
   riskLevel: RiskLevelSchema.default('low'),
+  // INT-3881(v3): scanner metrics that were computed but previously discarded.
+  isExported: z.boolean().optional(),
+  loc: z.number().int().nonnegative().optional(),
+  nestingDepth: z.number().int().nonnegative().optional(),
+  paramCount: z.number().int().nonnegative().optional(),
   description: z.string().default(''),
   notes: z.string().default(''),
 
