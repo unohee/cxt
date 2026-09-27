@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "tier": "development",
-  "labelProvenance": "Hand-authored source and declaration labels; no scanner-generated oracle",
+  "labelProvenance": "Hand-authored synthetic/real-world labels; independent compiler-assisted self inventory; per-tier provenance and revisions retained",
   "license": "Apache-2.0 for original fixtures; vendored licenses in real-world/provenance.json",
   "files": [
     { "path": "typescript.json", "language": "typescript", "fixtures": 20 },
@@ -12,8 +12,9 @@
     { "path": "dataflow.json", "factFamily": "dataflow", "fixtures": 27 },
     { "path": "impact.json", "factFamily": "parameter-value-impact", "fixtures": 15 },
     { "path": "rules.json", "factFamily": "rules", "fixtures": 42 },
-    { "path": "real-world/provenance.json", "tier": "real-world", "factFamily": "entities-with-metadata", "fixtures": 3, "license": "per-source", "firstEvaluation": "../external-first-evaluation.json", "labelRevisions": "real-world/label-revisions.json" }
+    { "path": "real-world/provenance.json", "tier": "real-world", "factFamily": "entities-with-metadata", "fixtures": 3, "license": "per-source", "firstEvaluation": "../external-first-evaluation.json", "labelRevisions": "real-world/label-revisions.json" },
+    { "path": "self/provenance.json", "tier": "self", "factFamily": "named-top-level-entities-with-metadata", "fixtures": 1, "labelProvenance": "Independent TypeScript compiler-assisted inventory, not handwritten" }
   ],
-  "pendingTiers": ["self-corpus", "held-out"],
+  "pendingTiers": ["held-out"],
   "pendingFacts": ["metadata-for-synthetic-entities", "real-world-call-flow-rule-labels", "independent-label-review"]
 }

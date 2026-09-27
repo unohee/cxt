@@ -7,6 +7,18 @@ import { externalGate, loadExternalCorpus, scoreExternalFixture } from '../../be
 import { extractFile } from '../../src/registry/entityScanner.js';
 
 describe('licensed external declaration corpus', () => {
+  it('checks the independently compiled self inventory without counting nested declarations', () => {
+    const [fixture] = loadExternalCorpus(new URL('../../bench/corpus/self/', import.meta.url));
+    expect(fixture.entities).toHaveLength(50);
+    const actual = extractFile(fixture.source, fixture.filePath, fixture.language, 'ast').entities;
+    expect(actual.length).toBeGreaterThan(50);
+    expect(scoreExternalFixture(fixture, actual)).toMatchObject({ tp: 50, fp: 0, fn: 0, exportAccuracy: 1, parameterAccuracy: 1 });
+    expect(externalGate(scoreExternalFixture(fixture, actual.filter(e => e.name !== 'scanRepository')))).toBe(false);
+    const extra = ['invented-a', 'invented-b'].map(name => ({ ...actual[0], name, scopedName: name }));
+    expect(scoreExternalFixture(fixture, [...actual, extra[0]]).precision).toBe(50 / 51);
+    expect(externalGate(scoreExternalFixture(fixture, [...actual, ...extra]))).toBe(false);
+  });
+
   it('checks source, license and handwritten metadata for all three languages', () => {
     const fixtures = loadExternalCorpus();
     expect(fixtures.map(f => f.entities.length)).toEqual([18, 6, 8]);

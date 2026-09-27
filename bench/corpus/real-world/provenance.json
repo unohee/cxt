@@ -17,8 +17,9 @@
       "originalSha256": "b58f5acb35f492382dd941e6138b19404b3743956a849d5ecc209aef683f0a0d",
       "sourceSha256": "2bec5375b92b5a0df6f5483535015246287e365eff866dbce180f5923b73704f",
       "licenseSha256": "3f1189b28e3866e0d979968d466b78f813f76827cfdca1fbb124cc0a5c8841f8",
-      "upstreamBlobSha1": "dec859217bde10a85091fc55c14401fc1467bdd3",
-      "upstreamVerifiedAt": "2026-09-27T14:19:35.484Z"
+      "gitBlobSha1": "dec859217bde10a85091fc55c14401fc1467bdd3",
+      "gitBlobVerifiedAt": "2026-09-27T14:19:35.484Z",
+      "gitBlobVerification": "upstream-github"
     },
     {
       "language": "python",
@@ -33,8 +34,9 @@
       "originalSha256": "6683da36e47af523f3f41e18ad244d837783e19e98911cc0b7415dea81494ebc",
       "sourceSha256": "6683da36e47af523f3f41e18ad244d837783e19e98911cc0b7415dea81494ebc",
       "licenseSha256": "f1cbf908e1daa8789b389fdcf17811ed36b675d736b39a103591399861350382",
-      "upstreamBlobSha1": "d5e296f7748c1c650be01090c0461dfff5f4e31c",
-      "upstreamVerifiedAt": "2026-09-27T14:19:35.484Z"
+      "gitBlobSha1": "d5e296f7748c1c650be01090c0461dfff5f4e31c",
+      "gitBlobVerifiedAt": "2026-09-27T14:19:35.484Z",
+      "gitBlobVerification": "upstream-github"
     },
     {
       "language": "rust",
@@ -49,8 +51,9 @@
       "originalSha256": "32bf17ff841b4c285985d9e9df79c5099318c11bf0436ee8582dec30fc9ec826",
       "sourceSha256": "b155e91ac9aae71ad7c37323e53bd4a07c4aa97f4aa4051b69d1a8ad4b762892",
       "licenseSha256": "65fdb6c76cd61612070c066eec9ecdb30ee74fb27859d0d9af58b9f499fd0c3e",
-      "upstreamBlobSha1": "25dd6d5b0d9219ef9a7315c22785586cd1c6d451",
-      "upstreamVerifiedAt": "2026-09-27T14:19:35.484Z"
+      "gitBlobSha1": "25dd6d5b0d9219ef9a7315c22785586cd1c6d451",
+      "gitBlobVerifiedAt": "2026-09-27T14:19:35.484Z",
+      "gitBlobVerification": "upstream-github"
     }
   ],
   "labelsSha256": "4b4ffcd6f500b6781feb5b4f86797b295d2695686d762f22aa1f790f89dd4e33"

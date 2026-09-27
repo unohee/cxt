@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "tier": "self",
+  "selectedBeforeFirstEvaluation": true,
+  "selection": "Entire own entityScanner.ts at f711a50, declaration inventory only; no call-graph or flow oracle derived from this source.",
+  "labelsSha256": "842dda849a41226f668b43490aa29058517b98882a957504865655c09c95db6b",
+  "sources": [
+    {
+      "language": "typescript",
+      "id": "self/entityScanner-f711a50",
+      "path": "entityScanner.ts",
+      "start": 1,
+      "end": 1462,
+      "version": "cxt f711a50d0ccdf87d220c4beeb548466f49cb7681 (local commit)",
+      "upstream": "https://github.com/unohee/cxt",
+      "license": "Apache-2.0",
+      "licensePath": "LICENSE.txt",
+      "originalSha256": "ecbb5a8244ce7059dbb300f92349354a41c4a5f614b6c9cec74d23380c1ec0e8",
+      "sourceSha256": "ecbb5a8244ce7059dbb300f92349354a41c4a5f614b6c9cec74d23380c1ec0e8",
+      "licenseSha256": "f74b8476ddc909ca4767fce3402c91f0b03879b9440716b61afbb9456a9abf77",
+      "gitBlobSha1": "004e7ef2ebe50e7f2c7f3e1ea5e7b78c4d35dd71",
+      "gitBlobVerifiedAt": "2026-09-27T14:23:01.931Z",
+      "gitBlobVerification": "local-git-commit"
+    }
+  ]
+}

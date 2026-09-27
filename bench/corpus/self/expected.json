@@ -1,0 +1,468 @@
+{
+  "schemaVersion": 1,
+  "authoredAt": "2026-09-27T14:23:01.923Z",
+  "engineEvaluated": false,
+  "labelProvenance": "Compiler-assisted inventory using independent TypeScript 5.9.3 AST and explicit source-boundary/name review. Not a hand-authored oracle; no cxt output used. Only named top-level declarations.",
+  "exportContract": "Syntactic export modifier, not runtime reachability.",
+  "parameterContract": "Syntactic value parameters, excluding type parameters.",
+  "fixtures": [
+    {
+      "id": "self/entityScanner-f711a50",
+      "language": "typescript",
+      "filePath": "entityScanner.ts",
+      "topLevelOnly": true,
+      "entities": [
+        {
+          "kind": "constant",
+          "name": "MAX_FILE_SIZE",
+          "lineStart": 29,
+          "lineEnd": 29,
+          "scopedName": "MAX_FILE_SIZE",
+          "isExported": false,
+          "paramCount": 0
+        },
+        {
+          "kind": "constant",
+          "name": "MAX_DEPTH",
+          "lineStart": 30,
+          "lineEnd": 30,
+          "scopedName": "MAX_DEPTH",
+          "isExported": false,
+          "paramCount": 0
+        },
+        {
+          "kind": "constant",
+          "name": "SCAN_TIMEOUT_MS",
+          "lineStart": 31,
+          "lineEnd": 31,
+          "scopedName": "SCAN_TIMEOUT_MS",
+          "isExported": false,
+          "paramCount": 0
+        },
+        {
+          "kind": "type",
+          "name": "Language",
+          "lineStart": 37,
+          "lineEnd": 37,
+          "scopedName": "Language",
+          "isExported": true,
+          "paramCount": 0
+        },
+        {
+          "kind": "type",
+          "name": "LanguageConfig",
+          "lineStart": 39,
+          "lineEnd": 51,
+          "scopedName": "LanguageConfig",
+          "isExported": false,
+          "paramCount": 0
+        },
+        {
+          "kind": "constant",
+          "name": "METHOD_EXCLUDE",
+          "lineStart": 54,
+          "lineEnd": 57,
+          "scopedName": "METHOD_EXCLUDE",
+          "isExported": false,
+          "paramCount": 0
+        },
+        {
+          "kind": "constant",
+          "name": "TS_CONFIG",
+          "lineStart": 59,
+          "lineEnd": 82,
+          "scopedName": "TS_CONFIG",
+          "isExported": false,
+          "paramCount": 0
+        },
+        {
+          "kind": "constant",
+          "name": "PY_METHOD_EXCLUDE",
+          "lineStart": 85,
+          "lineEnd": 88,
+          "scopedName": "PY_METHOD_EXCLUDE",
+          "isExported": false,
+          "paramCount": 0
+        },
+        {
+          "kind": "constant",
+          "name": "PY_CONFIG",
+          "lineStart": 90,
+          "lineEnd": 109,
+          "scopedName": "PY_CONFIG",
+          "isExported": false,
+          "paramCount": 0
+        },
+        {
+          "kind": "constant",
+          "name": "GO_CONFIG",
+          "lineStart": 112,
+          "lineEnd": 126,
+          "scopedName": "GO_CONFIG",
+          "isExported": false,
+          "paramCount": 0
+        },
+        {
+          "kind": "constant",
+          "name": "RUST_CONFIG",
+          "lineStart": 129,
+          "lineEnd": 144,
+          "scopedName": "RUST_CONFIG",
+          "isExported": false,
+          "paramCount": 0
+        },
+        {
+          "kind": "constant",
+          "name": "JAVA_CONFIG",
+          "lineStart": 147,
+          "lineEnd": 161,
+          "scopedName": "JAVA_CONFIG",
+          "isExported": false,
+          "paramCount": 0
+        },
+        {
+          "kind": "constant",
+          "name": "C_CONFIG",
+          "lineStart": 164,
+          "lineEnd": 179,
+          "scopedName": "C_CONFIG",
+          "isExported": false,
+          "paramCount": 0
+        },
+        {
+          "kind": "constant",
+          "name": "CPP_CONFIG",
+          "lineStart": 182,
+          "lineEnd": 199,
+          "scopedName": "CPP_CONFIG",
+          "isExported": false,
+          "paramCount": 0
+        },
+        {
+          "kind": "constant",
+          "name": "CSHARP_CONFIG",
+          "lineStart": 202,
+          "lineEnd": 217,
+          "scopedName": "CSHARP_CONFIG",
+          "isExported": false,
+          "paramCount": 0
+        },
+        {
+          "kind": "constant",
+          "name": "LANGUAGE_CONFIGS",
+          "lineStart": 221,
+          "lineEnd": 230,
+          "scopedName": "LANGUAGE_CONFIGS",
+          "isExported": false,
+          "paramCount": 0
+        },
+        {
+          "kind": "constant",
+          "name": "EXT_TO_LANGUAGE",
+          "lineStart": 232,
+          "lineEnd": 232,
+          "scopedName": "EXT_TO_LANGUAGE",
+          "isExported": false,
+          "paramCount": 0
+        },
+        {
+          "kind": "constant",
+          "name": "SOURCE_EXTENSIONS",
+          "lineStart": 239,
+          "lineEnd": 239,
+          "scopedName": "SOURCE_EXTENSIONS",
+          "isExported": false,
+          "paramCount": 0
+        },
+        {
+          "kind": "function",
+          "name": "detectLanguage",
+          "lineStart": 241,
+          "lineEnd": 243,
+          "scopedName": "detectLanguage",
+          "isExported": false,
+          "paramCount": 1
+        },
+        {
+          "kind": "function",
+          "name": "isTestFile",
+          "lineStart": 245,
+          "lineEnd": 247,
+          "scopedName": "isTestFile",
+          "isExported": false,
+          "paramCount": 2
+        },
+        {
+          "kind": "type",
+          "name": "ExtractedEntity",
+          "lineStart": 251,
+          "lineEnd": 264,
+          "scopedName": "ExtractedEntity",
+          "isExported": true,
+          "paramCount": 0
+        },
+        {
+          "kind": "function",
+          "name": "extractEntities",
+          "lineStart": 269,
+          "lineEnd": 357,
+          "scopedName": "extractEntities",
+          "isExported": true,
+          "paramCount": 3
+        },
+        {
+          "kind": "function",
+          "name": "extractFile",
+          "lineStart": 360,
+          "lineEnd": 389,
+          "scopedName": "extractFile",
+          "isExported": true,
+          "paramCount": 4
+        },
+        {
+          "kind": "function",
+          "name": "extractIndentMethods",
+          "lineStart": 399,
+          "lineEnd": 457,
+          "scopedName": "extractIndentMethods",
+          "isExported": false,
+          "paramCount": 6
+        },
+        {
+          "kind": "function",
+          "name": "extractMethods",
+          "lineStart": 465,
+          "lineEnd": 533,
+          "scopedName": "extractMethods",
+          "isExported": false,
+          "paramCount": 6
+        },
+        {
+          "kind": "function",
+          "name": "findBraceBlockEnd",
+          "lineStart": 535,
+          "lineEnd": 567,
+          "scopedName": "findBraceBlockEnd",
+          "isExported": false,
+          "paramCount": 2
+        },
+        {
+          "kind": "function",
+          "name": "findIndentBlockEnd",
+          "lineStart": 569,
+          "lineEnd": 581,
+          "scopedName": "findIndentBlockEnd",
+          "isExported": false,
+          "paramCount": 2
+        },
+        {
+          "kind": "function",
+          "name": "computeBlockMetrics",
+          "lineStart": 585,
+          "lineEnd": 610,
+          "scopedName": "computeBlockMetrics",
+          "isExported": false,
+          "paramCount": 3
+        },
+        {
+          "kind": "function",
+          "name": "computeComplexityFromMetrics",
+          "lineStart": 612,
+          "lineEnd": 628,
+          "scopedName": "computeComplexityFromMetrics",
+          "isExported": false,
+          "paramCount": 3
+        },
+        {
+          "kind": "function",
+          "name": "computeRisk",
+          "lineStart": 630,
+          "lineEnd": 636,
+          "scopedName": "computeRisk",
+          "isExported": false,
+          "paramCount": 2
+        },
+        {
+          "kind": "type",
+          "name": "ReferenceSet",
+          "lineStart": 644,
+          "lineEnd": 651,
+          "scopedName": "ReferenceSet",
+          "isExported": true,
+          "paramCount": 0
+        },
+        {
+          "kind": "constant",
+          "name": "CALL_PATTERN",
+          "lineStart": 654,
+          "lineEnd": 654,
+          "scopedName": "CALL_PATTERN",
+          "isExported": false,
+          "paramCount": 0
+        },
+        {
+          "kind": "constant",
+          "name": "MEMBER_CALL_PATTERN",
+          "lineStart": 656,
+          "lineEnd": 656,
+          "scopedName": "MEMBER_CALL_PATTERN",
+          "isExported": false,
+          "paramCount": 0
+        },
+        {
+          "kind": "constant",
+          "name": "BASE_PATTERNS",
+          "lineStart": 659,
+          "lineEnd": 668,
+          "scopedName": "BASE_PATTERNS",
+          "isExported": false,
+          "paramCount": 0
+        },
+        {
+          "kind": "constant",
+          "name": "IMPORT_PATTERNS",
+          "lineStart": 671,
+          "lineEnd": 680,
+          "scopedName": "IMPORT_PATTERNS",
+          "isExported": false,
+          "paramCount": 0
+        },
+        {
+          "kind": "function",
+          "name": "extractReferences",
+          "lineStart": 687,
+          "lineEnd": 773,
+          "scopedName": "extractReferences",
+          "isExported": true,
+          "paramCount": 3
+        },
+        {
+          "kind": "type",
+          "name": "TestFileInfo",
+          "lineStart": 777,
+          "lineEnd": 781,
+          "scopedName": "TestFileInfo",
+          "isExported": false,
+          "paramCount": 0
+        },
+        {
+          "kind": "constant",
+          "name": "TS_IMPORT_FROM",
+          "lineStart": 783,
+          "lineEnd": 783,
+          "scopedName": "TS_IMPORT_FROM",
+          "isExported": false,
+          "paramCount": 0
+        },
+        {
+          "kind": "type",
+          "name": "TypeScriptNamedImport",
+          "lineStart": 785,
+          "lineEnd": 788,
+          "scopedName": "TypeScriptNamedImport",
+          "isExported": false,
+          "paramCount": 0
+        },
+        {
+          "kind": "function",
+          "name": "extractTypeScriptNamedImports",
+          "lineStart": 791,
+          "lineEnd": 807,
+          "scopedName": "extractTypeScriptNamedImports",
+          "isExported": true,
+          "paramCount": 1
+        },
+        {
+          "kind": "constant",
+          "name": "RESERVED_NAMES",
+          "lineStart": 809,
+          "lineEnd": 829,
+          "scopedName": "RESERVED_NAMES",
+          "isExported": false,
+          "paramCount": 0
+        },
+        {
+          "kind": "function",
+          "name": "parseTestFile",
+          "lineStart": 831,
+          "lineEnd": 857,
+          "scopedName": "parseTestFile",
+          "isExported": false,
+          "paramCount": 3
+        },
+        {
+          "kind": "function",
+          "name": "resolveImportPath",
+          "lineStart": 859,
+          "lineEnd": 865,
+          "scopedName": "resolveImportPath",
+          "isExported": false,
+          "paramCount": 2
+        },
+        {
+          "kind": "function",
+          "name": "stripTestSuffix",
+          "lineStart": 867,
+          "lineEnd": 875,
+          "scopedName": "stripTestSuffix",
+          "isExported": false,
+          "paramCount": 1
+        },
+        {
+          "kind": "function",
+          "name": "buildTestMap",
+          "lineStart": 877,
+          "lineEnd": 958,
+          "scopedName": "buildTestMap",
+          "isExported": false,
+          "paramCount": 2
+        },
+        {
+          "kind": "function",
+          "name": "isNearbyTest",
+          "lineStart": 960,
+          "lineEnd": 983,
+          "scopedName": "isNearbyTest",
+          "isExported": false,
+          "paramCount": 2
+        },
+        {
+          "kind": "type",
+          "name": "ScanResult",
+          "lineStart": 987,
+          "lineEnd": 1008,
+          "scopedName": "ScanResult",
+          "isExported": true,
+          "paramCount": 0
+        },
+        {
+          "kind": "function",
+          "name": "scanRepository",
+          "lineStart": 1012,
+          "lineEnd": 1368,
+          "scopedName": "scanRepository",
+          "isExported": true,
+          "paramCount": 3
+        },
+        {
+          "kind": "type",
+          "name": "RelResolveEntity",
+          "lineStart": 1375,
+          "lineEnd": 1380,
+          "scopedName": "RelResolveEntity",
+          "isExported": false,
+          "paramCount": 0
+        },
+        {
+          "kind": "function",
+          "name": "resolveRelations",
+          "lineStart": 1382,
+          "lineEnd": 1462,
+          "scopedName": "resolveRelations",
+          "isExported": true,
+          "paramCount": 3
+        }
+      ]
+    }
+  ]
+}

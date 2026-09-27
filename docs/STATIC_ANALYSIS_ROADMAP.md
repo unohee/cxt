@@ -202,3 +202,9 @@ CFG 위 worklist fixed-point solver, reaching definitions/def-use, 값 상태 �
 - 같은 소스 lexical 기준선: TS recall 2/3, Python precision/recall 2/3, Rust precision 8/11/recall1. span/scope/metadata는 `external-lexical-baseline.json`에 별도 기록했다. 세 소스 구간의 선언 평가이며 호출·flow·규칙의 실세계 성능을 의미하지 않는다.
 - 검증: 전체745 tests, 기존 src lint와 신규 benchmark/test의 별도 strict typecheck, AST/lexical gate 실행. source/license/label 변조 및 export/parameter/중복/누락/span/scope mutation의 실패를 확인했다. 로컬 package runtime 변경이 없어 이전 설치 검증을 재사용한다.
 - self/held-out 계층·독립 PR 라벨 리뷰·실제 call/flow/rule 정답·CI는 계속 열린 상태다. AGT-3878/3879는 In Progress를 유지한다.
+
+### 10차 후속 — 자기 코드 선언 inventory
+
+- `bench:self`: f711a50의 entityScanner.ts 전체 source/Git blob/license snapshot을 고정했다. 독립 TypeScript 5.9.3 compiler AST로 보조 작성하고 source boundary를 검토한 최상위 이름 있는 선언50개다. 수기/독립 PR 리뷰 라벨로 부르지 않으며 이 자기 코드로 call/flow 정답을 만들지 않는다. 원격 commit 존재를 주장하지 않고 provenance의 검증 경로를 local-git-commit으로 구분했다.
+- 첫 AST 평가(`self-first-evaluation.json`)는 선언/span/scope/export/parameter 전부50/50. 같은 snapshot의 lexical은 recall24/50, span23/24, export24/50, parameter22/50. 과거49개 코퍼스와 source revision이 다르다. 중첩 선언은 별도 범위이며 extra/missing 최상위 선언이 점수를 낮추는 회귀를 추가했다.
+- self/real-world loader의 source/license/label 무결성 및 scanner와 독립적인 정답 출처를 유지한다. 다음은 held-out 및 CI이며 독립 라벨 리뷰·실제 call/flow/rule labels·resource/ownership 등의 열린 기준은 남아 있다.

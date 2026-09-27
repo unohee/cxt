@@ -13,13 +13,14 @@ const path = z.string().regex(/^[A-Za-z0-9_.-]+$/).refine(value => value !== '.'
 const entitySchema = z.object({ kind: z.enum(['function', 'class', 'module', 'type', 'constant']), name: z.string().min(1),
   lineStart: z.number().int().positive(), lineEnd: z.number().int().positive(), scopedName: z.string().min(1),
   isExported: z.boolean(), paramCount: z.number().int().nonnegative() }).strict();
-const fixtureSchema = z.object({ id: z.string().min(1), language, filePath: path, entities: z.array(entitySchema).min(1) }).strict();
+const fixtureSchema = z.object({ id: z.string().min(1), language, filePath: path, topLevelOnly: z.boolean().optional(), entities: z.array(entitySchema).min(1) }).strict();
 const labelsSchema = z.object({ schemaVersion: z.literal(1), authoredAt: z.iso.datetime(), engineEvaluated: z.boolean(),
   labelProvenance: z.string().min(1), exportContract: z.string().min(1), parameterContract: z.string().min(1), fixtures: z.array(fixtureSchema).min(1) }).strict();
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
-const provenanceSchema = z.object({ schemaVersion: z.literal(1), tier: z.literal('real-world'), selectedBeforeFirstEvaluation: z.literal(true), selection: z.string().min(1),
+const provenanceSchema = z.object({ schemaVersion: z.literal(1), tier: z.enum(['real-world', 'self']), selectedBeforeFirstEvaluation: z.literal(true), selection: z.string().min(1),
   labelsSha256: digest, sources: z.array(z.object({ language, id: z.string().min(1), path, start: z.number().int().positive(), end: z.number().int().positive(),
-    version: z.string().min(1), upstream: z.url(), upstreamBlobSha1: z.string().regex(/^[a-f0-9]{40}$/), upstreamVerifiedAt: z.iso.datetime(),
+    version: z.string().min(1), upstream: z.url(), gitBlobSha1: z.string().regex(/^[a-f0-9]{40}$/), gitBlobVerifiedAt: z.iso.datetime(),
+    gitBlobVerification: z.enum(['upstream-github', 'local-git-commit']),
     license: z.string().min(1), licensePath: path, originalSha256: digest, sourceSha256: digest, licenseSha256: digest }).strict()).min(1) }).strict();
 export type ExternalFixture = z.infer<typeof fixtureSchema> & { source: string; sourceSha256: string };
 
@@ -44,6 +45,7 @@ export function loadExternalCorpus(root = new URL('./corpus/real-world/', import
 }
 
 export function scoreExternalFixture(fixture: ExternalFixture, actual: ExtractedEntity[]) {
+  if (fixture.topLevelOnly) actual = actual.filter(e => (e.scopedName ?? e.name) === e.name && !e.name.startsWith('<lambda@'));
   const counts = countMatches(fixture.entities.map(e => [e.kind, e.name, e.lineStart, e.lineEnd, e.scopedName]), actual);
   let exportCorrect = 0, parameterCorrect = 0;
   const remaining = [...actual];
@@ -64,8 +66,9 @@ export function externalGate(measured: ReturnType<typeof scoreExternalFixture>):
 }
 
 function main(): void {
-  const { values } = parseArgs({ options: { engine: { type: 'string', default: 'ast' }, 'no-gate': { type: 'boolean', default: false }, output: { type: 'string' } } });
-  const engine = z.enum(['ast', 'lexical']).parse(values.engine), fixtures = loadExternalCorpus(), start = performance.now();
+  const { values } = parseArgs({ options: { engine: { type: 'string', default: 'ast' }, tier: { type: 'string', default: 'real-world' }, 'no-gate': { type: 'boolean', default: false }, output: { type: 'string' } } });
+  const tier = z.enum(['real-world', 'self']).parse(values.tier);
+  const engine = z.enum(['ast', 'lexical']).parse(values.engine), fixtures = loadExternalCorpus(new URL(`./corpus/${tier}/`, import.meta.url)), start = performance.now();
   const results = fixtures.map(fixture => {
     let actual: ExtractedEntity[] = [], error: string | undefined;
     try { actual = extractFile(fixture.source, fixture.filePath, fixture.language, engine).entities; }
@@ -74,7 +77,7 @@ function main(): void {
     return { id: fixture.id, language: fixture.language, sourceSha256: fixture.sourceSha256, labels: fixture.entities.length,
       measured, error, pass: !error && externalGate(measured), actual };
   });
-  const report = { schemaVersion: 1, tier: 'real-world', engine, factFamily: 'entities-with-metadata',
+  const report = { schemaVersion: 1, tier, engine, factFamily: 'entities-with-metadata',
     corpusSha256: sha256(JSON.stringify(fixtures)), generatedAt: new Date().toISOString(), node: process.version,
     durationMs: performance.now() - start, processMaxRssKiB: process.resourceUsage().maxRSS,
     gateEnforced: !values['no-gate'], pass: results.every(r => r.pass), results };

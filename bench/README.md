@@ -2,7 +2,7 @@
 
 추적: [AGT-3878](https://linear.app/intrect/issue/AGT-3878), [AGT-3879](https://linear.app/intrect/issue/AGT-3879).
 
-합성 선언 코퍼스는 언어당 20개, 총 60개 fixture의 선언 100개를 수기로 라벨링했다. 별도의 호출 코퍼스는 다중 파일 사례 39개, 호출 위치 55개다. 실제 소스 계층은 세 언어 3개 구간/32개 선언과 export/parameter metadata를 추가했다. 현재 parser 출력을 정답으로 생성하지 않으며 라벨 오류 수정 이력도 보존한다. 자기 코드·held-out 계층, 다른 fact family의 실제 소스 정답 및 독립 라벨 리뷰는 후속 작업이며, 기존 P0 전체 완료 조건을 충족했다고 주장하지 않는다.
+합성 선언 코퍼스는 언어당 20개, 총 60개 fixture의 선언 100개를 수기로 라벨링했다. 별도의 호출 코퍼스는 다중 파일 사례 39개, 호출 위치 55개다. 실제 소스 계층은 세 언어 3개 구간/32개 선언과 export/parameter metadata를 추가했고, 자기 코드 계층은 독립 compiler로 보조 작성한 50개 선언이다. 현재 parser 출력을 정답으로 생성하지 않으며 라벨 오류 수정 이력도 보존한다. held-out 계층, 다른 fact family의 실제 소스 정답 및 독립 라벨 리뷰는 후속 작업이며, 기존 P0 전체 완료 조건을 충족했다고 주장하지 않는다.
 
 ## 재현
 
@@ -12,6 +12,7 @@ npm run bench:calls
 npm run bench:cfg
 npm run bench:rules
 npm run bench:external
+npm run bench:self
 npm run bench:incremental
 npm run bench:accuracy -- --engine lexical --no-gate
 npm test
@@ -21,6 +22,8 @@ npm run test:package
 `--output <path>`로 JSON을 저장한다. 기본 AST 실행은 gates.json을 적용하고 실패 시 exit 1이다. `--no-gate`는 과거 lexical 기준선 측정용이며 보고서에 `gateEnforced: false`가 표시된다. `--engine lexical`만 지정하면 현재 AST 게이트를 통과하지 못하고 exit 1이 된다.
 
 ## 실제 소스 선언 계층
+
+`npm run bench:self`는 f711a50의 entityScanner.ts 전체 snapshot에서 최상위 이름 있는 선언 50개를 검사한다. 정답은 독립 TypeScript 5.9.3 compiler AST로 보조 작성하고 source 경계를 확인했다. 수기 라벨이나 독립 PR 리뷰로 부르지 않는다. 첫 AST 평가의 선언/span/scope/export/parameter 지표는 모두 1.0이다. 같은 소스의 lexical은 recall24/50(48%), span23/24, export24/50, parameter22/50이다. 중첩 선언을 분모/분자에 넣지 않으며 자기 코드에서 call/flow 정답을 만들지 않는다. 과거 문서의 49개는 이전 source revision의 개수다.
 
 `npm run bench:external`은 Zod 4.3.6(TypeScript), CPython 3.12(Python), rust-fnv 1.0.7(Rust)의 고정 소스 구간과 수기 라벨 32개를 검사한다. 각 소스의 라이선스·패키지 버전·원본/구간/라벨 SHA는 `corpus/real-world/provenance.json`에 있다. span/scope와 syntactic export/parameter count를 각각 측정하고, source/license/label hash가 달라지면 분석 전에 실패한다. Declaration 네 지표는 각각 ≥0.98, export/parameter 지표는 1.0을 요구한다. 중복·누락·위치·scope·export·parameter mutation이 게이트를 실패시키는지 검사한다.
 
