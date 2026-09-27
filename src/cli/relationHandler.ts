@@ -79,7 +79,7 @@ function resolveTarget(name: string, projectId: string, json: boolean): CodeEnti
 }
 
 /** qualifiedName(`file::name`) 또는 단순 name 모두 허용. */
-function lookup(nameOrQualified: string, projectId: string, json: boolean): CodeEntity | null {
+export function lookupEntity(nameOrQualified: string, projectId: string, json: boolean): CodeEntity | null {
   const m = t();
   const store = getRegistryStore();
   if (nameOrQualified.includes('::')) {
@@ -102,7 +102,7 @@ export async function handleWhoCalls(name: string, opts: RelationOptions): Promi
   try {
     const relType = parseRelationType(opts.type, !!opts.json);
     if (relType === null) return;
-    const target = lookup(name, projectId, !!opts.json);
+    const target = lookupEntity(name, projectId, !!opts.json);
     if (!target) { process.exitCode = 1; return; }
 
     const callers = store.getIncomingRelations(target.id, relType);
@@ -137,7 +137,7 @@ export async function handleCalls(name: string, opts: RelationOptions): Promise<
   try {
     const relType = parseRelationType(opts.type, !!opts.json);
     if (relType === null) return;
-    const target = lookup(name, projectId, !!opts.json);
+    const target = lookupEntity(name, projectId, !!opts.json);
     if (!target) { process.exitCode = 1; return; }
 
     const callees = store.getOutgoingRelations(target.id, relType);
@@ -177,7 +177,7 @@ export async function handleImpact(name: string, opts: RelationOptions): Promise
   try {
     const maxDepth = parseImpactDepth(opts.depth, !!opts.json);
     if (maxDepth === null) return;
-    const target = lookup(name, projectId, !!opts.json);
+    const target = lookupEntity(name, projectId, !!opts.json);
     if (!target) { process.exitCode = 1; return; }
 
     const impacted = store.getImpactSet(target.id, maxDepth);

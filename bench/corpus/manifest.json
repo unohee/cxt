@@ -7,8 +7,9 @@
     { "path": "typescript.json", "language": "typescript", "fixtures": 20 },
     { "path": "python.json", "language": "python", "fixtures": 20 },
     { "path": "rust.json", "language": "rust", "fixtures": 20 },
-    { "path": "calls.json", "factFamily": "call-sites", "fixtures": 39 }
+    { "path": "calls.json", "factFamily": "call-sites", "fixtures": 39 },
+    { "path": "cfg.json", "factFamily": "control-flow", "fixtures": 27 }
   ],
   "pendingTiers": ["self-corpus", "licensed-real-world-slices", "held-out"],
-  "pendingFacts": ["exported", "paramCount", "cfg", "dataflow"]
+  "pendingFacts": ["exported", "paramCount", "dataflow"]
 }

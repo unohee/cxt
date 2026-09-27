@@ -17,6 +17,7 @@ import type {
   FileBrief, RegistryStats,
 } from './schema.js';
 import type { ResolvedCallSite, SymbolValue } from '../analysis/symbols.js';
+import type { ControlFlowGraph } from '../analysis/cfg.js';
 
 function boundedPagination(value: number | undefined, fallback: number, min: number, max: number, name: string): number {
   const resolved = value ?? fallback;
@@ -191,7 +192,7 @@ export class SqliteRegistryStore {
   //           omitted — P1 (tree-sitter frontend) is expected to extend
   //           EntityKind and pinning it now would force another rebuild.
   //           relations' relation_type CHECK moves to P2 v4 (code_call_sites).
-  private static readonly SCHEMA_VERSION = 4;
+  private static readonly SCHEMA_VERSION = 5;
 
   // The last version in which the FTS index schema (set of indexed columns)
   // changed. Decoupled from the user_version bump: through v2 "version went up"
@@ -651,6 +652,13 @@ export class SqliteRegistryStore {
         CREATE INDEX IF NOT EXISTS idx_ccs_caller ON code_call_sites(caller_id);
         CREATE INDEX IF NOT EXISTS idx_ccs_target ON code_call_sites(target_id);
         CREATE INDEX IF NOT EXISTS idx_ccs_resolution ON code_call_sites(project_id, resolution);
+        CREATE TABLE IF NOT EXISTS code_control_flow (
+          project_id TEXT NOT NULL,
+          owner_id TEXT NOT NULL REFERENCES code_entities(id) ON DELETE CASCADE,
+          completeness TEXT NOT NULL CHECK (completeness IN ('complete', 'partial')),
+          graph_json TEXT NOT NULL CHECK (json_valid(graph_json)),
+          PRIMARY KEY (project_id, owner_id)
+        );
       `)).immediate();
     }
 
@@ -775,6 +783,29 @@ export class SqliteRegistryStore {
       WHERE project_id = ? AND caller_id IS NOT NULL AND resolution = 'resolved'`)
       .all(projectId) as Array<{ caller_id: string; target_id: string }>;
     return rows.map(row => ({ sourceId: row.caller_id, targetId: row.target_id, relationType: 'calls' }));
+  }
+
+  replaceControlFlowForProject(projectId: string, graphs: ControlFlowGraph[]): number {
+    const entities = this.db.prepare('SELECT id, qualified_name FROM code_entities WHERE project_id = ?')
+      .all(projectId) as Array<{ id: string; qualified_name: string }>;
+    const ids = new Map(entities.map(entity => [entity.qualified_name, entity.id]));
+    const insert = this.db.prepare('INSERT INTO code_control_flow(project_id, owner_id, completeness, graph_json) VALUES (?, ?, ?, ?)');
+    return this.db.transaction(() => {
+      this.db.prepare('DELETE FROM code_control_flow WHERE project_id = ?').run(projectId);
+      for (const graph of graphs) {
+        const ownerId = ids.get(graph.owner);
+        if (!ownerId) throw new Error(`Unregistered CFG owner: ${graph.owner}`);
+        insert.run(projectId, ownerId, graph.completeness, JSON.stringify(graph));
+      }
+      return graphs.length;
+    })();
+  }
+
+  getControlFlow(projectId: string, ownerId?: string): ControlFlowGraph[] {
+    const rows = this.db.prepare(`SELECT graph_json FROM code_control_flow WHERE project_id = ?
+      ${ownerId ? 'AND owner_id = ?' : ''} ORDER BY owner_id`)
+      .all(...(ownerId ? [projectId, ownerId] : [projectId])) as Array<{ graph_json: string }>;
+    return rows.map(row => JSON.parse(row.graph_json) as ControlFlowGraph);
   }
 
   registerEntity(input: RegisterEntityInput): CodeEntity {

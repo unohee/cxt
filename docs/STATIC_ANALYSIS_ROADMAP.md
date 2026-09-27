@@ -120,3 +120,12 @@ CFG 위 worklist fixed-point solver, reaching definitions/def-use, 값 상태 �
 - 실제 현 소스 격리 scan(`/tmp/cxt-symbol-self-MQRsxe`): 32 files / 852 entities / errors 0 / diagnostics 0. 4,061 calls 중 resolved 1,012, unresolved 2,189, external 860. 호출 정답률을 측정한 결과가 아니며 coverage gap을 보여준다.
 - 2의 현재 한계: tsconfig 및 workspace/package 경로, full type inference/subtype dispatch, member mutation, decorator/macro/framework callback 의미는 미완료다. confidence 1/0.9/0은 정책 값이며 확률 보정값이 아니다. 재할당은 CFG/dataflow 전까지 보수적으로 미해석한다. anonymous callback 안의 호출은 별도 함수 소유로 기록한다.
 - 다음: 3 CFG → 4 intraprocedural dataflow → 5 interprocedural summaries. 실제 저장소·held-out 평가 및 나머지 6–9와 CI는 계속 열린 상태다.
+
+## 실행 기록 — 2026-09-27, 3차 구현
+
+- 3: AST→operation CFG/basic blocks→DB v5 `code_control_flow`→`cxt cfg <name> --json --strict`를 연결했다. 부분 CFG는 strict exit 2, 부재는 exit 1이다. scan snapshot과 함께 원자적으로 교체한다.
+- 제어구조: if/elif, 단락·삼항·optional chain·logical assignment, 기본 parameter, loop/do/label/break/continue, switch fallthrough, match guard, return/throw, try/catch/else/finally, Python with/loop else, Rust `?`. finally를 pending completion별로 복제하여 cleanup 이후 경로와 override를 보존한다.
+- 10: 언어별 9개 CFG fixture, 총 27개/경로 45개를 수기로 라벨링했다. 그래프 생성/구조 복잡도/completeness/reachability 모두 정답과 일치한다. 언어별 partial 1개를 포함하므로 생성률 100%를 완전 지원률로 부르지 않는다. gate mutation 및 basic block 분할·edge 보존 검사 포함.
+- 검증: lint/build, Vitest 494개, 선언/호출/CFG 게이트, 실제 npm 설치 CLI의 CFG complete/partial strict exit 0/2 및 기존 호출·parser fallback 검사 통과. v4→v5 migration 및 snapshot rollback 확인.
+- 최종 소스 격리 scan(`/tmp/cxt-cfg-verified-iojxfO`): 36 files / 964 entities / errors 0. CFG 721개 중 complete 674 / partial 47, 47,784 nodes / 59,443 edges / 16,775 blocks. 127개 await 및 1개 yield 지점이 partial의 원인이다. audit critical 0 / warning 22 / minor 13 / errors 0 / pass true.
+- 남은 범위: await/yield suspension, comprehensions/macros/exception groups 및 더 넓은 독립 평가. CFG complete는 이 모델 내 제어구조 변환 완료이며 실행 경로의 값·타입 타당성, 종료 보장, 전체 runtime 의미를 입증하지 않는다. AGT-4566은 추가 지원을 위해 In Progress로 유지한다.

@@ -191,6 +191,10 @@ export async function handleCheck(
       console.log(`  ${'Relations'.padEnd(16)}${c.cyan}${result.relationsLoaded}${c.reset}`);
       console.log(`  ${'Parsers'.padEnd(16)}${Object.entries(result.parserBreakdown).map(([engine, count]) => `${engine}: ${count}`).join(', ') || 'none'}`);
       console.log(`  ${'Call sites'.padEnd(16)}${result.callSites.total} (${result.callSites.resolved} resolved, ${result.callSites.unresolved} unresolved, ${result.callSites.external} external)`);
+      console.log(`  ${'CFGs'.padEnd(16)}${result.controlFlow.total} (${result.controlFlow.complete} complete, ${result.controlFlow.partial} partial)`);
+      for (const diagnostic of result.controlFlow.diagnostics.slice(0, 10)) {
+        console.log(`    ${escapeTerminal(diagnostic.filePath)}:${diagnostic.span.line} [${diagnostic.code}] ${escapeTerminal(diagnostic.message)}`);
+      }
       console.log(`  ${m.duration.padEnd(16)}${c.dim}${result.durationMs}ms${c.reset}`);
 
       if (Object.keys(result.languageBreakdown).length > 0) {

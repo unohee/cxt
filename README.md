@@ -33,6 +33,7 @@ cxt check --ci           # CI/CD mode (JSON output, exit 1 on critical)
 cxt who-calls <name>     # entities that call/extend/implement <name>
 cxt calls <name>         # entities that <name> calls/extends/implements
 cxt impact <name>        # transitive callers — everything affected if <name> changes
+cxt cfg <name> --json    # stored function control-flow graph and diagnostics
 cxt impact <name> --depth 3   # limit BFS depth (default: 5)
 cxt who-calls <name> --json   # machine-readable output (also: calls/impact)
 cxt preflight <name> --json   # candidate files + risk/test/warning review checklist
@@ -100,7 +101,7 @@ Missing extraction queries and invalid queries also fail the scan.
 The public `extractFile` API returns the selected engine, declarations,
 references, symbol facts and diagnostics. `extractEntities` retains its legacy lexical API.
 AST call resolution follows project-local bindings, imports, aliases and simple receiver types.
-BS rules remain heuristic; CFG, dataflow, semantic
+BS rules remain heuristic; dataflow, semantic
 library models and SARIF are tracked in the
 [ten-part implementation roadmap](docs/STATIC_ANALYSIS_ROADMAP.md).
 
@@ -146,6 +147,28 @@ full type inference, subtype dispatch, member mutation, decorators, macros and f
 are not modeled. Multiple writes remain unresolved until dataflow analysis is available.
 Calls through these constructs may remain unknown or require source review; an empty caller list
 does not establish that a function is unused.
+
+## Control flow
+
+`cxt scan` stores function CFGs for AST languages in DB v5 `code_control_flow`.
+`cxt cfg <qualified-name> --json` returns source-located operation nodes, edges,
+basic blocks, reachability, structural complexity and completeness diagnostics.
+`--strict` exits 2 for `partial`, 0 for a complete graph; an absent graph/entity is exit 1.
+
+Supported control includes if/elif, short-circuit/ternary/optional chaining/logical assignment,
+loops and labeled jumps, switch fallthrough, match guards, return/throw,
+try/catch/else/finally, Python with/loop-else and Rust `?`.
+Cleanup paths are copied per pending completion to preserve finally overrides.
+Unknown call/member effects may throw; exception-type and value feasibility are approximated.
+`structuralComplexity` counts explicit decision sites plus one, without counting implicit
+exception edges or copied finally bodies again.
+
+`complete` means the builder lowered the function's control constructs within this model;
+it does not establish path feasibility, termination, type correctness or full runtime semantics.
+Await/yield, comprehensions, macros, exception groups and unproved Rust match exhaustiveness
+produce `partial` diagnostics. A per-function node budget also produces `partial`.
+Lexical files and function signatures without bodies have no CFG.
+Run `npm run bench:cfg` for the handwritten development reachability/complexity corpus.
 
 ## Benchmark — does it cut agent tool calls?
 

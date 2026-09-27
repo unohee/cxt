@@ -17,6 +17,7 @@ import { loadTreeSitterFrontend } from '../frontend/treeSitter.js';
 import { entityQualifiedName, FrontendError, parserMode } from '../frontend/types.js';
 import type { FrontendDiagnostic, FrontendResult, ParserMode } from '../frontend/types.js';
 import type { SymbolFacts } from '../analysis/symbols.js';
+import type { CfgDiagnostic, ControlFlowGraph } from '../analysis/cfg.js';
 import { resolveSymbols } from '../analysis/resolveSymbols.js';
 
 // ============ 상수 ============
@@ -993,6 +994,8 @@ export interface ScanResult {
   parserBreakdown: Record<string, number>;
   diagnostics: FrontendDiagnostic[];
   callSites: { total: number; resolved: number; unresolved: number; external: number };
+  controlFlow: { total: number; complete: number; partial: number; nodes: number; edges: number;
+    diagnostics: Array<CfgDiagnostic & { filePath: string; owner: string }> };
 }
 
 // ============ 메인 스캔 함수 ============
@@ -1025,6 +1028,8 @@ export async function scanRepository(
   const diagnostics: FrontendDiagnostic[] = [];
   const symbolFiles: SymbolFacts[] = [];
   const callSites = { total: 0, resolved: 0, unresolved: 0, external: 0 };
+  const cfgs: ControlFlowGraph[] = [];
+  const controlFlow: ScanResult['controlFlow'] = { total: 0, complete: 0, partial: 0, nodes: 0, edges: 0, diagnostics: [] };
   let scannedFiles = 0;
   let completeScan = true;
 
@@ -1087,6 +1092,7 @@ export async function scanRepository(
             // 참조 추출 (관계 그래프 2-pass용).
             if (parsed.symbols) symbolFiles.push(parsed.symbols);
             else for (const [key, refs] of parsed.references) refsByQName.set(key, refs);
+            cfgs.push(...parsed.controlFlow ?? []);
 
             scannedFiles++;
             languageBreakdown[language] = (languageBreakdown[language] ?? 0) + 1;
@@ -1128,6 +1134,7 @@ export async function scanRepository(
       parserBreakdown,
       diagnostics,
       callSites,
+      controlFlow,
     };
   }
 
@@ -1245,6 +1252,12 @@ export async function scanRepository(
     // ============ 관계 그래프 적재 (2-pass) ============
     const semantic = resolveSymbols(symbolFiles);
     store.replaceCallSitesForProject(projectId, semantic.calls);
+    store.replaceControlFlowForProject(projectId, cfgs);
+    for (const graph of cfgs) {
+      controlFlow.total++; controlFlow[graph.completeness]++;
+      controlFlow.nodes += graph.nodes.length; controlFlow.edges += graph.edges.length;
+      controlFlow.diagnostics.push(...graph.diagnostics.map(d => ({ ...d, filePath: graph.filePath, owner: graph.owner })));
+    }
     callSites.total = semantic.calls.length;
     for (const call of semantic.calls) callSites[call.resolution]++;
     const relations = [...resolveRelations(store, projectId, refsByQName), ...store.getCallSiteRelations(projectId)];
@@ -1263,6 +1276,8 @@ export async function scanRepository(
     removed = 0;
     relationsLoaded = 0;
     callSites.total = callSites.resolved = callSites.unresolved = callSites.external = 0;
+    controlFlow.total = controlFlow.complete = controlFlow.partial = controlFlow.nodes = controlFlow.edges = 0;
+    controlFlow.diagnostics = [];
     completeScan = false;
   }
   if (verbose) {
@@ -1284,6 +1299,7 @@ export async function scanRepository(
     parserBreakdown,
     diagnostics,
     callSites,
+    controlFlow,
   };
 }
 

@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "factFamily": "control-flow",
+  "tier": "synthetic-development",
+  "corpusSha256": "77fca80e5011cede8fcf728dc1488fd1cbed90c6f1707012f99b59547662050d",
+  "generatedAt": "2026-09-27T10:06:43.293Z",
+  "node": "v24.20.0",
+  "durationMs": 128.57042900000005,
+  "processMaxRssKiB": 113576,
+  "pass": true,
+  "results": [
+    {
+      "language": "typescript",
+      "fixtures": 9,
+      "complete": 8,
+      "partial": 1,
+      "constructed": 9,
+      "completenessCorrect": 9,
+      "complexityCorrect": 9,
+      "pathCorrect": 17,
+      "paths": 17,
+      "constructionRate": 1,
+      "complexityAccuracy": 1,
+      "reachabilityAccuracy": 1,
+      "failures": [],
+      "pass": true
+    },
+    {
+      "language": "python",
+      "fixtures": 9,
+      "complete": 8,
+      "partial": 1,
+      "constructed": 9,
+      "completenessCorrect": 9,
+      "complexityCorrect": 9,
+      "pathCorrect": 15,
+      "paths": 15,
+      "constructionRate": 1,
+      "complexityAccuracy": 1,
+      "reachabilityAccuracy": 1,
+      "failures": [],
+      "pass": true
+    },
+    {
+      "language": "rust",
+      "fixtures": 9,
+      "complete": 8,
+      "partial": 1,
+      "constructed": 9,
+      "completenessCorrect": 9,
+      "complexityCorrect": 9,
+      "pathCorrect": 13,
+      "paths": 13,
+      "constructionRate": 1,
+      "complexityAccuracy": 1,
+      "reachabilityAccuracy": 1,
+      "failures": [],
+      "pass": true
+    }
+  ]
+}

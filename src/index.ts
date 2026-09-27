@@ -30,6 +30,8 @@ export type { LanguageFrontend, FrontendResult, FrontendDiagnostic, ParserMode }
 export { resolveSymbols } from './analysis/resolveSymbols.js';
 export type { SymbolResolution } from './analysis/resolveSymbols.js';
 export type { SymbolFacts, SymbolValue, CallSite, ResolvedCallSite, ResolutionReason } from './analysis/symbols.js';
+export { reachableNodes, buildBasicBlocks } from './analysis/cfg.js';
+export type { ControlFlowGraph, CfgNode, CfgEdge, CfgDiagnostic, SourceSpan, BasicBlock } from './analysis/cfg.js';
 
 // BS Detector
 export { scanRepository as scanBs, scanFile as scanFileForBs, scanFileContent, aggregateResults } from './registry/bsDetector.js';

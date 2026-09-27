@@ -19,6 +19,7 @@ writeFileSync(join(source, 'sample.ts'), 'export function read() {}');
 writeFileSync(join(source, 'sample.py'), 'def read(): pass');
 writeFileSync(join(source, 'sample.rs'), 'pub fn read() {}');
 writeFileSync(join(source, 'caller.ts'), "import { read as alias } from './sample.js';\nexport function caller() { alias(); missing(); }\ncaller();");
+writeFileSync(join(source, 'control.ts'), 'export function branch(x) { if(x) return 1; return 2; }\nexport async function partial() { await task(); }');
 
 for (const mode of ['full', 'missing']) {
   const prefix = join(scratch, 'full');
@@ -63,7 +64,7 @@ for (const mode of ['full', 'missing']) {
   const clean = spawnSync(process.execPath, [probe], { cwd: source, encoding: 'utf8', timeout: 30_000,
     env: { ...process.env, CXT_PARSER: 'auto' } });
   assert.equal(clean.status, 0, clean.stderr + clean.stdout);
-  assert.match(clean.stdout, mode === 'full' ? /ast: 4/ : /lexical: 4/);
+  assert.match(clean.stdout, mode === 'full' ? /ast: 5/ : /lexical: 5/);
   console.log(`${mode}: installed package; 6 grammar probes and real CLI scan passed`);
   if (mode === 'full') {
     const callProbe = join(scratch, 'calls.mjs');
@@ -81,6 +82,21 @@ for (const mode of ['full', 'missing']) {
       [[2, 'sample.ts::read', 'resolved'], [2, null, 'unresolved']]);
     assert.equal(parsedCalls.callees[0].file, 'sample.ts');
     console.log('full: installed CLI resolves imports and exposes unresolved call-site locations');
+    for (const [name, status, completeness] of [['branch', 0, 'complete'], ['partial', 2, 'partial']]) {
+      const cfgProbe = join(scratch, `cfg-${name}.mjs`);
+      writeFileSync(cfgProbe, `
+        import { pathToFileURL } from 'node:url';
+        const api = await import(pathToFileURL(${JSON.stringify(join(installed, 'dist', 'index.js'))}));
+        api.getRegistryStore(${JSON.stringify(join(scratch, 'full.db'))});
+        process.argv = [process.execPath, ${JSON.stringify(join(installed, 'dist', 'cli.js'))}, 'cfg', ${JSON.stringify(name)}, '--json', '--strict'];
+        await import(pathToFileURL(${JSON.stringify(join(installed, 'dist', 'cli.js'))}));
+      `);
+      const cfg = spawnSync(process.execPath, [cfgProbe], { cwd: source, encoding: 'utf8', timeout: 30_000 });
+      assert.equal(cfg.status, status, cfg.stderr + cfg.stdout);
+      assert.equal(JSON.parse(cfg.stdout).completeness, completeness);
+      assert.ok(JSON.parse(cfg.stdout).blocks.length > 0);
+    }
+    console.log('full: installed CFG CLI reports complete/partial with strict exit 0/2');
     writeFileSync(join(source, 'sample.ts'), 'export function broken(');
     const invalid = spawnSync(process.execPath, [probe], { cwd: source, encoding: 'utf8', timeout: 30_000,
       env: { ...process.env, CXT_PARSER: 'auto' } });

@@ -1,5 +1,6 @@
 import type { ExtractedEntity, ReferenceSet } from '../registry/entityScanner.js';
 import type { SymbolFacts } from '../analysis/symbols.js';
+import type { ControlFlowGraph } from '../analysis/cfg.js';
 
 export type ParserMode = 'auto' | 'ast' | 'lexical';
 export type AstLanguage = 'typescript' | 'python' | 'rust';
@@ -18,6 +19,7 @@ export interface FrontendResult {
   references: Map<string, ReferenceSet>;
   diagnostics: FrontendDiagnostic[];
   symbols?: SymbolFacts;
+  controlFlow?: ControlFlowGraph[];
 }
 
 export interface LanguageFrontend {

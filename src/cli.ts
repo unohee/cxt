@@ -335,6 +335,18 @@ program
     await handleCalls(name, opts);
   });
 
+// ---- CFG ----
+program
+  .command('cfg <name>')
+  .description(h('Show a function control-flow graph from the latest AST scan', '최근 AST scan의 함수 제어 흐름 그래프 조회'))
+  .option('--project <id>', h('Project ID override', '프로젝트 ID 재정의'))
+  .option('--json', h('JSON output', 'JSON 출력'))
+  .option('--strict', h('Exit 2 for a partial graph', '부분 그래프면 exit 2'))
+  .action(async (name, opts) => {
+    const { handleCfg } = await import('./cli/cfgHandler.js');
+    await handleCfg(name, opts);
+  });
+
 // ---- impact (transitive 역방향) ----
 program
   .command('impact <name>')
