@@ -46,6 +46,8 @@ export type { DataflowFacts, DataflowDiagnostic, DataExpr, NodeEffect, FlowVaria
 // BS Detector
 export { scanRepository as scanBs, scanFile as scanFileForBs, scanFileContent, aggregateResults } from './registry/bsDetector.js';
 export { analyzeFileContent, scanLegacyFileContent } from './registry/bsDetector.js';
+export { toSarif } from './analysis/sarif.js';
+export { analysisOutcome, bsOutcome, scanOutcome, fingerprintFindings } from './analysis/report.js';
 export { builtInRules, builtInRulePack, rulePackSchema, ruleConfigSchema } from './analysis/rulePack.js';
 export type { BsIssue, BsScanResult, BsSeverity } from './registry/bsDetector.js';
 

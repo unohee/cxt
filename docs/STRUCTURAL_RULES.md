@@ -22,9 +22,9 @@ value가 uninitialized일 때만 나온다. definition ID와 entry/read source s
 solver 예산을 넘은 함수도 확정 finding을 내지 않는다. 구조적 규칙은 이와 별도로
 실행한다. 따라서 파일의 partial 상태와 구조적 finding은 함께 존재할 수 있다.
 
-현재 `bs`는 critical/warning/scan error에 exit 1, `audit`는 critical/scan error에
-exit 1인 기존 정책을 유지한다. partial만 있는 실행의 exit 계약과 SARIF는
-AGT-4571에서 별도로 강화한다. 종료 코드 0을 전체 의미 분석 완료로 해석하지 않는다.
+`bs`는 critical/warning, `audit`는 critical을 finding 정책 실패로 본다.
+AGT-4571에서 complete pass/finding/partial/tool failure를 exit 0/1/2/3으로
+구분하고 SARIF를 추가했다. [출력 계약](ANALYSIS_REPORTS.md)을 참고한다.
 
 ## 경로와 suppression
 

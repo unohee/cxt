@@ -56,13 +56,16 @@ cxt loc --dir src --no-blank --no-comments  # code-only LOC for a directory
 # Bad Smell detection
 cxt bs                   # scan for BS patterns
 cxt bs -v                # verbose per-file output
-cxt bs --json            # JSON output, exit 1 on critical (CI-friendly)
+cxt bs --json            # JSON: 0 pass, 1 findings, 2 partial, 3 tool failure
+cxt bs --sarif           # SARIF 2.1.0 with rule metadata and flow evidence
 cxt bs --dir src/api     # limit scan to a directory prefix
 
 # Code audit (BS scan + registry integrity)
 cxt audit                # BS patterns + untested/high-risk/deprecated, exit 1 on critical
 cxt audit --json         # CI mode (JSON output)
 cxt audit --quick        # BS patterns only (skip registry stats)
+cxt audit --sarif        # SARIF findings and execution/completeness metadata
+cxt scan --json          # fact extraction counts, diagnostics and outcome
 cxt audit --dir src      # limit to a directory prefix
 
 # Entity annotation
@@ -105,7 +108,8 @@ references, symbol facts and diagnostics. `extractEntities` retains its legacy l
 AST call resolution follows project-local bindings, imports, aliases and simple receiver types.
 BS now uses AST predicates and a definite uninitialized-read dataflow rule on these languages.
 Rule metadata, path roles and current completeness limits are documented in
-[Structural rules](docs/STRUCTURAL_RULES.md). Further work, including SARIF, is tracked in the
+[Structural rules](docs/STRUCTURAL_RULES.md). SARIF and exit status contracts are in
+[Analysis reports](docs/ANALYSIS_REPORTS.md). Further work is tracked in the
 [ten-part implementation roadmap](docs/STATIC_ANALYSIS_ROADMAP.md).
 
 Run `npm run bench:accuracy` and `npm run bench:calls` for the handwritten declaration and call corpora, and

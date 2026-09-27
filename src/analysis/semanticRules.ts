@@ -35,8 +35,10 @@ export function analyzeSemanticRules(content: string, filePath: string, language
     for (const use of flow.uses) {
       if (use.value.atoms.length !== 1 || use.value.atoms[0] !== 'uninitialized') continue;
       const node = graph.nodes[use.node];
+      const definitions = flow.definitions.filter(definition => use.definitions.includes(definition.id));
       findings.push({ rule, span: node.span, matchedText: node.text.slice(0, 80),
-        flow: { owner: graph.owner, definitions: use.definitions, steps: [graph.nodes[graph.entry].span, node.span] } });
+        flow: { owner: graph.owner, definitions: use.definitions, steps: [...new Set(definitions.map(definition => definition.node))]
+          .map(id => graph.nodes[id].span).concat(node.span) } });
     }
   }
   // finally의 복제 CFG 노드는 같은 소스 읽기를 여러 번 표현한다.

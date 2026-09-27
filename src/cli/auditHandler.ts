@@ -9,8 +9,10 @@ import { join } from 'node:path';
 import { getRegistryStore, closeRegistryStore } from '../registry/sqliteStore.js';
 import { resolveProjectId } from './checkHandler.js';
 import { t } from '../i18n.js';
-import { escapeTerminal, resolveProjectDirFilter } from './outputSafety.js';
+import { escapeTerminal, resolveProjectDirFilter, findingLocation, findingEvidence } from './outputSafety.js';
 import type { BsScanResult } from '../registry/bsDetector.js';
+import { assertOutputOptions, bsOutcome, failedBsScan, type AnalysisOutcome } from '../analysis/report.js';
+import { toSarif } from '../analysis/sarif.js';
 
 // 색상 헬퍼 (ANSI) — checkHandler 와 동일 팔레트
 const c = {
@@ -75,15 +77,19 @@ export interface AuditResult {
   };
   pass: boolean;
   analysis?: BsScanResult['analysis'];
+  outcome: AnalysisOutcome;
+  issues: BsScanResult['issues'];
 }
 
 export async function handleAudit(opts: {
   json?: boolean;
+  sarif?: boolean;
   quick?: boolean;
   verbose?: boolean;
   project?: string;
   dir?: string;
 }): Promise<void> {
+  assertOutputOptions(opts);
   const store = getRegistryStore();
   try {
     const projectPath = process.cwd();
@@ -94,7 +100,7 @@ export async function handleAudit(opts: {
     // ── BS 스캔 (항상 실행) ──
     const { scanRepository: scanBs } = await import('../registry/bsDetector.js');
     const dirFilter = resolveProjectDirFilter(projectPath, opts.dir);
-    const bs = await scanBs(projectPath, { verbose: opts.verbose, dir: dirFilter });
+    const bs = await scanBs(projectPath, { verbose: opts.verbose && !opts.json && !opts.sarif, dir: dirFilter }).catch(failedBsScan);
     const issues = bs.issues;
     const { critical, warning, minor, filesScanned, bsScore: score } = bs;
 
@@ -103,7 +109,9 @@ export async function handleAudit(opts: {
       ? { total: 0, deprecated: 0, untested: 0, highRisk: 0, withWarnings: 0 }
       : store.getStats(projectId, dirFilter);
 
-    const pass = critical === 0 && bs.errors.length === 0;
+    const outcome = bsOutcome(bs);
+    const pass = outcome.pass;
+    if (outcome.exitCode) process.exitCode = outcome.exitCode;
 
     const result: AuditResult = {
       project: projectId,
@@ -132,18 +140,24 @@ export async function handleAudit(opts: {
       },
       pass,
       analysis: bs.analysis,
+      outcome,
+      issues,
     };
+
+    if (opts.sarif) {
+      console.log(JSON.stringify(toSarif(bs, projectPath, { outcome, properties: { registry: result.registry } }), null, 2));
+      return;
+    }
 
     // ── JSON 모드 (CI 용) ──
     if (opts.json) {
       console.log(JSON.stringify(result, null, 2));
-      if (!pass) process.exitCode = 1;
       return;
     }
 
     // ── 사람용 리포트 ──
     const statusColor = !pass ? c.red : warning > 0 ? c.yellow : c.green;
-    const statusText = !pass ? 'FAIL' : warning > 0 ? 'WARN' : 'PASS';
+    const statusText = outcome.status === 'complete' ? !pass ? 'FAIL' : warning > 0 ? 'WARN' : 'PASS' : outcome.status.toUpperCase();
 
     console.log(`\n${c.bold}${m.auditHeader}${c.reset} — ${escapeTerminal(projectId)}`);
     console.log(`  ${c.dim}${escapeTerminal(projectPath)}${c.reset}`);
@@ -153,6 +167,8 @@ export async function handleAudit(opts: {
     console.log(`  ${m.filesScanned.padEnd(18)}${c.bold}${filesScanned}${c.reset}`);
     console.log(`  ${m.bsScore.padEnd(18)}${statusColor}${c.bold}${score.toFixed(1)}${c.reset} / 5.0`);
     console.log(`  ${'Status:'.padEnd(18)}${statusColor}${c.bold}${statusText}${c.reset}`);
+    console.log(`  Analysis: ${outcome.status}`);
+    for (const diagnostic of bs.analysis?.diagnostics.slice(0, 10) ?? []) console.log(`    [${escapeTerminal(diagnostic.code)}] ${escapeTerminal(diagnostic.filePath)}: ${escapeTerminal(diagnostic.message)}`);
     console.log(`  ${'CRITICAL:'.padEnd(18)}${critical > 0 ? c.red : c.green}${critical}${c.reset}`);
     console.log(`  ${'WARNING:'.padEnd(18)}${warning > 0 ? c.yellow : c.green}${warning}${c.reset}`);
     console.log(`  ${'MINOR:'.padEnd(18)}${minor > 0 ? c.dim : c.green}${minor}${c.reset}`);
@@ -174,7 +190,7 @@ export async function handleAudit(opts: {
     if (criticals.length > 0) {
       console.log(`\n  ${c.red}${c.bold}${m.criticalFixNow}${c.reset}`);
       for (const issue of criticals) {
-        console.log(`    ${c.red}${escapeTerminal(issue.filePath)}:${issue.line}${c.reset} — ${escapeTerminal(issue.message)}`);
+        console.log(`    ${c.red}${findingLocation(issue)}${c.reset} — ${escapeTerminal(issue.message)}`);
         console.log(`      ${c.dim}${escapeTerminal(issue.matchedText)}${c.reset}`);
         if (issue.rationale) console.log(`      ${c.dim}${escapeTerminal(issue.rationale)}${c.reset}`);
       }
@@ -183,27 +199,22 @@ export async function handleAudit(opts: {
     const warnings = issues.filter(i => i.severity === 'warning');
     if (warnings.length > 0) {
       console.log(`\n  ${c.yellow}${m.warningRecommended}${c.reset}`);
-      for (const issue of warnings.slice(0, 30)) {
-        console.log(`    ${c.yellow}${escapeTerminal(issue.filePath)}:${issue.line}${c.reset} — ${escapeTerminal(issue.message)}`);
-      }
-      if (warnings.length > 30) {
-        console.log(`    ${c.dim}${m.andMore(warnings.length - 30)}${c.reset}`);
+      for (const issue of warnings) {
+        console.log(`    ${c.yellow}${findingLocation(issue)}${c.reset} — ${escapeTerminal(issue.message)}`);
+        const evidence = findingEvidence(issue);
+        if (evidence) console.log(evidence);
       }
     }
 
     const minors = issues.filter(i => i.severity === 'minor');
     if (minors.length > 0) {
       console.log(`\n  ${c.dim}${m.minorCount(minors.length)}${c.reset}`);
-      for (const issue of minors.slice(0, 10)) {
-        console.log(`    ${c.dim}${escapeTerminal(issue.filePath)}:${issue.line} — ${escapeTerminal(issue.message)}${c.reset}`);
-      }
-      if (minors.length > 10) {
-        console.log(`    ${c.dim}${m.andMore(minors.length - 10)}${c.reset}`);
+      for (const issue of minors) {
+        console.log(`    ${c.dim}${findingLocation(issue)} — ${escapeTerminal(issue.message)}${c.reset}`);
       }
     }
 
     console.log();
-    if (!pass) process.exitCode = 1;
   } finally {
     closeRegistryStore();
   }

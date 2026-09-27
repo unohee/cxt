@@ -109,6 +109,7 @@ src/
 - `src/analysis/rulePack.ts`: 21 rule contracts; `.cxt-rules.json` path roles; AST-comment category suppression
 - Partial CFG/effects skip definite-read solver with diagnostics; scan errors and partial coverage remain visible
 - Migration/measurement: `docs/STRUCTURAL_RULES.md`; rule gate: `npm run bench:rules`
+- `scan/bs/audit`: text/JSON/SARIF share outcome; exit 0 pass, 1 finding policy, 2 partial, 3 execution failure. See `docs/ANALYSIS_REPORTS.md`.
 - i18n files auto-excluded to prevent self-detection
 - Severity: critical (fix now), warning (recommended), minor (info)
 - BS Score = (critical*10 + warning*3 + minor*1) / filesScanned

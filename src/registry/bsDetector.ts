@@ -12,6 +12,7 @@ import { analyzeSemanticRules, type RuleAnalysis } from '../analysis/semanticRul
 import { ruleConfigSchema, type RuleConfig } from '../analysis/rulePack.js';
 import { FrontendError, parserMode, type FrontendDiagnostic, type ParserMode } from '../frontend/types.js';
 import type { SourceSpan } from '../analysis/cfg.js';
+import { fingerprintFindings } from '../analysis/report.js';
 
 // ============ 타입 ============
 
@@ -36,6 +37,7 @@ export interface BsIssue {
   endColumn?: number;
   precision?: 'high' | 'medium' | 'low';
   precisionBasis?: 'policy-estimate';
+  fingerprint?: string;
   ruleRationale?: string;
   flow?: { owner: string; definitions: string[]; steps: SourceSpan[] };
 }
@@ -521,7 +523,7 @@ export function scanLegacyFileContent(
         message: msgs[bp.messageKey] as string,
         filePath,
         line: i + 1,
-        matchedText: match[0].slice(0, 80),
+        matchedText: bp.category === 'hardcoded_secret' ? '<redacted literal>' : match[0].slice(0, 80),
         rationale: rationaleFor(bp.severity, bp.category, msgs),
       });
     }
@@ -575,7 +577,11 @@ export function analyzeFileContent(content: string, filePath: string, language: 
       if (!(error instanceof FrontendError) || error.diagnostic.code !== 'parser-unavailable' || mode === 'ast') throw error;
       diagnostics.push(error.diagnostic);
     }
-  } else diagnostics.push({ code: 'unsupported-language', filePath, message: mode === 'lexical' ? 'Explicit lexical BS analysis' : `No AST rules for ${language}` });
+  } else {
+    const diagnostic: FrontendDiagnostic = { code: 'unsupported-language', filePath, message: mode === 'lexical' ? 'Explicit lexical BS analysis' : `No AST rules for ${language}` };
+    if (mode === 'ast') throw new FrontendError(diagnostic);
+    diagnostics.push(diagnostic);
+  }
   return { issues: scanLegacyFileContent(content, filePath, language), engine: 'lexical', completeness: 'partial', diagnostics };
 }
 
@@ -734,5 +740,5 @@ export async function scanRepository(
 
   await walk(projectPath, '', 0);
   if (errors.length) analysis.completeness = 'partial';
-  return { ...aggregateResults(allIssues, filesScanned, errors), analysis };
+  return { ...aggregateResults(fingerprintFindings(allIssues), filesScanned, errors), analysis };
 }

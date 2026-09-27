@@ -25,6 +25,7 @@ describe('semantic rule boundary', () => {
     expect(analyzeSemanticRules('def f():\n print(x) # cxt-ignore: correctness\n x=1', 'x.py', 'python').findings).toEqual([]);
     expect(() => analyzeFileContent('def broken(', 'x.py', 'python')).toThrow('syntax-error');
     expect(analyzeFileContent('package example', 'x.go', 'go')).toMatchObject({ engine: 'lexical', completeness: 'partial' });
+    expect(() => analyzeFileContent('package example', 'x.go', 'go', { parser: 'ast' })).toThrow('unsupported-language');
     expect(() => analyzeFileContent('function f(){return 1;}', 'x.ts', 'typescript', { checkDeadline: () => { throw new Error('deadline'); } })).toThrow('deadline');
   });
   it('validates metadata rather than silently accepting malformed rule packs', () => {

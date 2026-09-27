@@ -7,7 +7,6 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { getRegistryStore, closeRegistryStore } from '../registry/sqliteStore.js';
-import { scanRepository } from '../registry/entityScanner.js';
 import { t } from '../i18n.js';
 import type {
   CodeEntity, EntityKind, EntityStatus, RiskLevel, WarningSeverity, WarningCategory,
@@ -16,8 +15,8 @@ import { escapeTerminal, pathMatchesDir, resolveProjectDirFilter } from './outpu
 
 const VALID_KINDS: EntityKind[] = ['function', 'class', 'module', 'type', 'constant'];
 
-export function isBsScanPassing(result: { critical: number; errors: string[] }): boolean {
-  return result.critical === 0 && result.errors.length === 0;
+export function isBsScanPassing(result: { critical: number; errors: string[]; analysis?: { completeness: string } }): boolean {
+  return result.critical === 0 && result.errors.length === 0 && result.analysis?.completeness === 'complete';
 }
 
 function listAllEntities(store: ReturnType<typeof getRegistryStore>, projectId: string, kind?: EntityKind): CodeEntity[] {
@@ -166,148 +165,15 @@ export async function handleCheck(
   try {
     const store = getRegistryStore();
 
-    // --scan
     if (opts.scan) {
-      const projectPath = process.cwd();
-      const projectId = opts.project ?? resolveProjectId(projectPath);
-
-      const m = t();
-      console.log(`\n${c.bold}${m.scanningRepo}${c.reset}`);
-      console.log(`  ${c.dim}path: ${escapeTerminal(projectPath)}${c.reset}`);
-      console.log(`  ${c.dim}project: ${escapeTerminal(projectId)}${c.reset}\n`);
-
-      const result = await scanRepository(projectPath, projectId, {
-        verbose: opts.verbose,
-      });
-
-      console.log(`${c.bold}${result.errors.length ? m.scanIncomplete : m.scanComplete}${c.reset}`);
-      console.log(`${'─'.repeat(40)}`);
-      console.log(`  ${m.filesScanned.padEnd(16)}${c.bold}${result.scanned}${c.reset}`);
-      console.log(`  ${m.entitiesFound.padEnd(16)}${c.bold}${result.extracted}${c.reset}`);
-      console.log(`  ${m.newRegistered.padEnd(16)}${c.green}+${result.registered}${c.reset}`);
-      console.log(`  ${m.updated.padEnd(16)}${c.yellow}~${result.updated}${c.reset}`);
-      console.log(`  ${m.markedBroken.padEnd(16)}${result.removed > 0 ? c.red : c.dim}${result.removed}${c.reset}`);
-      console.log(`  ${m.testsMapped.padEnd(16)}${c.cyan}${result.testsMapped}${c.reset}`);
-      console.log(`  ${'Relations'.padEnd(16)}${c.cyan}${result.relationsLoaded}${c.reset}`);
-      console.log(`  ${'Parsers'.padEnd(16)}${Object.entries(result.parserBreakdown).map(([engine, count]) => `${engine}: ${count}`).join(', ') || 'none'}`);
-      console.log(`  ${'Call sites'.padEnd(16)}${result.callSites.total} (${result.callSites.resolved} resolved, ${result.callSites.unresolved} unresolved, ${result.callSites.external} external)`);
-      console.log(`  ${'CFGs'.padEnd(16)}${result.controlFlow.total} (${result.controlFlow.complete} complete, ${result.controlFlow.partial} partial)`);
-      console.log(`  ${'Dataflow'.padEnd(16)}${result.dataflow.total} (${result.dataflow.complete} complete, ${result.dataflow.partial} partial)`);
-      console.log(`  ${'Summaries'.padEnd(16)}${result.summaries.total} (${result.summaries.complete} complete, ${result.summaries.partial} partial)`);
-      console.log(`  ${'Library models'.padEnd(16)}${result.models.calls.applied ?? 0} applied; ${result.models.manifest.configured ? 'project-declared versions/assumptions' : 'no project version/assumption declaration'}`);
-      for (const diagnostic of result.dataflow.diagnostics.slice(0, 10)) {
-        console.log(`  [${diagnostic.code}] ${escapeTerminal(diagnostic.owner)}: ${escapeTerminal(diagnostic.message)}`);
-      }
-      for (const diagnostic of result.controlFlow.diagnostics.slice(0, 10)) {
-        console.log(`    ${escapeTerminal(diagnostic.filePath)}:${diagnostic.span.line} [${diagnostic.code}] ${escapeTerminal(diagnostic.message)}`);
-      }
-      console.log(`  ${m.duration.padEnd(16)}${c.dim}${result.durationMs}ms${c.reset}`);
-
-      if (Object.keys(result.languageBreakdown).length > 0) {
-        console.log(`\n  ${c.dim}${m.byLanguage}${c.reset}`);
-        for (const [lang, count] of Object.entries(result.languageBreakdown).sort((a, b) => b[1] - a[1])) {
-          console.log(`    ${escapeTerminal(lang).padEnd(12)} ${count} files`);
-        }
-      }
-
-      if (result.errors.length > 0) {
-        console.log(`\n  ${c.red}${m.errors} (${result.errors.length}):${c.reset}`);
-        for (const err of result.errors.slice(0, 10)) {
-          console.log(`    ${c.dim}${escapeTerminal(err)}${c.reset}`);
-        }
-        if (result.errors.length > 10) {
-          console.log(`    ${c.dim}${m.andMore(result.errors.length - 10)}${c.reset}`);
-        }
-      }
-
-      if (result.diagnostics.length > 0) {
-        console.log(`\n  Parser diagnostics (${result.diagnostics.length}):`);
-        for (const diagnostic of result.diagnostics.slice(0, 10)) {
-          console.log(`    ${escapeTerminal(diagnostic.filePath)}: ${escapeTerminal(diagnostic.code)} — ${escapeTerminal(diagnostic.message)}`);
-        }
-      }
-
-      const stats = store.getStats(projectId);
-      console.log(`\n${c.bold}${m.registryStatus}${c.reset}`);
-      console.log(`  Total: ${stats.total}  deprecated: ${stats.deprecated}  untested: ${stats.untested}  high-risk: ${stats.highRisk}  warnings: ${stats.withWarnings}\n`);
-
-      if (result.errors.length > 0) process.exitCode = 1;
+      const { handleScan } = await import('./scanHandler.js');
+      await handleScan(opts);
       return;
     }
 
-    // --bs
     if (opts.bs) {
-      const { scanRepository: scanBs } = await import('../registry/bsDetector.js');
-      const projectPath = process.cwd();
-
-      const m = t();
-      console.log(`\n${c.bold}${m.bsDetector}${c.reset} — scanning for bad code patterns...`);
-      console.log(`  ${c.dim}path: ${escapeTerminal(projectPath)}${c.reset}\n`);
-
-      const result = await scanBs(projectPath, {
-        verbose: opts.verbose,
-        dir: resolveProjectDirFilter(projectPath, opts.dir),
-      });
-
-      const scanPassing = isBsScanPassing(result);
-      const statusColor = !scanPassing ? c.red : result.warning > 0 ? c.yellow : c.green;
-      const statusText = !scanPassing ? 'FAIL' : result.warning > 0 ? 'WARN' : 'CLEAN';
-
-      console.log(`${c.bold}${m.bsScanResult}${c.reset}`);
-      console.log(`${'─'.repeat(50)}`);
-      console.log(`  ${m.filesScanned.padEnd(16)}${c.bold}${result.filesScanned}${c.reset}`);
-      console.log(`  ${m.bsScore.padEnd(16)}${statusColor}${c.bold}${result.bsScore.toFixed(1)}${c.reset} / 5.0`);
-      console.log(`  Status:        ${statusColor}${c.bold}${statusText}${c.reset}`);
-      console.log(`  CRITICAL:      ${result.critical > 0 ? c.red : c.green}${result.critical}${c.reset}`);
-      console.log(`  WARNING:       ${result.warning > 0 ? c.yellow : c.green}${result.warning}${c.reset}`);
-      console.log(`  MINOR:         ${result.minor > 0 ? c.dim : c.green}${result.minor}${c.reset}`);
-
-      if (result.errors.length > 0) {
-        console.log(`\n  ${c.red}${m.errors} (${result.errors.length}):${c.reset}`);
-        for (const error of result.errors.slice(0, 10)) {
-          console.log(`    ${c.dim}${escapeTerminal(error)}${c.reset}`);
-        }
-        if (result.errors.length > 10) {
-          console.log(`    ${c.dim}${m.andMore(result.errors.length - 10)}${c.reset}`);
-        }
-      }
-
-      if (result.issues.length > 0) {
-        const criticals = result.issues.filter(i => i.severity === 'critical');
-        if (criticals.length > 0) {
-          console.log(`\n  ${c.red}${c.bold}${m.criticalFixNow}${c.reset}`);
-          for (const issue of criticals) {
-            console.log(`    ${c.red}${escapeTerminal(issue.filePath)}:${issue.line}${c.reset} — ${escapeTerminal(issue.message)}`);
-            console.log(`      ${c.dim}${escapeTerminal(issue.matchedText)}${c.reset}`);
-            if (issue.rationale) console.log(`      ${c.dim}${escapeTerminal(issue.rationale)}${c.reset}`);
-          }
-        }
-
-        const warnings = result.issues.filter(i => i.severity === 'warning');
-        if (warnings.length > 0) {
-          console.log(`\n  ${c.yellow}${m.warningRecommended}${c.reset}`);
-          for (const issue of warnings.slice(0, 30)) {
-            console.log(`    ${c.yellow}${escapeTerminal(issue.filePath)}:${issue.line}${c.reset} — ${escapeTerminal(issue.message)}`);
-          }
-          if (warnings.length > 30) {
-            console.log(`    ${c.dim}${m.andMore(warnings.length - 30)}${c.reset}`);
-          }
-        }
-
-        const minors = result.issues.filter(i => i.severity === 'minor');
-        if (minors.length > 0) {
-          console.log(`\n  ${c.dim}${m.minorCount(minors.length)}${c.reset}`);
-          for (const issue of minors.slice(0, 10)) {
-            console.log(`    ${c.dim}${escapeTerminal(issue.filePath)}:${issue.line} — ${escapeTerminal(issue.message)}${c.reset}`);
-          }
-          if (minors.length > 10) {
-            console.log(`    ${c.dim}${m.andMore(minors.length - 10)}${c.reset}`);
-          }
-        }
-      }
-
-      console.log();
-      if (!scanPassing) process.exitCode = 1;
+      const { handleBs } = await import('./bsHandler.js');
+      await handleBs(opts);
       return;
     }
 
@@ -392,57 +258,9 @@ export async function handleCheck(
       return;
     }
 
-    // --ci
     if (opts.ci) {
-      const projectPath = process.cwd();
-      const projectId = opts.project ?? resolveProjectId(projectPath);
-      const dirFilter = resolveProjectDirFilter(projectPath, opts.dir);
-
-      const { scanRepository: scanBs } = await import('../registry/bsDetector.js');
-      const bsResult = await scanBs(projectPath, { verbose: false, dir: dirFilter });
-
-      const stats = store.getStats(projectId, dirFilter);
-
-      const result = {
-        project: projectId,
-        path: projectPath,
-        registry: {
-          total: stats.total,
-          deprecated: stats.deprecated,
-          untested: stats.untested,
-          highRisk: stats.highRisk,
-          warnings: stats.withWarnings,
-        },
-        bs: {
-          filesScanned: bsResult.filesScanned,
-          score: bsResult.bsScore,
-          critical: bsResult.critical,
-          warning: bsResult.warning,
-          minor: bsResult.minor,
-          errors: bsResult.errors,
-          // The guide promises every critical states why it is critical. A CI
-          // surface that emits only a count would make that promise false here,
-          // and a pipeline that cannot see the finding cannot weigh its reason
-          // before deciding whether to fail the build.
-          criticals: bsResult.issues
-            .filter(issue => issue.severity === 'critical')
-            .map(issue => ({
-              file: issue.filePath,
-              line: issue.line,
-              category: issue.category,
-              message: issue.message,
-              matched: issue.matchedText,
-              rationale: issue.rationale,
-            })),
-        },
-        pass: isBsScanPassing(bsResult),
-      };
-
-      console.log(JSON.stringify(result, null, 2));
-
-      if (!isBsScanPassing(bsResult)) {
-        process.exitCode = 1;
-      }
+      const { handleAudit } = await import('./auditHandler.js');
+      await handleAudit({ ...opts, json: true });
       return;
     }
 

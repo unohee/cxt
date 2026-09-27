@@ -176,3 +176,12 @@ CFG 위 worklist fixed-point solver, reaching definitions/def-use, 값 상태 �
 - 성능 수정: partial CFG/effect의 결과는 확정 finding에 쓸 수 없어 solver 전에 사유를 기록한다. 이전 BS timeout(49 files)에서 전체 91 files 처리로 개선됐으며 cap은 늘리지 않았다. 전체 DB scan 성능은 9단계에서 추가로 해결한다.
 - AGT-3915: 현재 vega-router tracked src/scripts Python 70파일의 legacy 44 → AST 16 후보. 원래 HTTP/IP/상수 오탐은 사라지고 shortlist_models.py:230의 400은 유지됐다. 과거 64파일과 범위가 달라 전체 FP≤20%는 미입증이며 이 이슈는 유지한다. 새 평가 코드/가격 단위 후보의 판정이 남았다.
 - 7 핵심 구현은 In Review로 옮기고 8 SARIF/자동화 결과 계약을 진행한다. resource/ownership, grammar/동적 의미 지원, 8–10 및 독립 평가를 완료하지 않았으므로 전체 목표는 계속 진행 중이다.
+
+## 실행 기록 — 2026-09-27, 8차 SARIF와 자동화 상태
+
+- 8: scan/bs/audit에 JSON/SARIF 2.1.0 및 공통 outcome을 연결했다. exit 0=complete/pass, 1=finding policy, 2=partial, 3=tool failure; failed>partial>finding 우선순위이며 findingsFail은 별도 보존한다. check aliases는 같은 handler를 사용한다. [출력·호환성 계약](ANALYSIS_REPORTS.md).
+- SARIF: rule metadata, UTF-16/exclusive range, 상대 URI/encoding, content+occurrence fingerprint, 실제 definition/read 위치의 relatedLocations/codeFlows, tool notifications와 executionSuccessful. endpoint evidence를 전체 runtime trace라고 주장하지 않는다. source 위치를 모르면 줄 번호를 만들지 않는다. legacy credential matched text도 가린다.
+- 검증: 732개 테스트, lint/build, 실제 tarball 설치 full/missing-native CLI와 schema 검증(`/tmp/cxt-packed-frontends-TdMKYW`). OASIS approved-errata draft-04 전체 schema를 출처/해시와 함께 고정했다. 추가/누락 출력, Unicode/URI, line-shift fingerprint, normal/partial/syntax/config failure, JSON+verbose 순수 stdout 및 snapshot 보존을 검사했다.
+- 실제 현재 저장소 CLI `bs --sarif -v`(`/tmp/cxt-sarif-verified-BIlDJK`): 96 files / 179 findings / 57.166초 / exit 2 / schema valid. parser/flow diagnostics 322개를 partial 상태로 출력했다. 실제 GitHub 업로드나 alert acceptance는 실행하지 않았다. 전체 fact DB timeout은 아직 9단계 해결 대상이다.
+- 한 기존 self-scan 테스트가 부하에서 5초를 넘겼다. 이 테스트의 본래 대상인 실제 bsDetector.ts 전체 파일의 AST critical 규칙을 직접 검사하도록 좁혔고 unrelated warning dataflow solver는 분리했다. timeout 값을 늘리지 않았으며 전체 CLI/패키지의 solver 검증은 유지했다.
+- 8 핵심 구현은 In Review. 다음 9의 증분 cache/invalidation/read-only query와 cold scan 성능을 진행한다. 10의 독립 평가·CI 및 4 resource/ownership, AGT-3915 전체 FP 목표는 열린 상태다.

@@ -1,5 +1,14 @@
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { existsSync, realpathSync } from 'node:fs';
+import type { BsIssue } from '../registry/bsDetector.js';
+
+export function findingLocation(issue: BsIssue): string {
+  return `${escapeTerminal(issue.filePath)}:${issue.line}${issue.column ? `:${issue.column}` : ''}`;
+}
+
+export function findingEvidence(issue: BsIssue): string | undefined {
+  return issue.flow ? `    definitions/read: ${issue.flow.steps.map(step => `${step.line}:${step.column}`).join(' -> ')} (${escapeTerminal(issue.flow.owner)})` : undefined;
+}
 
 /** 저장소에서 읽은 문자열이 터미널 제어 시퀀스를 실행하지 못하게 한다. */
 export function escapeTerminal(value: unknown): string {

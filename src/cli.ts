@@ -174,10 +174,12 @@ program
   .command('scan')
   .description(h('Scan codebase and sync entities to registry', '코드베이스를 스캔하고 엔티티를 레지스트리와 동기화'))
   .option('-v, --verbose', h('Verbose output', '상세 출력'))
+  .option('--json', h('JSON output including analysis status', '분석 상태를 포함한 JSON 출력'))
+  .option('--sarif', h('SARIF 2.1.0 output', 'SARIF 2.1.0 출력'))
   .option('--project <id>', h('Project ID override', '프로젝트 ID 재정의'))
   .action(async (opts) => {
-    const { handleCheck } = await import('./cli/checkHandler.js');
-    await handleCheck(undefined, { scan: true, verbose: opts.verbose, project: opts.project });
+    const { handleScan } = await import('./cli/scanHandler.js');
+    await handleScan(opts);
   });
 
 // ---- bs (shortcut) ----
@@ -187,10 +189,11 @@ program
   .description(h('Scan for BS patterns (bad code smells)', 'BS 패턴(나쁜 코드 냄새) 스캔'))
   .option('-v, --verbose', h('Verbose output', '상세 출력'))
   .option('--json', h('JSON output (machine-readable)', 'JSON 출력 (기계 판독용)'))
+  .option('--sarif', h('SARIF 2.1.0 output', 'SARIF 2.1.0 출력'))
   .option('--dir <path>', h('Limit scan to a directory prefix', '지정 디렉터리로 스캔 제한'))
   .action(async (opts) => {
     const { handleBs } = await import('./cli/bsHandler.js');
-    await handleBs({ verbose: opts.verbose, json: opts.json, dir: opts.dir });
+    await handleBs(opts);
   });
 
 // ---- annotate ----
@@ -466,6 +469,7 @@ program
   .command('audit')
   .description(h('Code audit: BS pattern scan + registry integrity (untested/high-risk/deprecated)', '코드 감사: BS 패턴 스캔 + 레지스트리 무결성 (미테스트/고위험/사용 중단)'))
   .option('--json', h('JSON output, exit 1 on critical (CI mode)', 'JSON 출력, 치명적 문제 시 종료 코드 1 (CI 모드)'))
+  .option('--sarif', h('SARIF 2.1.0 output', 'SARIF 2.1.0 출력'))
   .option('--quick', h('BS patterns only — skip registry stats', 'BS 패턴만 검사 — 레지스트리 통계 생략'))
   .option('--dir <path>', h('Limit to a directory prefix', '지정 디렉터리로 제한'))
   .option('--project <id>', h('Project ID override', '프로젝트 ID 재정의'))
@@ -481,4 +485,15 @@ if (hasExplicitLang) {
     program.error(`error: unsupported language '${escapeTerminal(explicitLang ?? '')}' (expected en or ko)`);
   }
 }
-program.parse(preparedArgv);
+try {
+  await program.parseAsync(preparedArgv);
+} catch (error) {
+  const { failedBsScan, bsOutcome } = await import('./analysis/report.js');
+  const report = failedBsScan(error), outcome = bsOutcome(report);
+  process.exitCode = outcome.exitCode;
+  if (preparedArgv.includes('--sarif')) {
+    const { toSarif } = await import('./analysis/sarif.js');
+    console.log(JSON.stringify(toSarif(report, process.cwd(), { outcome }), null, 2));
+  } else if (preparedArgv.includes('--json') || preparedArgv.includes('--ci')) console.log(JSON.stringify({ errors: report.errors, outcome }, null, 2));
+  else console.error(escapeTerminal(report.errors.join('\n')));
+}

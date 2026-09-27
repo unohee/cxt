@@ -1,11 +1,16 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import Ajv from 'ajv-draft-04';
+import addFormats from 'ajv-formats';
 
 const repo = fileURLToPath(new URL('../', import.meta.url));
+const ajv = new Ajv({ strict: false, allErrors: true });
+addFormats(ajv);
+const validateSarif = ajv.compile(JSON.parse(readFileSync(join(repo, 'tests', 'schemas', 'sarif-schema-2.1.0.json'), 'utf8')));
 const scratch = mkdtempSync(join(tmpdir(), 'cxt-packed-frontends-'));
 console.log(`Package smoke artifacts: ${scratch}`);
 function npm(args) {
@@ -72,15 +77,28 @@ for (const mode of ['full', 'missing']) {
   `);
   const clean = spawnSync(process.execPath, [probe], { cwd: source, encoding: 'utf8', timeout: 30_000,
     env: { ...process.env, CXT_PARSER: 'auto' } });
-  assert.equal(clean.status, 0, clean.stderr + clean.stdout);
+  assert.equal(clean.status, 2, clean.stderr + clean.stdout);
   assert.match(clean.stdout, mode === 'full' ? /ast: 6/ : /lexical: 6/);
   console.log(`${mode}: installed package; 6 grammar probes and real CLI scan passed`);
   const bs = spawnSync(process.execPath, [join(installed, 'dist', 'cli.js'), 'bs', '--json'], {
     cwd: rulesSource, encoding: 'utf8', timeout: 30_000, env: { ...process.env, CXT_PARSER: 'auto' },
   });
-  assert.equal(bs.status, 1, bs.stderr + bs.stdout);
+  assert.equal(bs.status, 2, bs.stderr + bs.stdout);
   const parsedBs = JSON.parse(bs.stdout);
   assert.equal(parsedBs.analysis.completeness, 'partial');
+  const sarifBs = spawnSync(process.execPath, [join(installed, 'dist', 'cli.js'), 'bs', '--sarif', '-v'], {
+    cwd: rulesSource, encoding: 'utf8', timeout: 30_000, env: { ...process.env, CXT_PARSER: 'auto' },
+  });
+  assert.equal(sarifBs.status, 2, sarifBs.stderr + sarifBs.stdout);
+  const parsedSarifBs = JSON.parse(sarifBs.stdout);
+  assert.ok(validateSarif(parsedSarifBs), JSON.stringify(validateSarif.errors));
+  assert.deepEqual(parsedSarifBs.runs[0].results.map(result => result.partialFingerprints.primaryLocationLineHash), parsedBs.issues.map(issue => issue.fingerprint));
+  const sarifScanProbe = join(scratch, `sarif-scan-${mode}.mjs`);
+  writeFileSync(sarifScanProbe, readFileSync(probe, 'utf8').replace("'--lang', 'en', 'scan'", "'scan', '--sarif', '-v'"));
+  const sarifScan = spawnSync(process.execPath, [sarifScanProbe], { cwd: source, encoding: 'utf8', timeout: 30_000,
+    env: { ...process.env, CXT_PARSER: 'auto' } });
+  assert.equal(sarifScan.status, 2, sarifScan.stderr + sarifScan.stdout);
+  assert.ok(validateSarif(JSON.parse(sarifScan.stdout)), JSON.stringify(validateSarif.errors));
   if (mode === 'full') {
     assert.equal(parsedBs.analysis.engines.ast, 3);
     assert.deepEqual(parsedBs.issues.map(issue => issue.ruleId).sort(), ['cxt/debugger-statement', 'cxt/uninitialized-read']);
@@ -168,11 +186,11 @@ for (const mode of ['full', 'missing']) {
     writeFileSync(join(source, 'sample.ts'), 'export function broken(');
     const invalid = spawnSync(process.execPath, [probe], { cwd: source, encoding: 'utf8', timeout: 30_000,
       env: { ...process.env, CXT_PARSER: 'auto' } });
-    assert.equal(invalid.status, 1, invalid.stderr + invalid.stdout);
+    assert.equal(invalid.status, 3, invalid.stderr + invalid.stdout);
     assert.match(invalid.stdout, /Scan Incomplete/);
     assert.match(invalid.stdout, /syntax-error/);
     writeFileSync(join(source, 'sample.ts'), 'export function read() {}');
-    console.log('full: malformed source fails the CLI with exit 1');
+    console.log('full: malformed source fails the CLI with exit 3');
   }
 }
 console.log('Packed frontend smoke passed; artifacts retained in the printed temporary directory.');

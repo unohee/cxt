@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
+import { analyzeAstRules } from '../../src/analysis/astRules.js';
 import {
   scanFileContent,
   aggregateResults,
@@ -180,9 +181,10 @@ describe('bsDetector — critical severity rationale', () => {
       join(__dirname, '..', '..', 'src', 'registry', 'bsDetector.ts'),
       'utf-8',
     );
-    const criticals = scanFileContent(self, 'src/registry/bsDetector.ts', 'typescript')
-      .filter((i) => i.severity === 'critical');
-    expect(criticals.map((i) => `${i.line}:${i.category}`)).toEqual([]);
+    // 이 회귀의 대상은 AST critical 규칙이다. 별도 warning solver는 실행하지 않는다.
+    const criticals = analyzeAstRules(self, 'src/registry/bsDetector.ts', 'typescript')
+      .filter((hit) => hit.rule.severity === 'critical');
+    expect(criticals.map((hit) => `${hit.span.line}:${hit.rule.category}`)).toEqual([]);
   });
 });
 
