@@ -22,6 +22,9 @@ const declarations = new Set([...functions, 'class_declaration', 'abstract_class
 export function buildControlFlow(callable: Node, filePath: string, owner: string, language: AstLanguage, nodeBudget = 20_000): ControlFlowGraph {
   const graph: ControlFlowGraph = { version: 1, filePath, owner, language, entry: 0, exit: 1, exceptionExit: 2,
     nodes: [], edges: [], blocks: [], blockEdges: [], completeness: 'complete', diagnostics: [], structuralComplexity: 1 };
+  const modifiers = callable.children.flatMap(child => child.type === 'function_modifiers' ? child.children : [child]);
+  graph.executionKind = modifiers.some(child => child.type === 'async') ? 'async'
+    : callable.type.includes('generator') || modifiers.some(child => child.type === '*') ? 'generator' : 'sync';
   const edgeKeys = new Set<string>();
   const decisions = new Set<string>();
   const diagnostics = new Set<string>();
@@ -446,6 +449,7 @@ export function buildControlFlow(callable: Node, filePath: string, owner: string
     diagnostic(callable, `CFG exceeds ${nodeBudget} nodes`, 'budget-exceeded');
   }
   graph.structuralComplexity = 1 + decisions.size;
+  if (graph.nodes.some(node => ['yield', 'yield_expression'].includes(node.astType))) graph.executionKind = 'generator';
   Object.assign(graph, buildBasicBlocks(graph));
   return graph;
 }

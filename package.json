@@ -26,6 +26,7 @@
     "bench:calls": "node --import=tsx bench/call-accuracy.ts",
     "bench:cfg": "node --import=tsx bench/cfg-accuracy.ts",
     "bench:flow": "node --import=tsx bench/dataflow-accuracy.ts",
+    "bench:impact": "node --import=tsx bench/impact-accuracy.ts",
     "test:package": "npm run build && node scripts/test-packed-frontends.mjs",
     "test:coverage": "vitest run --coverage",
     "prepublishOnly": "npm run build && npm test"

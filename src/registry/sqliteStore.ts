@@ -19,6 +19,7 @@ import type {
 import type { ResolvedCallSite, SymbolValue } from '../analysis/symbols.js';
 import type { ControlFlowGraph } from '../analysis/cfg.js';
 import type { DataflowResult } from '../analysis/dataflow.js';
+import type { FunctionSummary } from '../analysis/summaryTypes.js';
 
 function boundedPagination(value: number | undefined, fallback: number, min: number, max: number, name: string): number {
   const resolved = value ?? fallback;
@@ -193,7 +194,7 @@ export class SqliteRegistryStore {
   //           omitted — P1 (tree-sitter frontend) is expected to extend
   //           EntityKind and pinning it now would force another rebuild.
   //           relations' relation_type CHECK moves to P2 v4 (code_call_sites).
-  private static readonly SCHEMA_VERSION = 6;
+  private static readonly SCHEMA_VERSION = 7;
 
   // The last version in which the FTS index schema (set of indexed columns)
   // changed. Decoupled from the user_version bump: through v2 "version went up"
@@ -667,6 +668,13 @@ export class SqliteRegistryStore {
           result_json TEXT NOT NULL CHECK (json_valid(result_json)),
           PRIMARY KEY (project_id, owner_id)
         );
+        CREATE TABLE IF NOT EXISTS code_function_summaries (
+          project_id TEXT NOT NULL,
+          owner_id TEXT NOT NULL REFERENCES code_entities(id) ON DELETE CASCADE,
+          completeness TEXT NOT NULL CHECK (completeness IN ('complete', 'partial')),
+          summary_json TEXT NOT NULL CHECK (json_valid(summary_json)),
+          PRIMARY KEY (project_id, owner_id)
+        );
       `)).immediate();
     }
 
@@ -837,6 +845,29 @@ export class SqliteRegistryStore {
       ${ownerId ? 'AND owner_id = ?' : ''} ORDER BY owner_id`)
       .all(...(ownerId ? [projectId, ownerId] : [projectId])) as Array<{ result_json: string }>;
     return rows.map(row => JSON.parse(row.result_json) as DataflowResult);
+  }
+
+  replaceSummariesForProject(projectId: string, summaries: FunctionSummary[]): number {
+    const entities = this.db.prepare('SELECT id, qualified_name FROM code_entities WHERE project_id = ?')
+      .all(projectId) as Array<{ id: string; qualified_name: string }>;
+    const ids = new Map(entities.map(entity => [entity.qualified_name, entity.id]));
+    const insert = this.db.prepare('INSERT INTO code_function_summaries(project_id, owner_id, completeness, summary_json) VALUES (?, ?, ?, ?)');
+    return this.db.transaction(() => {
+      this.db.prepare('DELETE FROM code_function_summaries WHERE project_id = ?').run(projectId);
+      for (const summary of summaries) {
+        const ownerId = ids.get(summary.owner);
+        if (!ownerId) throw new Error(`Unregistered summary owner: ${summary.owner}`);
+        insert.run(projectId, ownerId, summary.completeness, JSON.stringify(summary));
+      }
+      return summaries.length;
+    })();
+  }
+
+  getSummaries(projectId: string, ownerId?: string): FunctionSummary[] {
+    const rows = this.db.prepare(`SELECT summary_json FROM code_function_summaries WHERE project_id = ?
+      ${ownerId ? 'AND owner_id = ?' : ''} ORDER BY owner_id`)
+      .all(...(ownerId ? [projectId, ownerId] : [projectId])) as Array<{ summary_json: string }>;
+    return rows.map(row => JSON.parse(row.summary_json) as FunctionSummary);
   }
 
   registerEntity(input: RegisterEntityInput): CodeEntity {

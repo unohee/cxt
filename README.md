@@ -36,6 +36,7 @@ cxt impact <name>        # transitive callers — everything affected if <name> 
 cxt cfg <name> --json    # stored function control-flow graph and diagnostics
 cxt flow <name> --json --strict # stored def-use/value/alias facts; partial analysis exits 2
 cxt impact <name> --depth 3   # limit BFS depth (default: 5)
+cxt impact <name> --param input --explain --json # current value dependence into caller outputs
 cxt who-calls <name> --json   # machine-readable output (also: calls/impact)
 cxt preflight <name> --json   # candidate files + risk/test/warning review checklist
 
@@ -112,7 +113,7 @@ checks. These tests do not establish CodeQL equivalence.
 
 ## Intraprocedural dataflow
 
-An AST scan also runs a finite worklist solver over each function CFG. The v6
+An AST scan also runs a finite worklist solver over each function CFG. The v7
 registry stores results in `code_dataflow` in the same transaction as entities,
 calls, CFGs and relations. `flow <name> --json` includes source locations,
 reaching definitions, uses, possible uninitialized reads, abstract return values,
@@ -134,8 +135,49 @@ node count. A repository scan deadline failure rolls back the entire snapshot.
 The API accepts explicit budgets for targeted analysis.
 
 Resource lifecycles, Rust move/borrow ownership, dynamic pattern binding and
-interprocedural models remain pending. `npm run bench:flow` runs the handwritten
+external library models remain pending. `npm run bench:flow` runs the handwritten
 development oracle; it does not measure independent real-world accuracy.
+
+## Function summaries and parameter value impact
+
+`scan` links resolved call sites by their exact source span, computes function
+summaries in callee-first SCC order and stores them in `code_function_summaries`.
+Recursive components use monotone joins and a 16-round budget. A component that
+exceeds the budget becomes partial, including the summaries consumed by callers.
+Unchanged callee contexts reuse a flow result within the same scan.
+
+Summaries retain abstract return values, formal parameter dependence, possible
+throws and conservative heap/binding effects. Each call substitutes its own
+argument dependencies. Parameter dependence alone does not justify substituting
+the argument's concrete value as if the callee were an identity function.
+Unknown effects, closure/global value dependence, returned heap allocations,
+async/generator call envelopes, unsupported formal patterns and receiver/keyword/spread argument mapping remain
+explicit boundaries. Library/resource models are the next implementation stage.
+
+```bash
+cxt flow transform --json --strict
+cxt impact transform --param input --explain --json --strict
+cxt preflight transform --param input --explain --json --strict
+```
+
+With `--param`, impact traces the current parameter's **explicit value dependence**
+through return definitions into caller outputs. It can exclude discarded or
+overwritten call results and unused formal parameters. This is narrower than
+general change impact: it does not cover implicit control dependence, signature
+changes or newly introduced behavior. The default impact command retains the
+ordinary reverse relation graph.
+
+`--explain` adds static definition paths and call source spans. They describe
+abstract dependencies, not observed runtime traces. Partial summaries, unresolved
+call targets, non-return effects and depth truncation are reported as boundaries.
+Strict parameter analysis exits 2 for incomplete evidence; invalid/missing facts
+exit 1. Strict preflight additionally exits 1 for its usual review findings.
+`flow` JSON retains the intraprocedural `completeness`, includes `summary`, and
+exposes their combined `analysisCompleteness` for its strict exit decision.
+
+`npm run bench:impact` compares the existing store's reverse caller candidates
+against the same handwritten parameter-value labels. The development corpus
+does not establish general change-impact accuracy or independent generalization.
 
 ## Change Preflight (impact / risk / test gap)
 

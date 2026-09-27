@@ -152,6 +152,9 @@ describe('intraprocedural fixed point', () => {
     const protocol = analyze('function f(input){let a={x:1};input+1;return a.x;}').result;
     expect(returnedAtoms(protocol)).toContain('*number');
     expect(protocol.unknownEffects.length).toBeGreaterThan(0);
+    const formatting = analyze('function f(input){let a={x:1};`${input}`;return a.x;}').result;
+    expect(returnedAtoms(formatting)).toContain('*number');
+    expect(returnedAtoms(analyze('function f(){let a={x:1};`${1}`;return a.x;}').result)).toEqual(['number:1']);
   });
 
   it('preserves interpolation dependencies and does not shift sparse or spread array fields', () => {

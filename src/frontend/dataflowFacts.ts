@@ -14,27 +14,47 @@ const temporary = (node: Node | null): DataExpr => node ? { kind: 'temporary', k
 export function attachDataflowFacts(root: Node, symbols: SymbolFacts, graphs: ControlFlowGraph[]): void {
   const index = new Map<string, Node>();
   const typedIndex = new Map<string, Node>();
+  const firstAtOffset = new Map<number, Node>();
+  const typedAtOffset = new Map<string, Node>();
+  const declarationScopes = new Map<string, number>();
   const bindings = new Map<string, SymbolBinding[]>();
   for (const binding of symbols.bindings) {
     const key = `${binding.scope}:${binding.name}`;
     bindings.set(key, [...bindings.get(key) ?? [], binding]);
+    const declarationKey = `${binding.offset}:${binding.name}`;
+    if (!declarationScopes.has(declarationKey)) declarationScopes.set(declarationKey, binding.scope);
   }
   const nodes: Node[] = [];
   const pending = [root];
   while (pending.length) {
     const node = pending.pop()!; nodes.push(node); index.set(keyOf(node), node); typedIndex.set(`${node.type}:${keyOf(node)}`, node);
+    if (!firstAtOffset.has(node.startIndex)) firstAtOffset.set(node.startIndex, node);
+    const typedKey = `${node.type}:${node.startIndex}`;
+    if (!typedAtOffset.has(typedKey)) typedAtOffset.set(typedKey, node);
     pending.push(...node.namedChildren.slice().reverse());
   }
   const scopesBySize = [...symbols.scopes].sort((a, b) => (a.endOffset - a.startOffset) - (b.endOffset - b.startOffset) || b.id - a.id);
-  const scopeAt = (node: Node) => scopesBySize.find(s => s.startOffset <= node.startIndex && s.endOffset >= node.endIndex)?.id ?? 0;
+  const nodeScopes = new Map<number, number>();
+  const scopeAt = (node: Node) => {
+    const existing = nodeScopes.get(node.id);
+    if (existing !== undefined) return existing;
+    const start = node.startIndex, end = node.endIndex;
+    const scope = scopesBySize.find(s => s.startOffset <= start && s.endOffset >= end)?.id ?? 0;
+    nodeScopes.set(node.id, scope); return scope;
+  };
+  const functionScopes = new Map<number, number>();
   function functionScope(scope: number): number {
+    const existing = functionScopes.get(scope);
+    if (existing !== undefined) return existing;
+    const initial = scope;
     while (symbols.scopes[scope].kind !== 'function' && symbols.scopes[scope].parent !== null) scope = symbols.scopes[scope].parent!;
+    functionScopes.set(initial, scope);
     return scope;
   }
   function bindingScope(node: Node, name: string, declaration = false): number {
     if (declaration) {
-      const declared = symbols.bindings.find(b => b.name === name && b.offset === node.startIndex);
-      if (declared) return declared.scope;
+      const declared = declarationScopes.get(`${node.startIndex}:${name}`);
+      if (declared !== undefined) return declared;
     }
     let scope = scopeAt(node);
     const origin = scope;
@@ -47,6 +67,13 @@ export function attachDataflowFacts(root: Node, symbols: SymbolFacts, graphs: Co
     }
   }
   const variableKey = (scope: number, name: string) => `${symbols.filePath}#${scope}:${name}`;
+  const ownedBindings = new Map<number, SymbolBinding[]>();
+  for (const binding of symbols.bindings) {
+    const owner = functionScope(binding.scope);
+    ownedBindings.set(owner, [...ownedBindings.get(owner) ?? [], binding]);
+  }
+  const ownerScopes = new Map(symbols.scopes.filter(s => s.kind === 'function' && s.owner).map(s => [s.owner, s.id]));
+  const entitiesAtOffset = new Map(symbols.entities.filter(e => e.bodyScope !== undefined).map(e => [symbols.scopes[e.bodyScope!].startOffset, e]));
   const captured = new Set<string>();
   for (const node of nodes.filter(n => ['identifier', 'self', 'this'].includes(n.type))) {
     const scope = bindingScope(node, node.text);
@@ -54,9 +81,10 @@ export function attachDataflowFacts(root: Node, symbols: SymbolFacts, graphs: Co
   }
 
   for (const graph of graphs) {
-    const ownScope = symbols.scopes.find(s => s.owner === graph.owner && s.kind === 'function')?.id;
+    const ownScope = ownerScopes.get(graph.owner);
     if (ownScope === undefined) continue;
-    const facts: DataflowFacts = { variables: [], effects: {}, diagnostics: [] };
+    const facts: DataflowFacts = { variables: [], effects: {}, diagnostics: [],
+      parameters: symbols.scopes[ownScope].parameters?.map(p => ({ ...p, key: p.name ? variableKey(ownScope, p.name) : undefined })) };
     const variables = new Map<string, FlowVariable>();
     function variable(node: Node, name: string, declaration = false, forcedScope?: number): DataExpr & { kind: 'variable' } {
       const scope = forcedScope ?? bindingScope(node, name, declaration), key = variableKey(scope, name);
@@ -68,20 +96,19 @@ export function attachDataflowFacts(root: Node, symbols: SymbolFacts, graphs: Co
         const hoisted = declared.find(b => b.hoisted && b.value.kind === 'entity');
         if (hoisted?.value.kind === 'entity') initial = { kind: 'entity', target: hoisted.value.qualifiedName };
         for (const binding of declared) {
-          const syntax = nodes.find(n => n.startIndex === binding.offset && n.type === 'variable_declarator');
+          const syntax = typedAtOffset.get(`variable_declarator:${binding.offset}`);
           if (syntax?.parent?.type === 'variable_declaration') initial = { kind: 'undefined' };
-          const loop = nodes.find(n => n.startIndex === binding.offset && n.type === 'for_in_statement');
+          const loop = typedAtOffset.get(`for_in_statement:${binding.offset}`);
           if (loop?.children.some(child => child.type === 'var')) initial = { kind: 'undefined' };
         }
         variables.set(key, { key, name, scope, category: owned ? parameter ? 'parameter' : 'local' : 'external', initial, captured: captured.has(key) });
       }
       return { kind: 'variable', key };
     }
-    for (const binding of symbols.bindings.filter(b => functionScope(b.scope) === ownScope)) {
-      const source = nodes.find(n => n.startIndex === binding.offset) ?? root;
-      // Parameter offsets are synthetic zero; use the owner node to retain its scope.
-      const ownNode = nodes.find(n => n.startIndex === symbols.scopes[ownScope].startOffset && n.endIndex === symbols.scopes[ownScope].endOffset) ?? source;
-      variable(binding.offset === 0 ? ownNode : source, binding.name, true, binding.scope);
+    for (const binding of ownedBindings.get(ownScope) ?? []) {
+      const source = firstAtOffset.get(binding.offset) ?? root;
+      // synthetic parameter/handler offset도 명시적 binding scope를 따른다.
+      variable(source, binding.name, true, binding.scope);
     }
     const diagnose = (node: CfgNode, message: string) => {
       if (!facts.diagnostics.some(d => d.node === node.id && d.message === message)) facts.diagnostics.push({ code: 'unsupported-effect', node: node.id, message });
@@ -118,7 +145,8 @@ export function attachDataflowFacts(root: Node, symbols: SymbolFacts, graphs: Co
         const quoted = ['"', "'"].includes(node.text[0]) && node.text.at(-1) === node.text[0];
         return quoted && !node.text.includes('\\') && !node.text.startsWith(node.text[0].repeat(3))
           && !node.namedChildren.some(child => ['interpolation', 'template_substitution'].includes(child.type))
-          ? { kind: 'literal', value: node.text.slice(1, -1) } : { kind: 'non-null', type: 'string', sources: node.namedChildren.map(temporary) };
+          ? { kind: 'literal', value: node.text.slice(1, -1) } : { kind: 'non-null', type: 'string',
+            sources: node.namedChildren.filter(child => ['interpolation', 'template_substitution'].includes(child.type)).map(temporary) };
       }
       if (['unit_expression', 'unit_type'].includes(node.type)) return { kind: 'unit' };
       if (['identifier', 'self', 'this'].includes(node.type)) return variable(node, node.text);
@@ -127,8 +155,14 @@ export function attachDataflowFacts(root: Node, symbols: SymbolFacts, graphs: Co
     function expression(node: Node, cfgNode: CfgNode): DataExpr {
       const member = location(node);
       if (member?.kind === 'member') return member;
-      if (['call', 'call_expression'].includes(node.type)) return { kind: 'call', callee: temporary(field(node, 'function')),
-        arguments: field(node, 'arguments')?.namedChildren.map(temporary) ?? [] };
+      if (['call', 'call_expression'].includes(node.type)) {
+        const callee = field(node, 'function');
+        const arguments_ = field(node, 'arguments')?.namedChildren ?? [];
+        const member = callee && location(callee);
+        return { kind: 'call', callee: temporary(callee), arguments: arguments_.map(temporary),
+          argumentsKnown: !arguments_.some(n => ['spread_element', 'keyword_argument', 'list_splat', 'dictionary_splat'].includes(n.type)),
+          receiver: member?.kind === 'member' ? member.object : undefined };
+      }
       if (['object', 'dictionary', 'array', 'list', 'tuple', 'tuple_expression', 'array_expression', 'new_expression'].includes(node.type)) {
         const fields: Array<[string, DataExpr]> = [];
         let open = node.type === 'new_expression' || node.type === 'object' || node.type === 'array';
@@ -160,9 +194,10 @@ export function attachDataflowFacts(root: Node, symbols: SymbolFacts, graphs: Co
         kind: 'unary', operator: field(node, 'operator')?.text ?? node.children[0].text,
         value: temporary(field(node, 'argument') ?? node.namedChild(0)) };
       if (['parenthesized_expression', 'as_expression', 'non_null_expression', 'type_cast_expression'].includes(node.type)) return temporary(node.namedChild(0));
+      if (['template_substitution', 'interpolation'].includes(node.type) && node.namedChildren.length === 1) return temporary(node.namedChild(0));
       if (['await_expression', 'await', 'try_expression'].includes(node.type)) return unknown(node.namedChildren.map(temporary));
       if (['function_declaration', 'function_expression', 'arrow_function', 'function_definition', 'lambda', 'function_item', 'closure_expression', 'class_declaration', 'class_definition'].includes(node.type)) {
-        const entity = symbols.entities.find(e => symbols.scopes[e.bodyScope ?? -1]?.startOffset === node.startIndex);
+        const entity = entitiesAtOffset.get(node.startIndex);
         return entity ? { kind: 'entity', target: entity.qualifiedName } : { kind: 'non-null', type: 'function' };
       }
       if (node.type === 'assignment_expression' || node.type === 'assignment' || node.type === 'variable_declarator' || node.type === 'let_declaration') {

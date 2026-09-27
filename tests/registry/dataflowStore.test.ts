@@ -44,7 +44,7 @@ describe('dataflow persistence', () => {
       migrated.replaceDataflowForProject('p', results);
       expect(migrated.getDataflow('p')).toEqual(results);
       const check = new Database(path, { readonly: true });
-      try { expect(check.pragma('user_version', { simple: true })).toBe(6); expect(check.pragma('foreign_key_check')).toEqual([]); }
+      try { expect(check.pragma('user_version', { simple: true })).toBe(7); expect(check.pragma('foreign_key_check')).toEqual([]); }
       finally { check.close(); }
     } finally { migrated.close(); }
   });

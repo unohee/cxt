@@ -9,7 +9,7 @@ export type DataExpr =
   | { kind: 'member'; object: DataExpr; property: string }
   | { kind: 'unary'; operator: string; value: DataExpr }
   | { kind: 'binary'; operator: string; left: DataExpr; right: DataExpr }
-  | { kind: 'call'; callee: DataExpr; arguments: DataExpr[]; target?: string };
+  | { kind: 'call'; callee: DataExpr; arguments: DataExpr[]; receiver?: DataExpr; argumentsKnown?: boolean; target?: string };
 
 export type FlowLocation = { kind: 'variable'; key: string } | { kind: 'member'; object: DataExpr; property: string };
 export interface FlowVariable {
@@ -36,6 +36,7 @@ export interface DataflowDiagnostic {
   node?: number;
 }
 export interface DataflowFacts {
+  parameters?: Array<{ key?: string; name?: string; index: number; receiver: boolean }>;
   variables: FlowVariable[];
   effects: Record<number, NodeEffect>;
   diagnostics: DataflowDiagnostic[];

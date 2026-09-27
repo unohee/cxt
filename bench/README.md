@@ -66,3 +66,11 @@ Zod로 언어/종류/범위/필수 필드를 검증하고, 중복 fixture ID 및
 정의/사용 라벨은 지정한 read 위치에서 definition source line까지의 집합이다. 동일 줄의 여러 정의를 구분하는 정답 코퍼스는 아니다. 반환 parameter relation과 합쳐 언어별 precision/recall을 측정한다. 미지원 예제를 각 언어에 하나 포함한다. `partial`은 라벨 정확도 통과와 별도로 남는다.
 
 게이트는 라벨 precision/recall=1, 명시된 atom·uninitialized·completeness 정답 일치다. 2026-09-27 개발 기준선 `dataflow-baseline.json`은 관계 30/30, read 상태 21/21, completeness 27/27이다. 임의의 결과 부재, 정의 누락, 거짓 parameter dependence, completeness 조작, assignment effect 삭제, solver 예산 소진 mutation은 실패해야 한다. 이 점수는 선택한 개발 라벨의 일치도이며 실제 프로젝트 정확도·CodeQL 동등성·resource/ownership 분석 완료를 의미하지 않는다.
+
+## Parameter value impact 비교 — AGT-4568
+
+`corpus/impact.json`은 언어별 5개, 총 15개 수기 fixture다. `target`, `parameter`, `expected` caller 목록, `completeness`, `pathCalls: [callerName, expectedCallText]`를 기록한다. discarded/overwritten 결과, 무시한 formal parameter, 여러 call site, wrapper chain, 외부 미해석 경계를 포함한다. 경로의 call node/원본 span과 라벨 call text도 검사한다.
+
+기존 `SqliteRegistryStore.getImpactSet`을 실제 메모리 DB에서 실행하여 같은 parameter-value 정답에 대조한다. 일반적인 코드 변경 전체의 정답을 바꿔 측정하는 것이 아니다. 새 질의의 명시적 value-dependence 작업에서 기존 caller 후보가 얼마나 과다한지 측정한다. 각 언어의 complete fixture 4개만 precision/recall 분모에 넣고, partial fixture 1개는 상태·경로 회귀로 분리한다.
+
+개발 기준선 `impact-baseline.json`: 언어별 기존 TP 3/FP 3(precision 0.5), 새 TP 3/FP 0/FN 0(precision/recall 1.0), +50%p. 게이트는 precision/recall=1 및 기존 대비 최소 +15%p이고, 모든 fixture의 상태와 경로가 맞아야 한다. 후보 누락/추가/중복·틀린 call node/span mutation은 실패해야 한다. 작은 개발용 표본이며 일반 변경 영향·implicit control dependence·독립 프로젝트 정답률을 입증하지 않는다.

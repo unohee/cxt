@@ -176,14 +176,24 @@ export function extractSymbolFacts(root: Node, language: AstLanguage, filePath: 
       else if (kind === 'class') caller = owner;
       if (node.type === 'impl_item' && receiver) facts.implementations.push({ type: receiver, scope, parentScope });
       if (kind === 'function') {
+        facts.scopes[scope].parameters = [];
         const classScope = facts.scopes[parentScope].kind === 'class' ? facts.scopes[parentScope] : undefined;
         if (classScope?.receiver) {
           bind('this', scope, { kind: 'instance', type: classScope.receiver }, 0, true, true);
+          if (language === 'typescript') facts.scopes[scope].parameters!.push({ index: -1, name: 'this', receiver: true });
           bind('Self', scope, classScope.receiver);
         }
         const parameters = field(node, 'parameters');
         const params = parameters?.namedChildren ?? (field(node, 'parameter') ? [field(node, 'parameter')!] : []);
+        let argumentIndex = 0;
         for (const parameter of params) {
+          const pattern = field(parameter, 'pattern') ?? field(parameter, 'name')
+            ?? (['identifier', 'self'].includes(parameter.type) ? parameter : parameter.namedChild(0));
+          const directName = pattern && ['identifier', 'self', 'this'].includes(pattern.type) ? pattern.text : undefined;
+          const receiver = !!classScope && (language === 'rust' && parameter.type === 'self_parameter'
+            || language === 'python' && argumentIndex === 0 && ['self', 'cls'].includes(directName ?? '')
+            || language === 'typescript' && directName === 'this');
+          facts.scopes[scope].parameters!.push({ index: receiver ? -1 : argumentIndex++, name: directName, receiver });
           for (const name of bindings(parameter)) {
             const type = field(parameter, 'type');
             const value = classScope?.receiver && (name === 'self' || name === 'cls')

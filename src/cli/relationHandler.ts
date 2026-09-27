@@ -11,6 +11,7 @@ import { resolveProjectId } from './checkHandler.js';
 import { t } from '../i18n.js';
 import type { CodeEntity, RelationType } from '../registry/schema.js';
 import { escapeTerminal } from './outputSafety.js';
+import { loadParameterImpact, presentParameterImpact, printParameterPaths } from './parameterImpactHandler.js';
 
 const c = {
   reset: '\x1b[0m', bold: '\x1b[1m', dim: '\x1b[2m',
@@ -23,6 +24,9 @@ export interface RelationOptions {
   type?: string;       // calls | extends | implements (필터)
   depth?: string;      // impact 전용
   json?: boolean;
+  param?: string;
+  explain?: boolean;
+  strict?: boolean;
 }
 
 const RELATION_TYPES = new Set<RelationType>(['calls', 'extends', 'implements', 'uses', 'overrides']);
@@ -175,10 +179,32 @@ export async function handleImpact(name: string, opts: RelationOptions): Promise
   const projectId = opts.project?.trim() || resolveProjectId(process.cwd());
   const store = getRegistryStore();
   try {
+    if (opts.explain && opts.param === undefined) {
+      if (opts.json) console.log(JSON.stringify({ error: 'explain_requires_param' })); else console.error('--explain requires --param');
+      process.exitCode = 1; return;
+    }
     const maxDepth = parseImpactDepth(opts.depth, !!opts.json);
     if (maxDepth === null) return;
     const target = lookupEntity(name, projectId, !!opts.json);
     if (!target) { process.exitCode = 1; return; }
+
+    if (opts.param !== undefined) {
+      try {
+        const result = loadParameterImpact(store, projectId, target.qualifiedName, opts.param, maxDepth);
+        if (opts.json) console.log(JSON.stringify({ ...presentParameterImpact(result, !!opts.explain), impactCount: result.impacted.length }, null, 2));
+        else {
+          console.log(`Parameter value impact: ${safe(result.target)} / ${safe(result.parameter)} — ${result.completeness}`);
+          for (const item of result.impacted) console.log(`  ${item.depth}: ${safe(item.owner)}`);
+          if (opts.explain) printParameterPaths(result);
+        }
+        if (opts.strict && result.completeness === 'partial') process.exitCode = 2;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (opts.json) console.log(JSON.stringify({ error: 'parameter_analysis_unavailable', message })); else console.error(safe(message));
+        process.exitCode = 1;
+      }
+      return;
+    }
 
     const impacted = store.getImpactSet(target.id, maxDepth);
 

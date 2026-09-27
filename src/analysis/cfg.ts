@@ -33,6 +33,7 @@ export interface ControlFlowGraph {
   filePath: string;
   owner: string;
   language: AstLanguage;
+  executionKind?: 'sync' | 'async' | 'generator';
   entry: number;
   exit: number;
   exceptionExit: number;

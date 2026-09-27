@@ -19,6 +19,7 @@ export interface SymbolScope {
   owner?: string;
   receiver?: SymbolValue;
   redirects?: Record<string, number>;
+  parameters?: Array<{ index: number; name?: string; receiver: boolean }>;
 }
 
 export interface SymbolBinding {

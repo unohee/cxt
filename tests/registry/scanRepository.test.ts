@@ -82,6 +82,7 @@ describe('scanRepository — AST frontend and snapshot safety', () => {
     const callSites = store.getCallSites('ast-failure');
     const cfgs = store.getControlFlow('ast-failure');
     const flows = store.getDataflow('ast-failure');
+    const summaries = store.getSummaries('ast-failure');
     write('src/x.ts', 'function replacement() {}');
     write('src/invalid.ts', 'function broken(');
     const result = await scanRepository(projectDir, 'ast-failure', { parser: 'auto' });
@@ -93,6 +94,7 @@ describe('scanRepository — AST frontend and snapshot safety', () => {
     expect(store.getCallSites('ast-failure')).toEqual(callSites);
     expect(store.getControlFlow('ast-failure')).toEqual(cfgs);
     expect(store.getDataflow('ast-failure')).toEqual(flows);
+    expect(store.getSummaries('ast-failure')).toEqual(summaries);
   });
 
   it('atomically rolls back entities, call facts and relations when final relation persistence fails', async () => {
@@ -103,6 +105,7 @@ describe('scanRepository — AST frontend and snapshot safety', () => {
     const sites = store.getCallSites('rollback');
     const cfgs = store.getControlFlow('rollback');
     const flows = store.getDataflow('rollback');
+    const summaries = store.getSummaries('rollback');
     const relations = store.countRelations('rollback');
     write('src/x.ts', 'function replacement() { missing(); }');
     vi.spyOn(store, 'replaceRelationsForProject').mockImplementation(() => { throw new Error('injected storage failure'); });
@@ -114,6 +117,7 @@ describe('scanRepository — AST frontend and snapshot safety', () => {
     expect(store.getCallSites('rollback')).toEqual(sites);
     expect(store.getControlFlow('rollback')).toEqual(cfgs);
     expect(store.getDataflow('rollback')).toEqual(flows);
+    expect(store.getSummaries('rollback')).toEqual(summaries);
     expect(store.countRelations('rollback')).toBe(relations);
   });
 

@@ -33,6 +33,11 @@ export type { SymbolFacts, SymbolValue, CallSite, ResolvedCallSite, ResolutionRe
 export { reachableNodes, buildBasicBlocks } from './analysis/cfg.js';
 export type { ControlFlowGraph, CfgNode, CfgEdge, CfgDiagnostic, SourceSpan, BasicBlock } from './analysis/cfg.js';
 export { analyzeDataflow } from './analysis/dataflow.js';
+export { analyzeSummaries } from './analysis/summaries.js';
+export type { SummaryAnalysis } from './analysis/summaries.js';
+export type { FunctionSummary, SummaryParameter } from './analysis/summaryTypes.js';
+export { parameterImpact } from './analysis/parameterImpact.js';
+export type { ParameterImpact, ImpactStep } from './analysis/parameterImpact.js';
 export type { DataflowResult, AbstractValue, FlowDefinition, FlowUse } from './analysis/dataflow.js';
 export type { DataflowFacts, DataflowDiagnostic, DataExpr, NodeEffect, FlowVariable, FlowLocation } from './analysis/dataflowTypes.js';
 

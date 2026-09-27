@@ -364,6 +364,9 @@ program
   .description(h('Transitive impact analysis: all entities affected if <name> changes', '전이 영향 분석: <name> 변경 시 영향을 받는 모든 엔티티'))
   .option('--project <id>', h('Project ID override', '프로젝트 ID 재정의'))
   .option('--depth <n>', h('Max BFS depth (default: 5)', '최대 BFS 깊이 (기본값: 5)'))
+  .option('--param <name>', h('Trace current parameter value dependence into caller outputs', '현재 매개변수 값 의존성이 호출자 출력에 미치는 영향'))
+  .option('--explain', h('Include definition paths (requires --param)', '정의 경로 포함 (--param 필요)'))
+  .option('--strict', h('Exit 2 for partial parameter analysis', '매개변수 부분 분석이면 exit 2'))
   .option('--json', h('JSON output', 'JSON 출력'))
   .action(async (name, opts) => {
     const { handleImpact } = await import('./cli/relationHandler.js');
@@ -375,8 +378,10 @@ program
   .description(h('Build a deterministic change-review checklist from impact, risk, tests, and warnings', '영향도·위험도·테스트·경고 기반의 결정론적 변경 점검표 생성'))
   .option('--project <id>', h('Project ID override', '프로젝트 ID 재정의'))
   .option('--depth <n>', h('Max impact depth (default: 5)', '최대 영향 깊이 (기본값: 5)'))
+  .option('--param <name>', h('Review parameter value impact candidates', '매개변수 값 영향 후보 점검'))
+  .option('--explain', h('Include definition paths (requires --param)', '정의 경로 포함 (--param 필요)'))
   .option('--json', h('JSON output', 'JSON 출력'))
-  .option('--strict', h('Exit 1 when impacted candidates are high-risk, untested, or warned', '영향 후보에 고위험·미테스트·경고가 있으면 종료 코드 1'))
+  .option('--strict', h('Exit 1 for review findings, 2 for partial parameter analysis', '검토 발견 사항은 exit 1, 매개변수 부분 분석은 exit 2'))
   .action(async (name, opts) => {
     const { handlePreflight } = await import('./cli/preflightHandler.js');
     await handlePreflight(name, opts);

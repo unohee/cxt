@@ -193,6 +193,7 @@ export async function handleCheck(
       console.log(`  ${'Call sites'.padEnd(16)}${result.callSites.total} (${result.callSites.resolved} resolved, ${result.callSites.unresolved} unresolved, ${result.callSites.external} external)`);
       console.log(`  ${'CFGs'.padEnd(16)}${result.controlFlow.total} (${result.controlFlow.complete} complete, ${result.controlFlow.partial} partial)`);
       console.log(`  ${'Dataflow'.padEnd(16)}${result.dataflow.total} (${result.dataflow.complete} complete, ${result.dataflow.partial} partial)`);
+      console.log(`  ${'Summaries'.padEnd(16)}${result.summaries.total} (${result.summaries.complete} complete, ${result.summaries.partial} partial)`);
       for (const diagnostic of result.dataflow.diagnostics.slice(0, 10)) {
         console.log(`  [${diagnostic.code}] ${escapeTerminal(diagnostic.owner)}: ${escapeTerminal(diagnostic.message)}`);
       }

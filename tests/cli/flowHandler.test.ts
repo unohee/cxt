@@ -11,6 +11,20 @@ beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'cxt-flow-cli-')); closeRegi
 afterEach(() => { closeRegistryStore(); vi.restoreAllMocks(); process.exitCode = undefined; rmSync(dir, { recursive: true, force: true }); });
 
 describe('dataflow CLI', () => {
+  it('distinguishes converged local facts from a partial or missing interprocedural summary', async () => {
+    writeFileSync(join(dir, 'x.ts'), 'function f(input){return external(input);}');
+    await scanRepository(dir, 'p', { parser: 'ast' });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    await handleFlow('f', { project: 'p', json: true, strict: true });
+    expect(JSON.parse(log.mock.calls[0][0])).toMatchObject({ completeness: 'complete', summary: { completeness: 'partial' }, analysisCompleteness: 'partial' });
+    expect(process.exitCode).toBe(2);
+    getRegistryStore(join(dir, 'registry.db')).replaceSummariesForProject('p', []);
+    log.mockClear(); process.exitCode = undefined;
+    await handleFlow('f', { project: 'p', json: true, strict: true });
+    expect(JSON.parse(log.mock.calls[0][0])).toMatchObject({ summary: null, analysisCompleteness: 'partial' });
+    expect(process.exitCode).toBe(2);
+  });
+
   it('reads stored definitions and source locations, with partial and absent exit codes', async () => {
     writeFileSync(join(dir, 'x.ts'), 'function complete(input){let saved=input;input=2;return saved;}\nfunction* partial(){yield work();}\nconst value=1;');
     const result = await scanRepository(dir, 'flow-cli', { parser: 'ast' });

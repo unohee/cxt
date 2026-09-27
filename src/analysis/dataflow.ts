@@ -1,5 +1,6 @@
 import type { ControlFlowGraph } from './cfg.js';
 import type { DataExpr, DataflowDiagnostic, FlowLocation, NodeEffect } from './dataflowTypes.js';
+import type { FunctionSummary } from './summaryTypes.js';
 
 export interface AbstractValue {
   atoms: string[];
@@ -20,6 +21,12 @@ export interface FlowUse {
   mayBeUninitialized: boolean;
   value: AbstractValue;
 }
+export interface FlowCall {
+  node: number;
+  target?: string;
+  arguments: AbstractValue[];
+  resolution: 'summary' | 'unknown';
+}
 export interface DataflowResult {
   owner: string;
   completeness: 'complete' | 'partial';
@@ -30,6 +37,8 @@ export interface DataflowResult {
   definitions: FlowDefinition[];
   uses: FlowUse[];
   returns: Array<{ node: number; value: AbstractValue }>;
+  throws: Array<{ node: number; value: AbstractValue }>;
+  calls: FlowCall[];
   reachableNodes: number[];
 }
 type State = Map<string, AbstractValue>;
@@ -64,7 +73,7 @@ const sameValue = (left: AbstractValue, right: AbstractValue) => left === right 
     const other = right.alternatives[i];
     return choice.definition === other.definition && sameList(choice.atoms, other.atoms) && sameList(choice.parameters, other.parameters);
   }));
-const mergeValue = (left: AbstractValue, right: AbstractValue) => sameValue(left, right) ? left
+export const mergeValue = (left: AbstractValue, right: AbstractValue) => sameValue(left, right) ? left
   : value([...left.atoms, ...right.atoms], [...left.definitions, ...right.definitions], [...left.parameters, ...right.parameters], [...left.alternatives, ...right.alternatives]);
 function joinState(existing: State | undefined, incoming: State): { state: State; changed: boolean } {
   if (!existing) return { state: new Map(incoming), changed: true };
@@ -85,10 +94,19 @@ function concrete(atom: string): string | number | boolean | null | undefined {
 }
 const isConcrete = (atom: string) => ['null', 'undefined'].includes(atom) || /^(number|string|boolean):/.test(atom);
 
+export function applicableCallSummary(expr: DataExpr, summaries?: ReadonlyMap<string, FunctionSummary>): FunctionSummary | undefined {
+  if (expr.kind !== 'call' || !expr.target || expr.argumentsKnown === false) return undefined;
+  const summary = summaries?.get(expr.target);
+  if (!summary || summary.completeness !== 'complete' || summary.parameters.some(p => p.receiver)
+    || summary.parameters.length !== expr.arguments.length) return undefined;
+  return summary;
+}
+
 /** CFG의 유한 추상값에 worklist를 적용한다. 진단은 수렴 후 상태에서 만든다. */
-export function analyzeDataflow(graph: ControlFlowGraph, options: { iterationBudget?: number; stateBudget?: number; workBudget?: number } = {}): DataflowResult {
+export function analyzeDataflow(graph: ControlFlowGraph, options: { iterationBudget?: number; stateBudget?: number; workBudget?: number;
+  summaries?: ReadonlyMap<string, FunctionSummary> } = {}): DataflowResult {
   const result: DataflowResult = { owner: graph.owner, completeness: 'complete', iterations: 0, workUnits: 0,
-    diagnostics: [], definitions: [], uses: [], returns: [], reachableNodes: [], unknownEffects: [] };
+    diagnostics: [], definitions: [], uses: [], returns: [], throws: [], calls: [], reachableNodes: [], unknownEffects: [] };
   const facts = graph.dataflow;
   if (!facts) {
     result.completeness = 'partial'; result.diagnostics.push({ code: 'unsupported-effect', message: 'Dataflow facts are absent; rescan source' }); return result;
@@ -128,7 +146,10 @@ export function analyzeDataflow(graph: ControlFlowGraph, options: { iterationBud
     else if (expression.kind === 'member') collectTemporaries(expression.object, reads);
     else if (expression.kind === 'unary') collectTemporaries(expression.value, reads);
     else if (expression.kind === 'binary') { collectTemporaries(expression.left, reads); collectTemporaries(expression.right, reads); }
-    else if (expression.kind === 'call') { collectTemporaries(expression.callee, reads); expression.arguments.forEach(e => collectTemporaries(e, reads)); }
+    else if (expression.kind === 'call') {
+      collectTemporaries(expression.callee, reads); expression.arguments.forEach(e => collectTemporaries(e, reads));
+      if (expression.receiver) collectTemporaries(expression.receiver, reads);
+    }
     else if (expression.kind === 'allocation') expression.fields.forEach(([, e]) => collectTemporaries(e, reads));
   }
   for (const [id, effect] of Object.entries(facts.effects)) {
@@ -229,7 +250,19 @@ export function analyzeDataflow(graph: ControlFlowGraph, options: { iterationBud
         }
         return value([`object:${expr.id}`], [], fields.flatMap(([, v]) => v.parameters));
       }
-      case 'call': return unknown([evaluate(expr.callee, state), ...expr.arguments.map(argument => evaluate(argument, state))]);
+      case 'call': {
+        const arguments_ = expr.arguments.map(argument => evaluate(argument, state));
+        const summary = applicableSummary(expr, state);
+        if (recording) result.calls.push({ node: currentNode, target: expr.target, arguments: arguments_, resolution: summary ? 'summary' : 'unknown' });
+        if (!summary) {
+          const result = unknown([evaluate(expr.callee, state), ...arguments_]);
+          // unknown 호출은 closure/heap을 통해 명시적 인자 밖의 입력도 읽을 수 있다.
+          return value(result.atoms, [recordDefinition(`call:${expr.target ?? 'unknown'}`, result)], [...result.parameters, ...allParameters]);
+        }
+        const sources = summary.parameters.filter(p => summary.returnParameters.includes(p.key)).map(p => arguments_[p.index]);
+        const source = value(summary.returnAtoms, sources.flatMap(v => v.definitions), sources.flatMap(v => v.parameters));
+        return value(source.atoms, [recordDefinition(`call:${expr.target}`, source)], source.parameters);
+      }
       case 'unary': {
         const source = evaluate(expr.value, state);
         if (expr.operator === 'nullish' || expr.operator === 'undefined') {
@@ -284,6 +317,12 @@ export function analyzeDataflow(graph: ControlFlowGraph, options: { iterationBud
       }
     }
   }
+  function applicableSummary(expr: DataExpr, state: State): FunctionSummary | undefined {
+    const summary = applicableCallSummary(expr, options.summaries);
+    if (!summary || expr.kind !== 'call') return undefined;
+    const callee = evaluate(expr.callee, state);
+    return callee.atoms.length === 1 && callee.atoms[0] === `function:${summary.owner}` ? summary : undefined;
+  }
   function truth(input: AbstractValue): boolean[] {
     const outcomes = new Set<boolean>();
     for (const atom of input.atoms) {
@@ -316,6 +355,9 @@ export function analyzeDataflow(graph: ControlFlowGraph, options: { iterationBud
       uncertainSetter: write.target.kind === 'member' && !knownDataProperty(write.target.object, write.target.property, state) }));
     const uncertainGetter = effect.value.kind === 'member' && !knownDataProperty(effect.value.object, effect.value.property, state);
     const uncertainSetter = effect.writes.some(write => write.target.kind === 'member' && !knownDataProperty(write.target.object, write.target.property, state));
+    const summary = applicableSummary(effect.value, input);
+    const knownCallEffects = !!summary && (summary.effects.heap || summary.effects.bindings.length > 0 || summary.effects.unknown);
+    const unknownCallEffects = effect.mayCall && !summary || effect.mayMutateLocals;
     // 동적 연산자와 truth protocol도 사용자 코드를 실행할 수 있다.
     const mayHaveProtocol = (expression: DataExpr) => evaluate(expression, new Map(input)).atoms.some(atom => ['object', 'function'].includes(atomType(atom)));
     const operation = effect.value;
@@ -324,12 +366,16 @@ export function analyzeDataflow(graph: ControlFlowGraph, options: { iterationBud
       || operation.kind === 'unary' && !['nullish', 'undefined'].includes(operation.operator)
         && !(graph.language === 'typescript' && operation.operator === '!') && mayHaveProtocol(operation.value)
       || graph.language === 'python' && !!effect.guard && mayHaveProtocol(effect.guard);
-    if (effect.mayCall || uncertainGetter || uncertainSetter || uncertainOperator) {
-      if (recording) unknownEffects.add(currentNode);
+    const uncertainFormatting = operation.kind === 'non-null' && operation.type === 'string' && operation.sources?.some(mayHaveProtocol);
+    if (unknownCallEffects || knownCallEffects || uncertainGetter || uncertainSetter || uncertainOperator || uncertainFormatting) {
+      if (recording && (unknownCallEffects || uncertainGetter || uncertainSetter || uncertainOperator || uncertainFormatting)) unknownEffects.add(currentNode);
       havoc(state, effect.mayMutateLocals);
     }
     if (exceptional) {
-      state.set('pending:exception', unknown([evaluate(effect.value, new Map(input))]));
+      const arguments_ = summary && effect.value.kind === 'call' ? effect.value.arguments : undefined;
+      const sources = summary && arguments_ ? summary.parameters.filter(p => summary.throwParameters.includes(p.key))
+        .map(p => evaluate(arguments_[p.index], new Map(input))) : [evaluate(effect.value, new Map(input))];
+      state.set('pending:exception', unknown(sources));
       return state;
     }
     if (evaluated) state.set(temporaryCell(effect.resultKey), evaluated);
@@ -420,6 +466,7 @@ export function analyzeDataflow(graph: ControlFlowGraph, options: { iterationBud
     const normal = transfer(input, effect);
     let exception: State | undefined;
     for (const edge of outgoing.get(currentNode) ?? []) {
+      if (!['exception', 'throw'].includes(edge.kind) && effect && applicableSummary(effect.value, input)?.mayReturn === false) continue;
       if ((edge.kind === 'true' || edge.kind === 'false') && effect?.guard && !truth(evaluate(effect.guard, new Map(input))).includes(edge.kind === 'true')) continue;
       let propagated: State | undefined = edge.kind === 'suspend' ? input : edge.kind === 'exception' ? (exception ??= transfer(input, effect, true)) : normal;
       if ((edge.kind === 'true' || edge.kind === 'false') && effect?.guard) propagated = refine(effect.guard, edge.kind === 'true', propagated);
@@ -453,7 +500,12 @@ export function analyzeDataflow(graph: ControlFlowGraph, options: { iterationBud
     const effect = facts.effects[node];
     transfer(input, effect);
     for (const edge of outgoing.get(node) ?? []) {
+      if (edge.to === graph.exceptionExit) {
+        const thrown = transfer(input, effect, edge.kind === 'exception');
+        result.throws.push({ node, value: thrown.get('pending:exception') ?? unknown() });
+      }
       if (edge.to !== graph.exit) continue;
+      if (effect && applicableSummary(effect.value, input)?.mayReturn === false) continue;
       if ((edge.kind === 'true' || edge.kind === 'false') && effect?.guard && !truth(evaluate(effect.guard, new Map(input))).includes(edge.kind === 'true')) continue;
       const output = transfer(input, effect);
       const fallback = graph.implicitReturnSource ? output.get(temporaryCell(`${graph.implicitReturnSource.startOffset}:${graph.implicitReturnSource.endOffset}`)) ?? unknown()
@@ -471,5 +523,11 @@ export function analyzeDataflow(graph: ControlFlowGraph, options: { iterationBud
   }
   result.uses = [...uses.values()].sort((a, b) => a.node - b.node || a.variable.localeCompare(b.variable));
   result.unknownEffects = [...unknownEffects].sort((a, b) => a - b);
+  const calls = new Map<number, FlowCall>();
+  for (const call of result.calls) {
+    const existing = calls.get(call.node);
+    calls.set(call.node, existing ? { ...call, arguments: call.arguments.map((argument, i) => mergeValue(existing.arguments[i], argument)) } : call);
+  }
+  result.calls = [...calls.values()].sort((a, b) => a.node - b.node);
   return result;
 }

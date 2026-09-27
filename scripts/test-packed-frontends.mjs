@@ -19,7 +19,7 @@ writeFileSync(join(source, 'sample.ts'), 'export function read() {}');
 writeFileSync(join(source, 'sample.py'), 'def read(): pass');
 writeFileSync(join(source, 'sample.rs'), 'pub fn read() {}');
 writeFileSync(join(source, 'caller.ts'), "import { read as alias } from './sample.js';\nexport function caller() { alias(); missing(); }\ncaller();");
-writeFileSync(join(source, 'control.ts'), 'export function branch(x) { if(x) return 1; return 2; }\nexport function* partial() { yield task(); }\nexport async function awaited() { await task(); }');
+writeFileSync(join(source, 'control.ts'), 'export function branch(x) { if(x) return 1; return 2; }\nexport function* partial() { yield task(); }\nexport async function awaited() { await task(); }\nexport function identity(input){return input;}\nexport function through(input){return identity(input);}\nexport function ignored(input){identity(input);return 0;}');
 
 for (const mode of ['full', 'missing']) {
   const prefix = join(scratch, 'full');
@@ -115,6 +115,22 @@ for (const mode of ['full', 'missing']) {
       if (name === 'branch') assert.deepEqual([...new Set(parsed.returns.flatMap(r => r.value.atoms))].sort(), ['number:1', 'number:2']);
     }
     console.log('full: installed dataflow CLI persists values, locations and partial strict exit 2');
+    const impactProbe = join(scratch, 'parameter-impact.mjs');
+    writeFileSync(impactProbe, `
+      import { pathToFileURL } from 'node:url';
+      const api = await import(pathToFileURL(${JSON.stringify(join(installed, 'dist', 'index.js'))}));
+      api.getRegistryStore(${JSON.stringify(join(scratch, 'full.db'))});
+      process.argv = [process.execPath, ${JSON.stringify(join(installed, 'dist', 'cli.js'))}, 'impact', 'identity', '--param', 'input', '--explain', '--json', '--strict'];
+      await import(pathToFileURL(${JSON.stringify(join(installed, 'dist', 'cli.js'))}));
+    `);
+    const impact = spawnSync(process.execPath, [impactProbe], { cwd: source, encoding: 'utf8', timeout: 30_000 });
+    // 같은 snapshot의 missing()/task()는 미해석 호출 coverage 경계로 남는다.
+    assert.equal(impact.status, 2, impact.stderr + impact.stdout);
+    const parameterImpact = JSON.parse(impact.stdout);
+    assert.deepEqual(parameterImpact.impacted.map(item => item.owner), ['control.ts::through']);
+    assert.equal(parameterImpact.impacted[0].path[0].evidence, 'return');
+    assert.ok(parameterImpact.unresolvedCalls > 0);
+    console.log('full: installed parameter impact explains used outputs and reports unresolved coverage with exit 2');
     writeFileSync(join(source, 'sample.ts'), 'export function broken(');
     const invalid = spawnSync(process.execPath, [probe], { cwd: source, encoding: 'utf8', timeout: 30_000,
       env: { ...process.env, CXT_PARSER: 'auto' } });
