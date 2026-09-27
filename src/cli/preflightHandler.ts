@@ -89,6 +89,7 @@ export async function handlePreflight(name: string, opts: PreflightOptions): Pro
     else console.log(`\nChange preflight: ${escapeTerminal(found.target.qualifiedName)}\n  Candidates: ${candidates.length}  High risk: ${highRisk.length}  Untested: ${untested.length}  Warnings: ${warnings.length}\n  - ${result.review.required.join('\n  - ')}`);
     if (!opts.json && valueFlow) {
       console.log(`  Parameter value impact: ${escapeTerminal(valueFlow.parameter)} — ${valueFlow.completeness}`);
+      if (valueFlow.models?.length) console.log(`  Conditional on ${valueFlow.models.length} model contracts and unmodified external bindings; --explain lists versions.`);
       if (opts.explain) printParameterPaths(valueFlow);
     }
     if (opts.strict && !result.pass) process.exitCode = valueFlow?.completeness === 'partial' ? 2 : 1;

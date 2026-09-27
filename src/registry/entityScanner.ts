@@ -19,6 +19,7 @@ import type { FrontendDiagnostic, FrontendResult, ParserMode } from '../frontend
 import type { SymbolFacts } from '../analysis/symbols.js';
 import type { CfgDiagnostic, ControlFlowGraph } from '../analysis/cfg.js';
 import { analyzeSummaries } from '../analysis/summaries.js';
+import { loadLibraryModels, type ModelManifest } from '../analysis/libraryModels.js';
 import type { DataflowDiagnostic } from '../analysis/dataflowTypes.js';
 import { resolveSymbols } from '../analysis/resolveSymbols.js';
 
@@ -1001,6 +1002,7 @@ export interface ScanResult {
   dataflow: { total: number; complete: number; partial: number; iterations: number;
     diagnostics: Array<DataflowDiagnostic & { filePath: string; owner: string }> };
   summaries: { total: number; complete: number; partial: number; components: number };
+  models: { manifest: ModelManifest; calls: Record<string, number> };
 }
 
 // ============ 메인 스캔 함수 ============
@@ -1012,6 +1014,9 @@ export async function scanRepository(
 ): Promise<ScanResult> {
   const startTime = Date.now();
   const mode = parserMode(options?.parser);
+  // 설정 오류는 scan을 시작하기 전에 드러내고 이전 snapshot을 보존한다.
+  const libraryModels = await loadLibraryModels(projectPath);
+  const models: ScanResult['models'] = { manifest: libraryModels.manifest, calls: {} };
   const requestedDepth = options?.maxDepth ?? MAX_DEPTH;
   const requestedTimeout = options?.timeoutMs ?? SCAN_TIMEOUT_MS;
   if (!Number.isFinite(requestedDepth) || requestedDepth < 0 || !Number.isFinite(requestedTimeout) || requestedTimeout <= 0) {
@@ -1144,6 +1149,7 @@ export async function scanRepository(
       controlFlow,
       dataflow,
       summaries,
+      models,
     };
   }
 
@@ -1261,18 +1267,20 @@ export async function scanRepository(
     // ============ 관계 그래프 적재 (2-pass) ============
     const semantic = resolveSymbols(symbolFiles);
     store.replaceCallSitesForProject(projectId, semantic.calls);
-    const analysis = analyzeSummaries(cfgs, semantic.calls, { checkDeadline: () => {
+    const analysis = analyzeSummaries(cfgs, semantic.calls, { models: libraryModels, checkDeadline: () => {
       if (Date.now() - startTime > timeoutMs) throw new Error('scan timed out during dataflow');
     } });
     store.replaceControlFlowForProject(projectId, analysis.graphs);
     const graphByOwner = new Map(cfgs.map(graph => [graph.owner, graph]));
     for (const flow of analysis.flows) {
+      for (const call of flow.calls) if (call.model) models.calls[call.model.status] = (models.calls[call.model.status] ?? 0) + 1;
       dataflow.total++; dataflow[flow.completeness]++; dataflow.iterations += flow.iterations;
       dataflow.diagnostics.push(...flow.diagnostics.map(d => ({ ...d, filePath: graphByOwner.get(flow.owner)!.filePath, owner: flow.owner })));
     }
     if (Date.now() - startTime > timeoutMs) throw new Error('scan timed out during dataflow');
     store.replaceDataflowForProject(projectId, analysis.flows);
     store.replaceSummariesForProject(projectId, analysis.summaries);
+    store.setModelManifest(projectId, libraryModels.manifest);
     summaries.total = analysis.summaries.length; summaries.components = analysis.components.length;
     for (const summary of analysis.summaries) summaries[summary.completeness]++;
     for (const graph of cfgs) {
@@ -1303,6 +1311,7 @@ export async function scanRepository(
     dataflow.total = dataflow.complete = dataflow.partial = dataflow.iterations = 0;
     dataflow.diagnostics = [];
     summaries.total = summaries.complete = summaries.partial = summaries.components = 0;
+    models.calls = {};
     completeScan = false;
   }
   if (verbose) {
@@ -1327,6 +1336,7 @@ export async function scanRepository(
     controlFlow,
     dataflow,
     summaries,
+    models,
   };
 }
 

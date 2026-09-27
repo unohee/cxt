@@ -194,7 +194,7 @@ export class SqliteRegistryStore {
   //           omitted — P1 (tree-sitter frontend) is expected to extend
   //           EntityKind and pinning it now would force another rebuild.
   //           relations' relation_type CHECK moves to P2 v4 (code_call_sites).
-  private static readonly SCHEMA_VERSION = 7;
+  private static readonly SCHEMA_VERSION = 8;
 
   // The last version in which the FTS index schema (set of indexed columns)
   // changed. Decoupled from the user_version bump: through v2 "version went up"
@@ -675,7 +675,15 @@ export class SqliteRegistryStore {
           summary_json TEXT NOT NULL CHECK (json_valid(summary_json)),
           PRIMARY KEY (project_id, owner_id)
         );
+        CREATE TABLE IF NOT EXISTS code_model_manifests (
+          project_id TEXT PRIMARY KEY NOT NULL,
+          manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json))
+        );
       `)).immediate();
+      this.db.transaction(() => {
+        const columns = this.db.prepare('PRAGMA table_info(code_call_sites)').all() as Array<{ name: string }>;
+        if (!columns.some(column => column.name === 'external_json')) this.db.exec('ALTER TABLE code_call_sites ADD COLUMN external_json TEXT CHECK (external_json IS NULL OR json_valid(external_json))');
+      }).immediate();
     }
 
     // ── FTS virtual table + triggers ──
@@ -753,14 +761,24 @@ export class SqliteRegistryStore {
     return this.db.transaction(operation)();
   }
 
+  setModelManifest(projectId: string, manifest: import('../analysis/libraryModels.js').ModelManifest): void {
+    this.db.prepare('INSERT INTO code_model_manifests (project_id, manifest_json) VALUES (?, ?) ON CONFLICT(project_id) DO UPDATE SET manifest_json = excluded.manifest_json')
+      .run(projectId, JSON.stringify(manifest));
+  }
+
+  getModelManifest(projectId: string): import('../analysis/libraryModels.js').ModelManifest | null {
+    const row = this.db.prepare('SELECT manifest_json FROM code_model_manifests WHERE project_id = ?').get(projectId) as { manifest_json: string } | undefined;
+    return row ? JSON.parse(row.manifest_json) as import('../analysis/libraryModels.js').ModelManifest : null;
+  }
+
   replaceCallSitesForProject(projectId: string, sites: ResolvedCallSite[]): number {
     const entities = this.db.prepare('SELECT id, qualified_name FROM code_entities WHERE project_id = ?')
       .all(projectId) as Array<{ id: string; qualified_name: string }>;
     const ids = new Map(entities.map(e => [e.qualified_name, e.id]));
     const insert = this.db.prepare(`INSERT INTO code_call_sites
       (project_id, file_path, line, column_number, end_line, end_column, source_offset, scope_id,
-       caller_id, target_id, expression, callee_json, resolution, reason, confidence)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+       caller_id, target_id, expression, callee_json, resolution, reason, confidence, external_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     return this.db.transaction(() => {
       this.db.prepare('DELETE FROM code_call_sites WHERE project_id = ?').run(projectId);
       for (const site of sites) {
@@ -770,7 +788,7 @@ export class SqliteRegistryStore {
         if (site.target && !targetId) throw new Error(`Unregistered call-site target: ${site.target}`);
         insert.run(projectId, site.filePath, site.line, site.column, site.endLine, site.endColumn,
           site.offset, site.scope, callerId, targetId, site.expression, JSON.stringify(site.callee),
-          site.resolution, site.reason, site.confidence);
+          site.resolution, site.reason, site.confidence, site.external ? JSON.stringify(site.external) : null);
       }
       return sites.length;
     })();
@@ -784,13 +802,14 @@ export class SqliteRegistryStore {
       WHERE c.project_id = ? ${callerId ? 'AND c.caller_id = ?' : ''}
       ORDER BY c.file_path, c.line, c.column_number, c.end_line, c.end_column`)
       .all(...(callerId ? [projectId, callerId] : [projectId])) as Array<{
-        file_path: string; caller: string | null; target: string | null; scope_id: number; callee_json: string;
+        file_path: string; caller: string | null; target: string | null; scope_id: number; callee_json: string; external_json: string | null;
         expression: string; line: number; column_number: number; end_line: number; end_column: number;
         source_offset: number; resolution: ResolvedCallSite['resolution']; reason: ResolvedCallSite['reason']; confidence: number;
       }>;
     return rows.map(row => ({ filePath: row.file_path, caller: row.caller ?? undefined, target: row.target ?? undefined,
       scope: row.scope_id, callee: JSON.parse(row.callee_json) as SymbolValue, expression: row.expression,
       line: row.line, column: row.column_number, endLine: row.end_line, endColumn: row.end_column,
+      ...(row.external_json ? { external: JSON.parse(row.external_json) as ResolvedCallSite['external'] } : {}),
       offset: row.source_offset, resolution: row.resolution, reason: row.reason, confidence: row.confidence }));
   }
 
@@ -1676,6 +1695,7 @@ export class SqliteRegistryStore {
     const deleteEntities = this.db.prepare('DELETE FROM code_entities WHERE project_id = ?');
     const tx = this.db.transaction((id: string) => {
       this.db.prepare('DELETE FROM code_call_sites WHERE project_id = ?').run(id);
+      this.db.prepare('DELETE FROM code_model_manifests WHERE project_id = ?').run(id);
       deleteRelations.run(id, id);
       return deleteEntities.run(id).changes;
     });

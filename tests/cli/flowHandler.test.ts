@@ -11,6 +11,26 @@ beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'cxt-flow-cli-')); closeRegi
 afterEach(() => { closeRegistryStore(); vi.restoreAllMocks(); process.exitCode = undefined; rmSync(dir, { recursive: true, force: true }); });
 
 describe('dataflow CLI', () => {
+  it('shows applied model assumptions and rejection status in JSON and text', async () => {
+    writeFileSync(join(dir, '.cxt-models.json'), JSON.stringify({ schemaVersion: 1, versions: { node: '22.19.0' }, assumptions: ['unmodified-external-bindings'] }));
+    writeFileSync(join(dir, 'x.ts'), "import {basename} from 'node:path';function f(){return basename('x');}function g(input){return basename(input);}");
+    await scanRepository(dir, 'p', { parser: 'ast' });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    await handleFlow('f', { project: 'p', json: true, strict: true });
+    const parsed = JSON.parse(log.mock.calls[0][0]);
+    expect(parsed.calls[0].model.status).toBe('applied');
+    expect(parsed.summary.models[0].targetVersion).toBe('22.19.0');
+    expect(parsed.modelManifest.versionSource).toBe('project-declaration');
+    expect(process.exitCode).toBeUndefined();
+    getRegistryStore(join(dir, 'registry.db')); log.mockClear();
+    await handleFlow('f', { project: 'p' });
+    expect(log.mock.calls.flat().join('\n')).toContain('assumption=unmodified-external-bindings');
+    getRegistryStore(join(dir, 'registry.db')); log.mockClear();
+    await handleFlow('g', { project: 'p', json: true, strict: true });
+    expect(JSON.parse(log.mock.calls[0][0]).calls[0].model.status).toBe('argument-domain');
+    expect(process.exitCode).toBe(2);
+  });
+
   it('distinguishes converged local facts from a partial or missing interprocedural summary', async () => {
     writeFileSync(join(dir, 'x.ts'), 'function f(input){return external(input);}');
     await scanRepository(dir, 'p', { parser: 'ast' });

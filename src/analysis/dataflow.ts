@@ -1,6 +1,7 @@
 import type { ControlFlowGraph } from './cfg.js';
 import type { DataExpr, DataflowDiagnostic, FlowLocation, NodeEffect } from './dataflowTypes.js';
 import type { FunctionSummary } from './summaryTypes.js';
+import { modelSummary, type ModelApplication } from './libraryModels.js';
 
 export interface AbstractValue {
   atoms: string[];
@@ -25,7 +26,8 @@ export interface FlowCall {
   node: number;
   target?: string;
   arguments: AbstractValue[];
-  resolution: 'summary' | 'unknown';
+  resolution: 'summary' | 'model' | 'unknown';
+  model?: ModelApplication;
 }
 export interface DataflowResult {
   owner: string;
@@ -253,14 +255,16 @@ export function analyzeDataflow(graph: ControlFlowGraph, options: { iterationBud
       case 'call': {
         const arguments_ = expr.arguments.map(argument => evaluate(argument, state));
         const summary = applicableSummary(expr, state);
-        if (recording) result.calls.push({ node: currentNode, target: expr.target, arguments: arguments_, resolution: summary ? 'summary' : 'unknown' });
+        const application = modelApplication(expr, state);
+        if (recording) result.calls.push({ node: currentNode, target: expr.target, arguments: arguments_, resolution: summary ? application?.status === 'applied' ? 'model' : 'summary' : 'unknown',
+          ...(application ? { model: application } : {}) });
         if (!summary) {
           const result = unknown([evaluate(expr.callee, state), ...arguments_]);
           // unknown 호출은 closure/heap을 통해 명시적 인자 밖의 입력도 읽을 수 있다.
           return value(result.atoms, [recordDefinition(`call:${expr.target ?? 'unknown'}`, result)], [...result.parameters, ...allParameters]);
         }
         const sources = summary.parameters.filter(p => summary.returnParameters.includes(p.key)).map(p => arguments_[p.index]);
-        const source = value(summary.returnAtoms, sources.flatMap(v => v.definitions), sources.flatMap(v => v.parameters));
+        const source = value(summary.returnAtoms, sources.flatMap(v => v.definitions), [...sources.flatMap(v => v.parameters), ...summary.effects.unknown ? allParameters : []]);
         return value(source.atoms, [recordDefinition(`call:${expr.target}`, source)], source.parameters);
       }
       case 'unary': {
@@ -317,7 +321,23 @@ export function analyzeDataflow(graph: ControlFlowGraph, options: { iterationBud
       }
     }
   }
+  function modelApplication(expr: DataExpr, state: State): ModelApplication | undefined {
+    if (expr.kind !== 'call' || !expr.model) return undefined;
+    const { status, reference, contract } = expr.model;
+    if (status !== 'candidate' || !contract) return { status, ...(reference ? { reference } : {}) };
+    if (expr.argumentsKnown === false || expr.arguments.length !== contract.parameters.length) return { status: 'argument-mapping', reference };
+    const callee = evaluate(expr.callee, state);
+    if (callee.atoms.length !== 1 || callee.atoms[0] !== `function:${expr.target}`) return { status: 'callee-not-proven', reference };
+    const valid = contract.parameters.every((domain, i) => {
+      if (domain === 'any') return true;
+      const atoms = evaluate(expr.arguments[i], state).atoms;
+      return atoms.length > 0 && atoms.every(atom => domain === 'primitive'
+        ? ['string', 'number', 'boolean', 'null', 'undefined', 'unit'].includes(atomType(atom)) : atomType(atom) === domain);
+    });
+    return { status: valid ? 'applied' : 'argument-domain', reference };
+  }
   function applicableSummary(expr: DataExpr, state: State): FunctionSummary | undefined {
+    if (expr.kind === 'call' && expr.model?.contract && modelApplication(expr, state)?.status === 'applied') return modelSummary(expr.target!, expr.model.contract);
     const summary = applicableCallSummary(expr, options.summaries);
     if (!summary || expr.kind !== 'call') return undefined;
     const callee = evaluate(expr.callee, state);
@@ -357,7 +377,7 @@ export function analyzeDataflow(graph: ControlFlowGraph, options: { iterationBud
     const uncertainSetter = effect.writes.some(write => write.target.kind === 'member' && !knownDataProperty(write.target.object, write.target.property, state));
     const summary = applicableSummary(effect.value, input);
     const knownCallEffects = !!summary && (summary.effects.heap || summary.effects.bindings.length > 0 || summary.effects.unknown);
-    const unknownCallEffects = effect.mayCall && !summary || effect.mayMutateLocals;
+    const unknownCallEffects = effect.mayCall && (!summary || summary.effects.unknown) || effect.mayMutateLocals;
     // 동적 연산자와 truth protocol도 사용자 코드를 실행할 수 있다.
     const mayHaveProtocol = (expression: DataExpr) => evaluate(expression, new Map(input)).atoms.some(atom => ['object', 'function'].includes(atomType(atom)));
     const operation = effect.value;
@@ -466,6 +486,7 @@ export function analyzeDataflow(graph: ControlFlowGraph, options: { iterationBud
     const normal = transfer(input, effect);
     let exception: State | undefined;
     for (const edge of outgoing.get(currentNode) ?? []) {
+      if (edge.kind === 'exception' && effect && applicableSummary(effect.value, input)?.mayThrow === false) continue;
       if (!['exception', 'throw'].includes(edge.kind) && effect && applicableSummary(effect.value, input)?.mayReturn === false) continue;
       if ((edge.kind === 'true' || edge.kind === 'false') && effect?.guard && !truth(evaluate(effect.guard, new Map(input))).includes(edge.kind === 'true')) continue;
       let propagated: State | undefined = edge.kind === 'suspend' ? input : edge.kind === 'exception' ? (exception ??= transfer(input, effect, true)) : normal;
@@ -500,6 +521,7 @@ export function analyzeDataflow(graph: ControlFlowGraph, options: { iterationBud
     const effect = facts.effects[node];
     transfer(input, effect);
     for (const edge of outgoing.get(node) ?? []) {
+      if (edge.kind === 'exception' && effect && applicableSummary(effect.value, input)?.mayThrow === false) continue;
       if (edge.to === graph.exceptionExit) {
         const thrown = transfer(input, effect, edge.kind === 'exception');
         result.throws.push({ node, value: thrown.get('pending:exception') ?? unknown() });

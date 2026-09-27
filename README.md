@@ -134,8 +134,8 @@ state values and their alternatives, so large joins cannot hide behind a small
 node count. A repository scan deadline failure rolls back the entire snapshot.
 The API accepts explicit budgets for targeted analysis.
 
-Resource lifecycles, Rust move/borrow ownership, dynamic pattern binding and
-external library models remain pending. `npm run bench:flow` runs the handwritten
+Resource lifecycles, Rust move/borrow ownership and dynamic pattern binding
+remain pending. `npm run bench:flow` runs the handwritten
 development oracle; it does not measure independent real-world accuracy.
 
 ## Function summaries and parameter value impact
@@ -152,7 +152,7 @@ argument dependencies. Parameter dependence alone does not justify substituting
 the argument's concrete value as if the callee were an identity function.
 Unknown effects, closure/global value dependence, returned heap allocations,
 async/generator call envelopes, unsupported formal patterns and receiver/keyword/spread argument mapping remain
-explicit boundaries. Library/resource models are the next implementation stage.
+explicit boundaries. Conditional library contracts are described below; resource models remain pending.
 
 ```bash
 cxt flow transform --json --strict
@@ -178,6 +178,21 @@ exposes their combined `analysisCompleteness` for its strict exit decision.
 `npm run bench:impact` compares the existing store's reverse caller candidates
 against the same handwritten parameter-value labels. The development corpus
 does not establish general change-impact accuracy or independent generalization.
+
+## External library models
+
+DB v8 preserves import module/symbol identities and a versioned model manifest.
+Optional `.cxt-models.json` declares exact target package/runtime versions and
+the `unmodified-external-bindings` assumption. Without those declarations,
+unknown library effects remain unknown. The built-in pack covers 19 Node path,
+Python math and Rust std::cmp contracts with primitive argument guards.
+
+`flow --json` records applied/rejected contracts, pack version/hash, declared target
+version and assumptions; summaries and parameter impact propagate model provenance.
+Direct named imports and proven aliases are supported. Namespace callable proof,
+framework callbacks and resource lifecycles remain incomplete. User JSON packs
+are schema checked before scan; invalid packs preserve the previous snapshot.
+See [configuration, schema and limits](docs/LIBRARY_MODELS.md).
 
 ## Change Preflight (impact / risk / test gap)
 

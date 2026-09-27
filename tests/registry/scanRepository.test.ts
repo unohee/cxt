@@ -38,6 +38,31 @@ afterEach(() => {
 });
 
 describe('scanRepository — AST frontend and snapshot safety', () => {
+  it('persists model provenance and preserves the full snapshot on invalid models or late storage failure', async () => {
+    const config = { schemaVersion: 1, versions: { node: '22.19.0' }, assumptions: ['unmodified-external-bindings'], packs: [] };
+    write('.cxt-models.json', JSON.stringify(config));
+    write('x.ts', "import {basename} from 'node:path';function f(){return basename('x');}");
+    const result = await scanRepository(projectDir, 'models', { parser: 'ast' });
+    expect(result.errors).toEqual([]);
+    expect(result.models.calls).toEqual({ applied: 1 });
+    const store = getRegistryStore(), before = store.getDataflow('models'), manifest = store.getModelManifest('models');
+    expect(manifest).toEqual(result.models.manifest);
+    expect(store.getCallSites('models')[0].external).toEqual({ language: 'typescript', module: 'node:path', symbol: 'basename' });
+    write('.cxt-models.json', JSON.stringify({ ...config, versions: { node: '>=22' } }));
+    await expect(scanRepository(projectDir, 'models', { parser: 'ast' })).rejects.toThrow();
+    expect(store.getDataflow('models')).toEqual(before);
+    expect(store.getModelManifest('models')).toEqual(manifest);
+    write('.cxt-models.json', JSON.stringify({ ...config, versions: { node: '24.0.0' } }));
+    write('x.ts', 'function changed(){return 7;}');
+    vi.spyOn(store, 'replaceRelationsForProject').mockImplementation(() => { throw new Error('model snapshot failure'); });
+    const failed = await scanRepository(projectDir, 'models', { parser: 'ast' });
+    expect(failed.errors).toEqual(['model snapshot failure']);
+    expect(failed.models.calls).toEqual({});
+    expect(store.getModelManifest('models')).toEqual(manifest);
+    expect(store.getDataflow('models')).toEqual(before);
+    expect(store.getEntityByName('changed', 'models')).toBeNull();
+  });
+
   it('preserves the prior snapshot when a dataflow pass exceeds the scan deadline', async () => {
     write('x.ts', 'function f(){return 1;}');
     await scanRepository(projectDir, 'flow-timeout', { parser: 'ast' });

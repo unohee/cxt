@@ -74,7 +74,15 @@ export type ResolutionReason = 'lexical-binding' | 'import' | 'alias' | 'receive
 
 export interface ResolvedCallSite extends CallSite {
   target?: string;
+  external?: ExternalSymbol;
   resolution: 'resolved' | 'unresolved' | 'external';
   reason: ResolutionReason;
   confidence: number;
+}
+
+/** import 경로에서 얻은 식별자이며, 실제 설치/버전 확인을 뜻하지 않는다. */
+export interface ExternalSymbol {
+  language: AstLanguage;
+  module: string;
+  symbol: string;
 }

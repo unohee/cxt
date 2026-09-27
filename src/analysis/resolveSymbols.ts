@@ -1,7 +1,8 @@
 import { posix } from 'node:path';
-import type { CallSite, ResolvedCallSite, ResolutionReason, SymbolEntity, SymbolFacts, SymbolValue } from './symbols.js';
+import type { CallSite, ExternalSymbol, ResolvedCallSite, ResolutionReason, SymbolEntity, SymbolFacts, SymbolValue } from './symbols.js';
 
 type Target =
+  | { kind: 'external'; external: ExternalSymbol; reason: ResolutionReason }
   | { kind: 'entity'; facts: SymbolFacts; entity: SymbolEntity; reason: ResolutionReason }
   | { kind: 'module'; facts: SymbolFacts; scope: number; reason: ResolutionReason }
   | { kind: 'instance'; facts: SymbolFacts; entity: SymbolEntity; reason: ResolutionReason }
@@ -20,10 +21,11 @@ export function resolveSymbols(files: SymbolFacts[]): SymbolResolution {
   for (const facts of files) for (const entity of facts.entities) byEntity.set(entity.qualifiedName, { facts, entity });
 
   function moduleTarget(from: SymbolFacts, specifier: string): Target {
+    const external = (): Target => ({ kind: 'external', external: { language: from.language, module: specifier, symbol: '' }, reason: 'external-module' });
     let paths: string[];
     const directory = posix.dirname(from.filePath);
     if (from.language === 'typescript') {
-      if (!specifier.startsWith('.')) return failure('external-module');
+      if (!specifier.startsWith('.')) return external();
       const base = posix.normalize(posix.join(directory, specifier));
       if (base === '..' || base.startsWith('../')) return failure('missing-module');
       const stem = base.replace(/\.(?:[cm]?js|jsx)$/, '');
@@ -53,8 +55,8 @@ export function resolveSymbols(files: SymbolFacts[]): SymbolResolution {
       const facts = byFile.get(posix.normalize(path));
       if (facts) return { kind: 'module', facts, scope: 0, reason: 'import' };
     }
-    return failure(from.language === 'typescript' || /^[.]/.test(specifier) || /^(crate|self|super)(::|$)/.test(specifier)
-      ? 'missing-module' : 'external-module');
+    return from.language === 'typescript' || /^[.]/.test(specifier) || /^(crate|self|super)(::|$)/.test(specifier)
+      ? failure('missing-module') : external();
   }
 
   function exportTarget(facts: SymbolFacts, name: string, seen: Set<string>, scope = 0): Target {
@@ -66,14 +68,14 @@ export function resolveSymbols(files: SymbolFacts[]): SymbolResolution {
     if (explicit.length) return unique(explicit.map(e => valueTarget(e.value, facts, e.scope, Infinity, next)));
     const candidates = facts.starExports.map(specifier => {
       const target = moduleTarget(facts, specifier);
-      return target.kind === 'module' ? exportTarget(target.facts, name, next, target.scope) : target;
+      return target.kind === 'module' ? exportTarget(target.facts, name, next, target.scope) : target.kind === 'external' ? member(target, name, next) : target;
     }).filter(t => t.kind !== 'failure' || !['missing-export', 'unbound-name', 'alias-cycle'].includes(t.reason));
     return candidates.length ? unique(candidates) : failure('missing-export');
   }
 
   function unique(targets: Target[]): Target {
     const usable = targets.filter(t => t.kind !== 'failure');
-    const keys = new Set(usable.map(t => t.kind === 'module' ? `${t.facts.filePath}#${t.scope}` : t.entity.qualifiedName));
+    const keys = new Set(usable.map(t => t.kind === 'external' ? JSON.stringify(t.external) : t.kind === 'module' ? `${t.facts.filePath}#${t.scope}` : t.entity.qualifiedName));
     if (keys.size > 1) return failure('ambiguous-binding');
     // An unknown candidate can name a different target. Dropping it would turn
     // partial knowledge (for example an external star export) into an exact edge.
@@ -116,7 +118,7 @@ export function resolveSymbols(files: SymbolFacts[]): SymbolResolution {
     if (!onlyScope && facts.language !== 'typescript' && facts.starExports.length) {
       const targets = facts.starExports.map(specifier => {
         const target = moduleTarget(facts, specifier);
-        return target.kind === 'module' ? exportTarget(target.facts, name, seen) : target;
+        return target.kind === 'module' ? exportTarget(target.facts, name, seen) : target.kind === 'external' ? member(target, name, seen) : target;
       });
       return unique(targets);
     }
@@ -125,6 +127,7 @@ export function resolveSymbols(files: SymbolFacts[]): SymbolResolution {
 
   function member(target: Target, name: string, seen: Set<string>): Target {
     if (target.kind === 'failure') return target;
+    if (target.kind === 'external') return { ...target, external: { ...target.external, symbol: [target.external.symbol, name].filter(Boolean).join('.') } };
     if (target.kind === 'module') {
       const result = exportTarget(target.facts, name, seen, target.scope);
       if (result.kind !== 'failure' || !['missing-export', 'unbound-name'].includes(result.reason)) return result;
@@ -175,6 +178,7 @@ export function resolveSymbols(files: SymbolFacts[]): SymbolResolution {
       case 'member': return member(valueTarget(value.object, facts, scope, offset, seen), value.name, seen);
       case 'import': {
         const target = moduleTarget(facts, value.module);
+        if (target.kind === 'external' && value.name !== '*') return member(target, value.name, seen);
         if (target.kind !== 'module' || value.name === '*') return target;
         const result = facts.language === 'typescript' ? exportTarget(target.facts, value.name, seen)
           : member(target, value.name, seen);
@@ -183,7 +187,7 @@ export function resolveSymbols(files: SymbolFacts[]): SymbolResolution {
       }
       case 'instance': {
         const type = valueTarget(value.type, facts, scope, offset, seen);
-        return type.kind === 'entity' ? { ...type, kind: 'instance', reason: 'receiver-type' } : type;
+        return type.kind === 'entity' ? { ...type, kind: 'instance', reason: 'receiver-type' } : type.kind === 'external' ? failure('unknown-receiver') : type;
       }
       case 'invoke': {
         const callee = valueTarget(value.callee, facts, scope, offset, seen);
@@ -200,6 +204,7 @@ export function resolveSymbols(files: SymbolFacts[]): SymbolResolution {
 
   function call(facts: SymbolFacts, site: CallSite): ResolvedCallSite {
     const result = valueTarget(site.callee, facts, site.scope, site.offset, new Set());
+    if (result.kind === 'external') return { ...site, external: result.external, resolution: 'external', reason: 'external-module', confidence: 0 };
     if (result.kind === 'entity' && ['function', 'class'].includes(result.entity.kind)) {
       return { ...site, target: result.entity.qualifiedName, resolution: 'resolved', reason: result.reason,
         confidence: result.reason === 'receiver-type' ? 0.9 : 1 };

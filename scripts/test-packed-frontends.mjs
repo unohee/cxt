@@ -20,6 +20,8 @@ writeFileSync(join(source, 'sample.py'), 'def read(): pass');
 writeFileSync(join(source, 'sample.rs'), 'pub fn read() {}');
 writeFileSync(join(source, 'caller.ts'), "import { read as alias } from './sample.js';\nexport function caller() { alias(); missing(); }\ncaller();");
 writeFileSync(join(source, 'control.ts'), 'export function branch(x) { if(x) return 1; return 2; }\nexport function* partial() { yield task(); }\nexport async function awaited() { await task(); }\nexport function identity(input){return input;}\nexport function through(input){return identity(input);}\nexport function ignored(input){identity(input);return 0;}');
+writeFileSync(join(source, '.cxt-models.json'), JSON.stringify({ schemaVersion: 1, versions: { node: '22.19.0' }, assumptions: ['unmodified-external-bindings'] }));
+writeFileSync(join(source, 'library.ts'), "import {basename} from 'node:path';export function modeled(){return basename('x');}export function rejected(input){return basename(input);}");
 
 for (const mode of ['full', 'missing']) {
   const prefix = join(scratch, 'full');
@@ -64,7 +66,7 @@ for (const mode of ['full', 'missing']) {
   const clean = spawnSync(process.execPath, [probe], { cwd: source, encoding: 'utf8', timeout: 30_000,
     env: { ...process.env, CXT_PARSER: 'auto' } });
   assert.equal(clean.status, 0, clean.stderr + clean.stdout);
-  assert.match(clean.stdout, mode === 'full' ? /ast: 5/ : /lexical: 5/);
+  assert.match(clean.stdout, mode === 'full' ? /ast: 6/ : /lexical: 6/);
   console.log(`${mode}: installed package; 6 grammar probes and real CLI scan passed`);
   if (mode === 'full') {
     const callProbe = join(scratch, 'calls.mjs');
@@ -98,7 +100,7 @@ for (const mode of ['full', 'missing']) {
       if (name === 'awaited') assert.ok(JSON.parse(cfg.stdout).edges.some(edge => edge.kind === 'resume'));
     }
     console.log('full: installed CFG CLI reports complete/partial with strict exit 0/2');
-    for (const [name, status] of [['branch', 0], ['partial', 2]]) {
+    for (const [name, status] of [['branch', 0], ['partial', 2], ['modeled', 0], ['rejected', 2]]) {
       const flowProbe = join(scratch, `flow-${name}.mjs`);
       writeFileSync(flowProbe, `
         import { pathToFileURL } from 'node:url';
@@ -110,9 +112,15 @@ for (const mode of ['full', 'missing']) {
       const flow = spawnSync(process.execPath, [flowProbe], { cwd: source, encoding: 'utf8', timeout: 30_000 });
       assert.equal(flow.status, status, flow.stderr + flow.stdout);
       const parsed = JSON.parse(flow.stdout);
-      assert.equal(parsed.completeness, status ? 'partial' : 'complete');
+      assert.equal(parsed.analysisCompleteness, status ? 'partial' : 'complete');
       assert.ok(Object.keys(parsed.locations).length > 0);
       if (name === 'branch') assert.deepEqual([...new Set(parsed.returns.flatMap(r => r.value.atoms))].sort(), ['number:1', 'number:2']);
+      if (name === 'modeled') {
+        assert.equal(parsed.calls[0].model.status, 'applied');
+        assert.equal(parsed.summary.models[0].pack, 'cxt.stdlib');
+        assert.equal(parsed.modelManifest.versions.node, '22.19.0');
+      }
+      if (name === 'rejected') assert.equal(parsed.calls[0].model.status, 'argument-domain');
     }
     console.log('full: installed dataflow CLI persists values, locations and partial strict exit 2');
     const impactProbe = join(scratch, 'parameter-impact.mjs');

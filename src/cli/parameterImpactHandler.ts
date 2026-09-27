@@ -9,6 +9,7 @@ export function presentParameterImpact(result: ParameterImpact, explain: boolean
   return { ...result, impacted: result.impacted.map(({ path, ...item }) => ({ ...item, ...(explain ? { path } : {}) })) };
 }
 export function printParameterPaths(result: ParameterImpact): void {
+  for (const model of result.models ?? []) console.log(`  [model] ${escapeTerminal(model.pack)}@${escapeTerminal(model.packVersion)}; ${escapeTerminal(model.package)} ${escapeTerminal(model.targetVersion)}; assumption=${model.assumption}`);
   for (const item of result.impacted) for (const step of item.path) {
     console.log(`  ${escapeTerminal(step.callee)} -> ${escapeTerminal(step.caller)} [${step.evidence}] ${escapeTerminal(step.filePath)}:${step.span.line}:${step.span.column}`);
   }

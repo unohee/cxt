@@ -194,6 +194,7 @@ export async function handleImpact(name: string, opts: RelationOptions): Promise
         if (opts.json) console.log(JSON.stringify({ ...presentParameterImpact(result, !!opts.explain), impactCount: result.impacted.length }, null, 2));
         else {
           console.log(`Parameter value impact: ${safe(result.target)} / ${safe(result.parameter)} — ${result.completeness}`);
+          if (result.models?.length) console.log(`  Conditional on ${result.models.length} model contracts and unmodified external bindings; --explain lists versions.`);
           for (const item of result.impacted) console.log(`  ${item.depth}: ${safe(item.owner)}`);
           if (opts.explain) printParameterPaths(result);
         }

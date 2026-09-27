@@ -194,6 +194,7 @@ export async function handleCheck(
       console.log(`  ${'CFGs'.padEnd(16)}${result.controlFlow.total} (${result.controlFlow.complete} complete, ${result.controlFlow.partial} partial)`);
       console.log(`  ${'Dataflow'.padEnd(16)}${result.dataflow.total} (${result.dataflow.complete} complete, ${result.dataflow.partial} partial)`);
       console.log(`  ${'Summaries'.padEnd(16)}${result.summaries.total} (${result.summaries.complete} complete, ${result.summaries.partial} partial)`);
+      console.log(`  ${'Library models'.padEnd(16)}${result.models.calls.applied ?? 0} applied; ${result.models.manifest.configured ? 'project-declared versions/assumptions' : 'no project version/assumption declaration'}`);
       for (const diagnostic of result.dataflow.diagnostics.slice(0, 10)) {
         console.log(`  [${diagnostic.code}] ${escapeTerminal(diagnostic.owner)}: ${escapeTerminal(diagnostic.message)}`);
       }

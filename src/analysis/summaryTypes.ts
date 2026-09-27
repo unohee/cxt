@@ -1,3 +1,5 @@
+import type { ModelReference } from './libraryModels.js';
+
 export interface SummaryParameter {
   key: string;
   name: string;
@@ -18,4 +20,5 @@ export interface FunctionSummary {
   effects: { heap: boolean; bindings: string[]; parameters: string[]; unknown: boolean };
   component: number;
   iterations: number;
+  models?: ModelReference[];
 }

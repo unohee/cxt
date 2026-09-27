@@ -19,13 +19,15 @@ export async function handleFlow(name: string, opts: { project?: string; json?: 
     }
     const locations = Object.fromEntries(graph.nodes.map(node => [node.id, node.span]));
     const analysisCompleteness = !summary || flow.completeness === 'partial' || summary.completeness === 'partial' ? 'partial' : 'complete';
-    if (opts.json) console.log(JSON.stringify({ ...flow, filePath: graph.filePath, locations, summary: summary ?? null, analysisCompleteness }, null, 2));
+    if (opts.json) console.log(JSON.stringify({ ...flow, filePath: graph.filePath, locations, summary: summary ?? null, analysisCompleteness, modelManifest: store.getModelManifest(projectId) }, null, 2));
     else {
       console.log(`${escapeTerminal(flow.owner)} — ${flow.completeness}; ${flow.iterations} transfers; ${flow.definitions.length} definitions / ${flow.uses.length} uses`);
       console.log('  Intraprocedural abstract facts; completeness does not establish program safety.');
       console.log(`  Unknown external/accessor effects: ${flow.unknownEffects.length}`);
       if (summary) console.log(`  Summary: ${summary.completeness}; ${summary.iterations} SCC rounds; ${escapeTerminal(summary.reasons.join(', '))}`);
       else console.log('  Summary: unavailable; rescan source.');
+      for (const model of summary?.models ?? []) console.log(`  Model: ${escapeTerminal(model.pack)}@${escapeTerminal(model.packVersion)} / ${escapeTerminal(model.model)}; ${escapeTerminal(model.package)} ${escapeTerminal(model.targetVersion)}; assumption=${model.assumption}`);
+      for (const call of flow.calls) if (call.model) console.log(`  External call @${locations[call.node].line}: ${call.model.status}`);
       for (const use of flow.uses) {
         const span = locations[use.node];
         console.log(`  ${span.line}:${span.column} ${escapeTerminal(use.variable)} <- ${escapeTerminal(use.definitions.join(', '))}${use.mayBeUninitialized ? ' [may be uninitialized]' : ''}`);

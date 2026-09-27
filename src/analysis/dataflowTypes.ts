@@ -1,3 +1,6 @@
+import type { ExternalSymbol } from './symbols.js';
+import type { ModelSelection } from './libraryModels.js';
+
 export type DataExpr =
   | { kind: 'undefined' | 'null' | 'unit' | 'uninitialized' | 'exception' }
   | { kind: 'literal'; value: string | number | boolean }
@@ -9,7 +12,8 @@ export type DataExpr =
   | { kind: 'member'; object: DataExpr; property: string }
   | { kind: 'unary'; operator: string; value: DataExpr }
   | { kind: 'binary'; operator: string; left: DataExpr; right: DataExpr }
-  | { kind: 'call'; callee: DataExpr; arguments: DataExpr[]; receiver?: DataExpr; argumentsKnown?: boolean; target?: string };
+  | { kind: 'call'; callee: DataExpr; arguments: DataExpr[]; receiver?: DataExpr; argumentsKnown?: boolean; target?: string;
+      external?: ExternalSymbol; model?: ModelSelection };
 
 export type FlowLocation = { kind: 'variable'; key: string } | { kind: 'member'; object: DataExpr; property: string };
 export interface FlowVariable {

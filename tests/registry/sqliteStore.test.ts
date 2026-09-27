@@ -558,7 +558,7 @@ describe('SqliteRegistryStore — v3 migration (INT-3881)', () => {
     expect(cols.has('loc')).toBe(true);
     expect(cols.has('nesting_depth')).toBe(true);
     expect(cols.has('param_count')).toBe(true);
-    expect(raw.pragma('user_version', { simple: true })).toBe(7);
+    expect(raw.pragma('user_version', { simple: true })).toBe(8);
     // CHECK now enforced at the DB layer
     expect(() => raw.prepare(`INSERT INTO code_entities
       (id, project_id, kind, name, qualified_name, file_path, status, created_at, updated_at)
@@ -574,7 +574,7 @@ describe('SqliteRegistryStore — v3 migration (INT-3881)', () => {
     expect(tableSql).toMatch(/CHECK\s*\(risk_level\s+IN/i);
     const indexes = (raw.prepare('PRAGMA index_list(code_entity_relations)').all() as Array<{ name: string }>).map(r => r.name);
     expect(indexes).toContain('idx_cer_target');
-    expect(raw.pragma('user_version', { simple: true })).toBe(7);
+    expect(raw.pragma('user_version', { simple: true })).toBe(8);
     raw.close();
   });
 
@@ -611,7 +611,7 @@ describe('SqliteRegistryStore — v3 migration (INT-3881)', () => {
     store2.close();
 
     const raw = new Database(dbPath);
-    expect(raw.pragma('user_version', { simple: true })).toBe(7);
+    expect(raw.pragma('user_version', { simple: true })).toBe(8);
     expect(raw.pragma('schema_version', { simple: true })).toBe(schemaVerBefore);
     raw.close();
   });
@@ -884,7 +884,7 @@ describe('SqliteRegistryStore — L2 review fixes (F1/F3 regression)', () => {
       "SELECT COUNT(*) as cnt FROM code_entities_fts WHERE code_entities_fts MATCH 'crashFn'"
     ).get() as { cnt: number }).cnt;
     expect(hits).toBe(1);
-    expect(raw2.pragma('user_version', { simple: true })).toBe(7);
+    expect(raw2.pragma('user_version', { simple: true })).toBe(8);
     raw2.close();
   });
 
@@ -982,14 +982,14 @@ describe('SqliteRegistryStore — L2 addendum (R1 micro-window, F5 guard regress
     db.prepare(`INSERT INTO code_entities
       (id, project_id, kind, name, qualified_name, file_path, call_sites_count, created_at, updated_at)
       VALUES ('e-v4', 'p1', 'function', 'futureFn', 'src/f4.ts::futureFn', 'src/f4.ts', 42, datetime('now'), datetime('now'))`).run();
-    db.pragma('user_version = 8');
+    db.pragma('user_version = 9');
     db.close();
 
     const opened = new SqliteRegistryStore(p);
     opened.close();
 
     const raw = new Database(p);
-    expect(raw.pragma('user_version', { simple: true })).toBe(8); // no down-stamp
+    expect(raw.pragma('user_version', { simple: true })).toBe(9); // no down-stamp
     expect(raw.prepare("SELECT name FROM sqlite_master WHERE name = 'code_dataflow'").get()).toBeUndefined();
     const row = raw.prepare("SELECT call_sites_count FROM code_entities WHERE id = 'e-v4'").get() as { call_sites_count: number };
     expect(row.call_sites_count).toBe(42); // future data preserved — rebuild did not fire

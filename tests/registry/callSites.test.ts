@@ -90,7 +90,7 @@ describe('source-located call facts', () => {
       expect(reopened.getCallSites('p1')).toEqual([call()]);
       const check = new Database(path, { readonly: true });
       try {
-        expect(check.pragma('user_version', { simple: true })).toBe(7);
+        expect(check.pragma('user_version', { simple: true })).toBe(8);
         expect(check.prepare('SELECT rowid, id FROM code_entities').get()).toEqual(row);
         expect(check.pragma('foreign_key_check')).toEqual([]);
       } finally { check.close(); }

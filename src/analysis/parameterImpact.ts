@@ -1,6 +1,7 @@
 import type { ControlFlowGraph, SourceSpan } from './cfg.js';
 import type { DataflowResult } from './dataflow.js';
 import type { FunctionSummary } from './summaryTypes.js';
+import type { ModelReference } from './libraryModels.js';
 
 export interface ImpactStep {
   callee: string;
@@ -21,6 +22,7 @@ export interface ParameterImpact {
   impacted: Array<{ owner: string; filePath: string; depth: number; path: ImpactStep[] }>;
   excluded: Array<{ owner: string; reason: string }>;
   unresolvedCalls: number;
+  models?: ModelReference[];
 }
 
 /** 현재 parameter의 명시적 value dependence가 caller의 observable output에 닿는 경로. */
@@ -33,8 +35,12 @@ export function parameterImpact(graphs: ControlFlowGraph[], flows: DataflowResul
   if (selected.length !== 1) throw new Error(`parameter_not_found: ${parameter}; available: ${seed.parameters.map(p => p.name).join(', ')}`);
   const key = selected[0].key;
   const unresolved = new Set(graphs.flatMap(graph => Object.entries(graph.dataflow?.effects ?? {}).flatMap(([id, effect]) =>
-    effect.value.kind === 'call' && !effect.value.target ? [`${graph.owner}:${graph.nodes[Number(id)].span.startOffset}:${graph.nodes[Number(id)].span.endOffset}`] : [])));
+    effect.value.kind === 'call' && (!effect.value.target || effect.value.external && byFlow.get(graph.owner)?.calls.find(call => call.node === Number(id))?.model?.status !== 'applied')
+      ? [`${graph.owner}:${graph.nodes[Number(id)].span.startOffset}:${graph.nodes[Number(id)].span.endOffset}`] : [])));
   const result: ParameterImpact = { mode: 'parameter-value-impact', target: owner, parameter: selected[0].name, maxDepth, completeness: 'complete', boundaries: [], impacted: [], excluded: [], unresolvedCalls: unresolved.size };
+  // 결과에서 제외한 caller도 모델 가정에 의존할 수 있어 전체 snapshot 계약을 표시한다.
+  const references = summaries.flatMap(summary => summary.models ?? []);
+  if (references.length) result.models = [...new Map(references.map(reference => [JSON.stringify(reference), reference])).values()];
   const boundary = (current: string, reason: string) => {
     result.completeness = 'partial';
     if (!result.boundaries.some(b => b.owner === current && b.reason === reason)) result.boundaries.push({ owner: current, reason });
