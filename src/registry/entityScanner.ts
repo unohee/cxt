@@ -18,6 +18,8 @@ import { entityQualifiedName, FrontendError, parserMode } from '../frontend/type
 import type { FrontendDiagnostic, FrontendResult, ParserMode } from '../frontend/types.js';
 import type { SymbolFacts } from '../analysis/symbols.js';
 import type { CfgDiagnostic, ControlFlowGraph } from '../analysis/cfg.js';
+import { analyzeDataflow } from '../analysis/dataflow.js';
+import type { DataflowDiagnostic } from '../analysis/dataflowTypes.js';
 import { resolveSymbols } from '../analysis/resolveSymbols.js';
 
 // ============ 상수 ============
@@ -996,6 +998,8 @@ export interface ScanResult {
   callSites: { total: number; resolved: number; unresolved: number; external: number };
   controlFlow: { total: number; complete: number; partial: number; nodes: number; edges: number;
     diagnostics: Array<CfgDiagnostic & { filePath: string; owner: string }> };
+  dataflow: { total: number; complete: number; partial: number; iterations: number;
+    diagnostics: Array<DataflowDiagnostic & { filePath: string; owner: string }> };
 }
 
 // ============ 메인 스캔 함수 ============
@@ -1030,6 +1034,7 @@ export async function scanRepository(
   const callSites = { total: 0, resolved: 0, unresolved: 0, external: 0 };
   const cfgs: ControlFlowGraph[] = [];
   const controlFlow: ScanResult['controlFlow'] = { total: 0, complete: 0, partial: 0, nodes: 0, edges: 0, diagnostics: [] };
+  const dataflow: ScanResult['dataflow'] = { total: 0, complete: 0, partial: 0, iterations: 0, diagnostics: [] };
   let scannedFiles = 0;
   let completeScan = true;
 
@@ -1135,6 +1140,7 @@ export async function scanRepository(
       diagnostics,
       callSites,
       controlFlow,
+      dataflow,
     };
   }
 
@@ -1253,6 +1259,15 @@ export async function scanRepository(
     const semantic = resolveSymbols(symbolFiles);
     store.replaceCallSitesForProject(projectId, semantic.calls);
     store.replaceControlFlowForProject(projectId, cfgs);
+    const flowResults = cfgs.map(graph => {
+      if (Date.now() - startTime > timeoutMs) throw new Error(`scan timed out during dataflow at ${graph.owner}`);
+      const flow = analyzeDataflow(graph);
+      dataflow.total++; dataflow[flow.completeness]++; dataflow.iterations += flow.iterations;
+      dataflow.diagnostics.push(...flow.diagnostics.map(d => ({ ...d, filePath: graph.filePath, owner: graph.owner })));
+      return flow;
+    });
+    if (Date.now() - startTime > timeoutMs) throw new Error('scan timed out during dataflow');
+    store.replaceDataflowForProject(projectId, flowResults);
     for (const graph of cfgs) {
       controlFlow.total++; controlFlow[graph.completeness]++;
       controlFlow.nodes += graph.nodes.length; controlFlow.edges += graph.edges.length;
@@ -1278,6 +1293,8 @@ export async function scanRepository(
     callSites.total = callSites.resolved = callSites.unresolved = callSites.external = 0;
     controlFlow.total = controlFlow.complete = controlFlow.partial = controlFlow.nodes = controlFlow.edges = 0;
     controlFlow.diagnostics = [];
+    dataflow.total = dataflow.complete = dataflow.partial = dataflow.iterations = 0;
+    dataflow.diagnostics = [];
     completeScan = false;
   }
   if (verbose) {
@@ -1300,6 +1317,7 @@ export async function scanRepository(
     diagnostics,
     callSites,
     controlFlow,
+    dataflow,
   };
 }
 

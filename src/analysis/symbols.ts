@@ -14,6 +14,8 @@ export interface SymbolScope {
   id: number;
   parent: number | null;
   kind: 'module' | 'class' | 'function' | 'block';
+  startOffset: number;
+  endOffset: number;
   owner?: string;
   receiver?: SymbolValue;
   redirects?: Record<string, number>;
@@ -25,6 +27,7 @@ export interface SymbolBinding {
   value: SymbolValue;
   offset: number;
   hoisted: boolean;
+  isParameter?: boolean;
 }
 
 export interface SymbolEntity {

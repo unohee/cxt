@@ -98,6 +98,23 @@ for (const mode of ['full', 'missing']) {
       if (name === 'awaited') assert.ok(JSON.parse(cfg.stdout).edges.some(edge => edge.kind === 'resume'));
     }
     console.log('full: installed CFG CLI reports complete/partial with strict exit 0/2');
+    for (const [name, status] of [['branch', 0], ['partial', 2]]) {
+      const flowProbe = join(scratch, `flow-${name}.mjs`);
+      writeFileSync(flowProbe, `
+        import { pathToFileURL } from 'node:url';
+        const api = await import(pathToFileURL(${JSON.stringify(join(installed, 'dist', 'index.js'))}));
+        api.getRegistryStore(${JSON.stringify(join(scratch, 'full.db'))});
+        process.argv = [process.execPath, ${JSON.stringify(join(installed, 'dist', 'cli.js'))}, 'flow', ${JSON.stringify(name)}, '--json', '--strict'];
+        await import(pathToFileURL(${JSON.stringify(join(installed, 'dist', 'cli.js'))}));
+      `);
+      const flow = spawnSync(process.execPath, [flowProbe], { cwd: source, encoding: 'utf8', timeout: 30_000 });
+      assert.equal(flow.status, status, flow.stderr + flow.stdout);
+      const parsed = JSON.parse(flow.stdout);
+      assert.equal(parsed.completeness, status ? 'partial' : 'complete');
+      assert.ok(Object.keys(parsed.locations).length > 0);
+      if (name === 'branch') assert.deepEqual([...new Set(parsed.returns.flatMap(r => r.value.atoms))].sort(), ['number:1', 'number:2']);
+    }
+    console.log('full: installed dataflow CLI persists values, locations and partial strict exit 2');
     writeFileSync(join(source, 'sample.ts'), 'export function broken(');
     const invalid = spawnSync(process.execPath, [probe], { cwd: source, encoding: 'utf8', timeout: 30_000,
       env: { ...process.env, CXT_PARSER: 'auto' } });

@@ -18,6 +18,7 @@ import type {
 } from './schema.js';
 import type { ResolvedCallSite, SymbolValue } from '../analysis/symbols.js';
 import type { ControlFlowGraph } from '../analysis/cfg.js';
+import type { DataflowResult } from '../analysis/dataflow.js';
 
 function boundedPagination(value: number | undefined, fallback: number, min: number, max: number, name: string): number {
   const resolved = value ?? fallback;
@@ -192,7 +193,7 @@ export class SqliteRegistryStore {
   //           omitted — P1 (tree-sitter frontend) is expected to extend
   //           EntityKind and pinning it now would force another rebuild.
   //           relations' relation_type CHECK moves to P2 v4 (code_call_sites).
-  private static readonly SCHEMA_VERSION = 5;
+  private static readonly SCHEMA_VERSION = 6;
 
   // The last version in which the FTS index schema (set of indexed columns)
   // changed. Decoupled from the user_version bump: through v2 "version went up"
@@ -659,6 +660,13 @@ export class SqliteRegistryStore {
           graph_json TEXT NOT NULL CHECK (json_valid(graph_json)),
           PRIMARY KEY (project_id, owner_id)
         );
+        CREATE TABLE IF NOT EXISTS code_dataflow (
+          project_id TEXT NOT NULL,
+          owner_id TEXT NOT NULL REFERENCES code_entities(id) ON DELETE CASCADE,
+          completeness TEXT NOT NULL CHECK (completeness IN ('complete', 'partial')),
+          result_json TEXT NOT NULL CHECK (json_valid(result_json)),
+          PRIMARY KEY (project_id, owner_id)
+        );
       `)).immediate();
     }
 
@@ -806,6 +814,29 @@ export class SqliteRegistryStore {
       ${ownerId ? 'AND owner_id = ?' : ''} ORDER BY owner_id`)
       .all(...(ownerId ? [projectId, ownerId] : [projectId])) as Array<{ graph_json: string }>;
     return rows.map(row => JSON.parse(row.graph_json) as ControlFlowGraph);
+  }
+
+  replaceDataflowForProject(projectId: string, results: DataflowResult[]): number {
+    const entities = this.db.prepare('SELECT id, qualified_name FROM code_entities WHERE project_id = ?')
+      .all(projectId) as Array<{ id: string; qualified_name: string }>;
+    const ids = new Map(entities.map(entity => [entity.qualified_name, entity.id]));
+    const insert = this.db.prepare('INSERT INTO code_dataflow(project_id, owner_id, completeness, result_json) VALUES (?, ?, ?, ?)');
+    return this.db.transaction(() => {
+      this.db.prepare('DELETE FROM code_dataflow WHERE project_id = ?').run(projectId);
+      for (const result of results) {
+        const ownerId = ids.get(result.owner);
+        if (!ownerId) throw new Error(`Unregistered dataflow owner: ${result.owner}`);
+        insert.run(projectId, ownerId, result.completeness, JSON.stringify(result));
+      }
+      return results.length;
+    })();
+  }
+
+  getDataflow(projectId: string, ownerId?: string): DataflowResult[] {
+    const rows = this.db.prepare(`SELECT result_json FROM code_dataflow WHERE project_id = ?
+      ${ownerId ? 'AND owner_id = ?' : ''} ORDER BY owner_id`)
+      .all(...(ownerId ? [projectId, ownerId] : [projectId])) as Array<{ result_json: string }>;
+    return rows.map(row => JSON.parse(row.result_json) as DataflowResult);
   }
 
   registerEntity(input: RegisterEntityInput): CodeEntity {

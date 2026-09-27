@@ -58,3 +58,11 @@ Zod로 언어/종류/범위/필수 필드를 검증하고, 중복 fixture ID 및
 `structuralComplexity`는 명시적 분기 지점 + 1이다. if/elif, 조건이 있는 loop, switch의 비-default case, match의 비-wildcard arm, guard/catch, 단락 평가, 기본 매개변수, Rust `?`, with 예외 억제 분기를 센다. 암묵적 예외 edge와 finally 경로 복제는 중복 계산하지 않는다. 전체 예외 그래프의 E−N+2 수치와는 구분한다.
 
 게이트: 그래프 생성률 ≥0.98, 구조 복잡도 정확도 ≥0.95, completeness 및 경로 정답 100%. `cfg-baseline.json`: 언어별 10/10 생성, 그중 complete 9/partial 1, 총 경로 54/54, 복잡도 30/30. **생성률은 완전 지원률이 아니다.** 누락 그래프·틀린 복잡도·조작된 completeness·return 뒤 우회 edge·없는 노드 mutation을 모두 실패시킨다. basic block은 모든 노드를 정확히 한 번 포함하고 블록 사이 edge를 보존하는지도 검사한다. 실제 언어/프로젝트 일반화와 path feasibility는 독립 후속 평가 대상이다.
+
+## 함수 내부 dataflow 정답과 게이트 — AGT-4567
+
+`corpus/dataflow.json`: 언어별 9개, 총 27개 수기 fixture. `parameters`는 가능한 정상 반환값의 명시적 입력 의존성, `reads`는 `[useLine, useColumn, variableName, definitionLines, mayBeUninitialized]`이다. `atoms`가 있으면 추상 반환값 집합도 정확히 비교한다. source 줄/열은 1부터 시작한다. 조건의 control dependence는 이 value-dependence 라벨에 포함하지 않는다. Rust uninitialized 예제는 컴파일 가능한 정상 프로그램을 주장하는 대신 불완전 소스 분석을 검사한다.
+
+정의/사용 라벨은 지정한 read 위치에서 definition source line까지의 집합이다. 동일 줄의 여러 정의를 구분하는 정답 코퍼스는 아니다. 반환 parameter relation과 합쳐 언어별 precision/recall을 측정한다. 미지원 예제를 각 언어에 하나 포함한다. `partial`은 라벨 정확도 통과와 별도로 남는다.
+
+게이트는 라벨 precision/recall=1, 명시된 atom·uninitialized·completeness 정답 일치다. 2026-09-27 개발 기준선 `dataflow-baseline.json`은 관계 30/30, read 상태 21/21, completeness 27/27이다. 임의의 결과 부재, 정의 누락, 거짓 parameter dependence, completeness 조작, assignment effect 삭제, solver 예산 소진 mutation은 실패해야 한다. 이 점수는 선택한 개발 라벨의 일치도이며 실제 프로젝트 정확도·CodeQL 동등성·resource/ownership 분석 완료를 의미하지 않는다.

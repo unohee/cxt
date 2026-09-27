@@ -32,6 +32,9 @@ export type { SymbolResolution } from './analysis/resolveSymbols.js';
 export type { SymbolFacts, SymbolValue, CallSite, ResolvedCallSite, ResolutionReason } from './analysis/symbols.js';
 export { reachableNodes, buildBasicBlocks } from './analysis/cfg.js';
 export type { ControlFlowGraph, CfgNode, CfgEdge, CfgDiagnostic, SourceSpan, BasicBlock } from './analysis/cfg.js';
+export { analyzeDataflow } from './analysis/dataflow.js';
+export type { DataflowResult, AbstractValue, FlowDefinition, FlowUse } from './analysis/dataflow.js';
+export type { DataflowFacts, DataflowDiagnostic, DataExpr, NodeEffect, FlowVariable, FlowLocation } from './analysis/dataflowTypes.js';
 
 // BS Detector
 export { scanRepository as scanBs, scanFile as scanFileForBs, scanFileContent, aggregateResults } from './registry/bsDetector.js';

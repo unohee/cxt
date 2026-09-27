@@ -347,6 +347,17 @@ program
     await handleCfg(name, opts);
   });
 
+program
+  .command('flow <name>')
+  .description(h('Show stored intraprocedural dataflow facts', '저장된 함수 내부 데이터 흐름 조회'))
+  .option('--project <id>', h('Project ID override', '프로젝트 ID 재정의'))
+  .option('--json', h('JSON output', 'JSON 출력'))
+  .option('--strict', h('Exit 2 for partial analysis', '부분 분석이면 exit 2'))
+  .action(async (name, opts) => {
+    const { handleFlow } = await import('./cli/flowHandler.js');
+    await handleFlow(name, opts);
+  });
+
 // ---- impact (transitive 역방향) ----
 program
   .command('impact <name>')

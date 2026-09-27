@@ -34,6 +34,7 @@ cxt who-calls <name>     # entities that call/extend/implement <name>
 cxt calls <name>         # entities that <name> calls/extends/implements
 cxt impact <name>        # transitive callers — everything affected if <name> changes
 cxt cfg <name> --json    # stored function control-flow graph and diagnostics
+cxt flow <name> --json --strict # stored def-use/value/alias facts; partial analysis exits 2
 cxt impact <name> --depth 3   # limit BFS depth (default: 5)
 cxt who-calls <name> --json   # machine-readable output (also: calls/impact)
 cxt preflight <name> --json   # candidate files + risk/test/warning review checklist
@@ -101,13 +102,40 @@ Missing extraction queries and invalid queries also fail the scan.
 The public `extractFile` API returns the selected engine, declarations,
 references, symbol facts and diagnostics. `extractEntities` retains its legacy lexical API.
 AST call resolution follows project-local bindings, imports, aliases and simple receiver types.
-BS rules remain heuristic; dataflow, semantic
+BS rules remain heuristic; interprocedural summaries, semantic
 library models and SARIF are tracked in the
 [ten-part implementation roadmap](docs/STATIC_ANALYSIS_ROADMAP.md).
 
 Run `npm run bench:accuracy` and `npm run bench:calls` for the handwritten declaration and call corpora, and
 `npm run test:package` for a fresh package install, missing-native simulation and CLI
 checks. These tests do not establish CodeQL equivalence.
+
+## Intraprocedural dataflow
+
+An AST scan also runs a finite worklist solver over each function CFG. The v6
+registry stores results in `code_dataflow` in the same transaction as entities,
+calls, CFGs and relations. `flow <name> --json` includes source locations,
+reaching definitions, uses, possible uninitialized reads, abstract return values,
+parameter dependencies and unknown effect locations. `--strict` exits 2 for
+partial analysis; missing results exit 1 and require a rescan.
+
+Assignments kill previous definitions; merges retain alternatives. Allocation
+sites identify aliases and known field writes. Branch guards refine null and
+primitive alternatives, and pending returns follow finally overrides. Unknown
+calls, accessors, dynamic operators and await invalidate affected abstract state.
+Direct JavaScript eval also invalidates local bindings. These are conservative
+intraprocedural facts, not runtime execution or proof that a function is safe.
+
+Default limits: `max(1024, CFG nodes * 64)` transfers, 100,000 stored cells and
+250,000 abstract value work units. Exceeding a limit or encountering unsupported
+control/effects produces explicit partial diagnostics. The work limit counts
+state values and their alternatives, so large joins cannot hide behind a small
+node count. A repository scan deadline failure rolls back the entire snapshot.
+The API accepts explicit budgets for targeted analysis.
+
+Resource lifecycles, Rust move/borrow ownership, dynamic pattern binding and
+interprocedural models remain pending. `npm run bench:flow` runs the handwritten
+development oracle; it does not measure independent real-world accuracy.
 
 ## Change Preflight (impact / risk / test gap)
 

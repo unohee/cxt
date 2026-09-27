@@ -7,6 +7,7 @@ import { entityQualifiedName, FrontendError } from './types.js';
 import type { AstLanguage, FrontendResult, LanguageFrontend } from './types.js';
 import { extractSymbolFacts } from './symbolFacts.js';
 import { buildControlFlow } from './controlFlow.js';
+import { attachDataflowFacts } from './dataflowFacts.js';
 
 type Node = Parser.SyntaxNode;
 const require = createRequire(import.meta.url);
@@ -225,5 +226,6 @@ function extract(parser: Parser, query: Parser.Query, language: AstLanguage, con
     found.map((declaration, index) => ({ node: declaration.node, callable: declaration.callable, entity: entities[index] })));
   const controlFlow = found.flatMap((declaration, index) => declaration.kind === 'function' && field(declaration.callable, 'body')
     ? [buildControlFlow(declaration.callable, filePath, entityQualifiedName(entities[index]), language)] : []);
+  attachDataflowFacts(tree.rootNode, symbols, controlFlow);
   return { engine: 'ast', entities, references: refs, diagnostics: [], symbols, controlFlow };
 }

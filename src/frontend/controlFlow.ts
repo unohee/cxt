@@ -48,6 +48,21 @@ export function buildControlFlow(callable: Node, filePath: string, owner: string
     const id = emit(kind, node, incoming, text);
     return { normal: [port(id)], abrupt: mayThrow ? [{ kind: 'throw', port: port(id, 'exception') }] : [] };
   }
+  function selectedValue(node: Node, value: Node | null, incoming: Port[], role: string): Port[] {
+    const id = emit('operation', node, incoming, role);
+    if (value) graph.nodes[id].valueSource = span(value);
+    else graph.nodes[id].constantValue = 'unit';
+    return [port(id)];
+  }
+  function tailValue(node: Node | null): Node | null {
+    if (!node) return null;
+    if (node.type === 'else_clause') return tailValue(node.namedChild(0));
+    if (node.type === 'block') {
+      const last = node.namedChildren.at(-1);
+      return last && !last.type.endsWith('_statement') && !last.type.endsWith('_declaration') ? last : null;
+    }
+    return node;
+  }
   function sequence(nodes: Node[], incoming: Port[]): Flow {
     let flow = plain(incoming);
     for (const node of nodes) {
@@ -82,7 +97,12 @@ export function buildControlFlow(callable: Node, filePath: string, owner: string
     if (declarations.has(node.type)) return operation(node, incoming);
     if (language === 'typescript' && chainTypes.has(node.type)) {
       const result = chain(node, incoming);
-      return { normal: [...result.normal, ...result.skipped], abrupt: result.abrupt };
+      let skipped: Port[] = [];
+      if (result.skipped.length) {
+        const id = emit('operation', node, result.skipped, 'optional chain undefined');
+        graph.nodes[id].constantValue = 'undefined'; skipped = [port(id)];
+      }
+      return { normal: [...result.normal, ...skipped], abrupt: result.abrupt };
     }
     if (['if_expression', 'match_expression', 'block', 'unsafe_block', 'loop_expression', 'while_expression', 'for_expression',
       'return_expression', 'break_expression', 'continue_expression'].includes(node.type)) return statement(node, incoming);
@@ -99,7 +119,8 @@ export function buildControlFlow(callable: Node, filePath: string, owner: string
       const enterRight = logicalAssignment !== '||=';
       const right = expression(field(node, 'right'), [port(test, enterRight ? 'true' : 'false')]);
       const assigned = operation(node, right.normal);
-      return { normal: [...assigned.normal, port(test, enterRight ? 'false' : 'true')], abrupt: [...left.abrupt, ...right.abrupt] };
+      const retained = selectedValue(node, field(node, 'left'), [port(test, enterRight ? 'false' : 'true')], 'logical assignment retains left');
+      return { normal: [...assigned.normal, ...retained], abrupt: [...left.abrupt, ...right.abrupt] };
     }
     if (['binary_expression', 'boolean_operator'].includes(node.type) && operator && ['&&', '||', '??', 'and', 'or'].includes(operator)) {
       const left = expression(field(node, 'left'), incoming);
@@ -107,7 +128,9 @@ export function buildControlFlow(callable: Node, filePath: string, owner: string
       decision(node);
       const enterRight = operator === '&&' || operator === 'and' || operator === '??';
       const right = expression(field(node, 'right'), [port(test, enterRight ? 'true' : 'false')]);
-      return { normal: [...right.normal, port(test, enterRight ? 'false' : 'true')], abrupt: [...left.abrupt, ...right.abrupt] };
+      const selectedRight = selectedValue(node, field(node, 'right'), right.normal, 'short circuit right');
+      const retained = selectedValue(node, field(node, 'left'), [port(test, enterRight ? 'false' : 'true')], 'short circuit left');
+      return { normal: [...selectedRight, ...retained], abrupt: [...left.abrupt, ...right.abrupt] };
     }
     if (node.type === 'try_expression' && language === 'rust') {
       const value = expression(node.namedChild(0), incoming);
@@ -155,6 +178,10 @@ export function buildControlFlow(callable: Node, filePath: string, owner: string
     decision(node);
     const consequent = yes ? statement(yes, [port(test, 'true')]) : plain([port(test, 'true')]);
     const alternative = no ? statement(no, [port(test, 'false')]) : plain([port(test, 'false')]);
+    if (['ternary_expression', 'conditional_expression', 'if_expression'].includes(node.type)) {
+      consequent.normal = selectedValue(node, tailValue(yes), consequent.normal, 'conditional consequence value');
+      alternative.normal = selectedValue(node, tailValue(no), alternative.normal, 'conditional alternative value');
+    }
     return { normal: [...consequent.normal, ...alternative.normal], abrupt: [...value.abrupt, ...consequent.abrupt, ...alternative.abrupt] };
   }
   function alternatives(nodes: Node[], incoming: Port[]): Flow {
@@ -188,7 +215,12 @@ export function buildControlFlow(callable: Node, filePath: string, owner: string
     const value = isForEach ? operation(node, conditionIncoming, true, 'operation', 'iterator next') : expression(condition, conditionIncoming);
     const test = emit('condition', condition ?? node, value.normal, unconditional ? 'true' : isForEach ? 'iterator has next' : condition?.text);
     if (!unconditional) decision(node);
-    const body = statement(field(node, 'body')!, isDo ? [port(header)] : [port(test, 'true')]);
+    let bodyIncoming = isDo ? [port(header)] : [port(test, 'true')];
+    if (isForEach) {
+      const binding = emit('operation', node, bodyIncoming, 'iteration binding');
+      graph.nodes[binding].binding = 'iteration'; bodyIncoming = [port(binding)];
+    }
+    const body = statement(field(node, 'body')!, bodyIncoming);
     const continuePorts = body.abrupt.filter(c => consumes(c, 'continue', label)).map(c => c.port);
     const increment = field(node, 'increment');
     const update = expression(increment, [...body.normal, ...continuePorts]);
@@ -235,7 +267,15 @@ export function buildControlFlow(callable: Node, filePath: string, owner: string
       const checked = expression(type, pending);
       result.abrupt.push(...checked.abrupt);
       const dispatch = emit('condition', handler, checked.normal, type ? `exception matches ${type.text}` : 'catch all');
-      const caught = statement(field(handler, 'body') ?? handler.namedChildren.find(n => n.type === 'block')!, [port(dispatch, 'true')]);
+      const bind = emit('operation', handler, [port(dispatch, 'true')], 'exception binding');
+      graph.nodes[bind].binding = 'exception';
+      let caught = statement(field(handler, 'body') ?? handler.namedChildren.find(n => n.type === 'block')!, [port(bind)]);
+      if (language === 'python' && type?.type === 'as_pattern') {
+        caught = applyFinally(handler, caught, sources => {
+          const clear = operation(handler, sources, false, 'operation', 'clear exception binding');
+          graph.nodes[clear.normal[0].id].binding = 'exception-clear'; return clear;
+        });
+      }
       result.normal.push(...caught.normal); result.abrupt.push(...caught.abrupt);
       pending = type ? [port(dispatch, 'false')] : [];
     }
@@ -377,6 +417,10 @@ export function buildControlFlow(callable: Node, filePath: string, owner: string
     emit('entry', callable, [], 'entry'); emit('exit', callable, [], 'normal exit'); emit('exception-exit', callable, [], 'exception exit');
     const body = field(callable, 'body');
     if (!body) diagnostic(callable, 'Function body is absent');
+    if (body && ((callable.type === 'arrow_function' && body.type !== 'statement_block') || callable.type === 'lambda' || language === 'rust')) {
+      const implicit = tailValue(body);
+      if (implicit) graph.implicitReturnSource = span(implicit);
+    }
     let start = plain([port(graph.entry)]);
     if (language === 'typescript') for (const parameter of field(callable, 'parameters')?.namedChildren ?? []) {
       const value = field(parameter, 'value');
@@ -384,7 +428,9 @@ export function buildControlFlow(callable: Node, filePath: string, owner: string
       const test = emit('condition', parameter, start.normal, 'parameter is undefined');
       decision(parameter);
       const initialized = expression(value, [port(test, 'true')]);
-      start = { normal: [port(test, 'false'), ...initialized.normal], abrupt: [...start.abrupt, ...initialized.abrupt] };
+      const bound = emit('operation', parameter, initialized.normal, 'default parameter binding');
+      graph.nodes[bound].binding = 'parameter-default'; graph.nodes[bound].valueSource = span(value);
+      start = { normal: [port(test, 'false'), port(bound)], abrupt: [...start.abrupt, ...initialized.abrupt] };
     }
     const bodyFlow = body ? statement(body, start.normal) : plain([]);
     const flow: Flow = { normal: bodyFlow.normal, abrupt: [...start.abrupt, ...bodyFlow.abrupt] };

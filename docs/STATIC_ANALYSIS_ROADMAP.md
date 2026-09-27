@@ -136,3 +136,12 @@ CFG 위 worklist fixed-point solver, reaching definitions/def-use, 값 상태 �
 - CFG 코퍼스는 30개/경로 54개로 확장했다. 언어별 complete 9/partial 1이며 모든 정답과 일치한다. 기존 unsupported-await negative는 지원 완료 후 yield로 교체하고 세 언어의 await positive를 별도로 추가했다.
 - 검증: lint/build, 전체 테스트 500개, CFG gate, 실제 패키지 설치 CLI의 await resume edge·strict 0/2 확인. 최신 소스 snapshot `/tmp/cxt-await-verified-0WfxF9`: 36 files / 965 entities / errors 0. CFG 722개 중 complete 721 / partial 1(yield), 47,938 nodes / 59,701 edges / 16,852 blocks. 46개 CFG가 suspension을 포함한다. audit critical 0 / warning 22 / minor 13 / errors 0 / pass true.
 - 3 구현을 In Review로 옮기고 4 함수 내부 dataflow를 시작한다. yield/async iteration/macros/exception groups/독립 평가와 전체 10개 목표는 미완료다.
+
+## 실행 기록 — 2026-09-27, 4차 핵심 구현
+
+- 4: AST effect → finite worklist → v6 `code_dataflow` → `flow --json --strict` 연결. 정의/사용·재할당 kill·merge·primitive/null/uninitialized·allocation alias·field 갱신·parameter dependence·finally return override·await를 추적한다. 생존 변수/temporary만 유지하며 종료 노드는 도달 여부만 합친다.
+- 10: dataflow 수기 개발 코퍼스 27개(언어별 9), 명시적 관계 30/30·read 상태 21/21·completeness 27/27 일치. 잘못된 정의/거짓 의존성/assignment 제거/예산 소진 mutation 검사를 추가했다. 독립 실세계 정답률은 아니다.
+- 검증: 전체 테스트 565개, lint/build, 선언·호출·CFG·flow 게이트, benchmark harness 6개, 실제 tarball 설치의 flow 값/위치/strict exit 0/2 통과. v5→v6 migration/FTS 보존 및 분석 timeout·저장 실패 시 이전 전체 snapshot rollback을 확인했다. 패키지 증거 `/tmp/cxt-packed-frontends-x654KQ`.
+- 최신 소스 격리 snapshot `/tmp/cxt-flow-verified-I5ohO2`: 41 files / 1,155 entities / scan errors 0 / 45.4초. 함수 flow 893개 중 complete 796 / partial 97. 진단은 unsupported-effect 141, work-budget 42, partial-cfg 1건이며 하나의 함수에 겹칠 수 있다. unknown effect 위치 11,534개. 프로세스 max RSS 약 738 MiB. audit critical 0 / warning 26 / minor 16 / errors 0 / pass true.
+- 실패 근거도 보존: `/tmp/cxt-flow-profile-FdhcTL`은 제한 전 source profile 도중 180초에 종료됐고, `/tmp/cxt-flow-verified-mQbLAl`은 최신 전체 scan이 60초를 넘겨 rollback했다. 이후 종료 노드에서 쓰지 않는 heap 합류를 제거하고 같은 scan 설정으로 성공했다. 예산은 늘리지 않았다.
+- 현재 분석은 transfer/state/work 예산 초과를 partial로 표시한다. partial 비율과 unknown effects는 coverage gap이다. 정상 수렴을 프로그램 안전성으로 해석하지 않는다. 정확한 resource lifecycle·Rust move/borrow·동적 pattern/context-manager/rethrow 모델과 독립 평가가 남아 AGT-4567은 In Progress다. 다음은 AGT-4568 함수 간 요약이며 resource/ownership은 AGT-4569 의미 모델과 함께 마무리한다.

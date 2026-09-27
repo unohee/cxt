@@ -1,4 +1,5 @@
 import type { AstLanguage } from '../frontend/types.js';
+import type { DataflowFacts } from './dataflowTypes.js';
 
 export interface SourceSpan {
   line: number;
@@ -15,6 +16,10 @@ export interface CfgNode {
   astType: string;
   text: string;
   span: SourceSpan;
+  /** 분기에서 선택된 값의 원본. 없으면 이 노드 자체의 AST를 평가한다. */
+  valueSource?: SourceSpan;
+  constantValue?: 'undefined' | 'unit';
+  binding?: 'parameter-default' | 'iteration' | 'exception' | 'exception-clear';
 }
 export interface CfgEdge { from: number; to: number; kind: CfgEdgeKind }
 export interface BasicBlock { id: number; nodes: number[] }
@@ -32,6 +37,7 @@ export interface ControlFlowGraph {
   exit: number;
   exceptionExit: number;
   suspensionExit?: number;
+  implicitReturnSource?: SourceSpan;
   nodes: CfgNode[];
   edges: CfgEdge[];
   blocks: BasicBlock[];
@@ -40,6 +46,7 @@ export interface ControlFlowGraph {
   diagnostics: CfgDiagnostic[];
   /** 명시적 분기 수 + 1. 암묵적 예외 경로와 finally 복제는 중복 계산하지 않는다. */
   structuralComplexity: number;
+  dataflow?: DataflowFacts;
 }
 
 /** 단일 normal 전이만 합친다. 분기·예외·루프 경계와 도달 불가능한 노드도 유지한다. */

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { scanRepository } from '../../src/registry/entityScanner.js';
 import { getRegistryStore, closeRegistryStore } from '../../src/registry/sqliteStore.js';
 import * as treeSitter from '../../src/frontend/treeSitter.js';
+import * as dataflow from '../../src/analysis/dataflow.js';
 import { FrontendError } from '../../src/frontend/types.js';
 
 // scanRepository uses the global registry store singleton.
@@ -37,6 +38,26 @@ afterEach(() => {
 });
 
 describe('scanRepository — AST frontend and snapshot safety', () => {
+  it('preserves the prior snapshot when a dataflow pass exceeds the scan deadline', async () => {
+    write('x.ts', 'function f(){return 1;}');
+    await scanRepository(projectDir, 'flow-timeout', { parser: 'ast' });
+    const store = getRegistryStore();
+    const before = store.listEntities({ projectId: 'flow-timeout' });
+    const flows = store.getDataflow('flow-timeout');
+    write('x.ts', 'function changed(){return 2;}');
+    const originalNow = Date.now, originalAnalyze = dataflow.analyzeDataflow;
+    let elapsed = 0;
+    vi.spyOn(Date, 'now').mockImplementation(() => originalNow() + elapsed);
+    vi.spyOn(dataflow, 'analyzeDataflow').mockImplementation(graph => {
+      const result = originalAnalyze(graph); elapsed = 10_000; return result;
+    });
+    const result = await scanRepository(projectDir, 'flow-timeout', { parser: 'ast', timeoutMs: 5000 });
+    expect(result.errors).toEqual(['scan timed out during dataflow']);
+    expect(result.dataflow.total).toBe(0);
+    expect(store.listEntities({ projectId: 'flow-timeout' })).toEqual(before);
+    expect(store.getDataflow('flow-timeout')).toEqual(flows);
+  });
+
   it('persists private declarations and distinct same-name methods with exact ownership', async () => {
     write('src/x.ts', 'type Private = number;\nconst convert = (x:number) => x;\nclass A { run() { convert(1); } }\nclass B { run() {} }');
     const result = await scanRepository(projectDir, 'ast', { parser: 'ast' });
@@ -60,6 +81,7 @@ describe('scanRepository — AST frontend and snapshot safety', () => {
     const relations = store.countRelations('ast-failure');
     const callSites = store.getCallSites('ast-failure');
     const cfgs = store.getControlFlow('ast-failure');
+    const flows = store.getDataflow('ast-failure');
     write('src/x.ts', 'function replacement() {}');
     write('src/invalid.ts', 'function broken(');
     const result = await scanRepository(projectDir, 'ast-failure', { parser: 'auto' });
@@ -70,6 +92,7 @@ describe('scanRepository — AST frontend and snapshot safety', () => {
     expect(store.countRelations('ast-failure')).toBe(relations);
     expect(store.getCallSites('ast-failure')).toEqual(callSites);
     expect(store.getControlFlow('ast-failure')).toEqual(cfgs);
+    expect(store.getDataflow('ast-failure')).toEqual(flows);
   });
 
   it('atomically rolls back entities, call facts and relations when final relation persistence fails', async () => {
@@ -79,6 +102,7 @@ describe('scanRepository — AST frontend and snapshot safety', () => {
     const before = store.listEntities({ projectId: 'rollback' });
     const sites = store.getCallSites('rollback');
     const cfgs = store.getControlFlow('rollback');
+    const flows = store.getDataflow('rollback');
     const relations = store.countRelations('rollback');
     write('src/x.ts', 'function replacement() { missing(); }');
     vi.spyOn(store, 'replaceRelationsForProject').mockImplementation(() => { throw new Error('injected storage failure'); });
@@ -89,6 +113,7 @@ describe('scanRepository — AST frontend and snapshot safety', () => {
     expect(store.listEntities({ projectId: 'rollback' })).toEqual(before);
     expect(store.getCallSites('rollback')).toEqual(sites);
     expect(store.getControlFlow('rollback')).toEqual(cfgs);
+    expect(store.getDataflow('rollback')).toEqual(flows);
     expect(store.countRelations('rollback')).toBe(relations);
   });
 

@@ -55,7 +55,7 @@ function moduleText(node: Node | null): string {
 }
 
 export function extractSymbolFacts(root: Node, language: AstLanguage, filePath: string, syntax: EntitySyntax[]): SymbolFacts {
-  const facts: SymbolFacts = { filePath, language, scopes: [{ id: 0, parent: null, kind: 'module' }], bindings: [],
+  const facts: SymbolFacts = { filePath, language, scopes: [{ id: 0, parent: null, kind: 'module', startOffset: root.startIndex, endOffset: root.endIndex }], bindings: [],
     entities: [], exports: [], starExports: [], calls: [], bases: [], implementations: [] };
   const declarations = new Map<number, EntitySyntax[]>();
   const callables = new Map<number, EntitySyntax>();
@@ -69,8 +69,8 @@ export function extractSymbolFacts(root: Node, language: AstLanguage, filePath: 
   const entities = new Map<string, (typeof facts.entities)[number]>();
   const writes: Array<{ name: string; scope: number; offset: number }> = [];
   const directives: Array<{ name: string; scope: number; global: boolean }> = [];
-  const bind = (name: string, scope: number, value: SymbolValue, offset = 0, hoisted = true) => {
-    facts.bindings.push({ name, scope, value, offset, hoisted });
+  const bind = (name: string, scope: number, value: SymbolValue, offset = 0, hoisted = true, isParameter = false) => {
+    facts.bindings.push({ name, scope, value, offset, hoisted, ...(isParameter ? { isParameter: true } : {}) });
   };
   const exported = (name: string, value: SymbolValue, scope = 0) => facts.exports.push({ name, value, scope });
   const nearestFunction = (scope: number): number => {
@@ -170,7 +170,7 @@ export function extractSymbolFacts(root: Node, language: AstLanguage, filePath: 
       const receiver: SymbolValue | undefined = kind === 'class'
         ? node.type === 'impl_item' ? expression(field(node, 'type')) : owner ? { kind: 'entity', qualifiedName: owner } : undefined
         : undefined;
-      facts.scopes.push({ id: scope, parent: parentScope, kind, owner, receiver });
+      facts.scopes.push({ id: scope, parent: parentScope, kind, owner, receiver, startOffset: node.startIndex, endOffset: node.endIndex });
       if (owner) { const entity = entities.get(owner); if (entity) entity.bodyScope = scope; }
       if (kind === 'function') caller = owner;
       else if (kind === 'class') caller = owner;
@@ -178,7 +178,7 @@ export function extractSymbolFacts(root: Node, language: AstLanguage, filePath: 
       if (kind === 'function') {
         const classScope = facts.scopes[parentScope].kind === 'class' ? facts.scopes[parentScope] : undefined;
         if (classScope?.receiver) {
-          bind('this', scope, { kind: 'instance', type: classScope.receiver });
+          bind('this', scope, { kind: 'instance', type: classScope.receiver }, 0, true, true);
           bind('Self', scope, classScope.receiver);
         }
         const parameters = field(node, 'parameters');
@@ -189,7 +189,7 @@ export function extractSymbolFacts(root: Node, language: AstLanguage, filePath: 
             const value = classScope?.receiver && (name === 'self' || name === 'cls')
               ? { kind: 'instance' as const, type: classScope.receiver }
               : type ? { kind: 'instance' as const, type: expression(type) } : unknown('unknown-receiver');
-            bind(name, scope, value);
+            bind(name, scope, value, 0, true, true);
           }
         }
         if (node.type === 'function_expression' && field(node, 'name') && owner) bind(field(node, 'name')!.text, scope, { kind: 'entity', qualifiedName: owner });
@@ -225,6 +225,13 @@ export function extractSymbolFacts(root: Node, language: AstLanguage, filePath: 
     }
     if (node.type === 'catch_clause') {
       for (const name of bindings(field(node, 'parameter'))) bind(name, scope, unknown('unknown-receiver'));
+    }
+    if (language === 'typescript' && node.type === 'for_in_statement') {
+      const declaration = node.children.find(child => ['var', 'let', 'const'].includes(child.type));
+      for (const name of bindings(field(node, 'left'))) {
+        if (declaration) bind(name, declaration.type === 'var' ? nearestFunction(scope) : scope, unknown('unknown-receiver'), node.startIndex, false);
+        else writes.push({ name, scope, offset: node.startIndex });
+      }
     }
     if (language === 'python') {
       if (node.type === 'for_statement' || node.type === 'for_in_clause') {

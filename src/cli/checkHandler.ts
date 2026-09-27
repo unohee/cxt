@@ -192,6 +192,10 @@ export async function handleCheck(
       console.log(`  ${'Parsers'.padEnd(16)}${Object.entries(result.parserBreakdown).map(([engine, count]) => `${engine}: ${count}`).join(', ') || 'none'}`);
       console.log(`  ${'Call sites'.padEnd(16)}${result.callSites.total} (${result.callSites.resolved} resolved, ${result.callSites.unresolved} unresolved, ${result.callSites.external} external)`);
       console.log(`  ${'CFGs'.padEnd(16)}${result.controlFlow.total} (${result.controlFlow.complete} complete, ${result.controlFlow.partial} partial)`);
+      console.log(`  ${'Dataflow'.padEnd(16)}${result.dataflow.total} (${result.dataflow.complete} complete, ${result.dataflow.partial} partial)`);
+      for (const diagnostic of result.dataflow.diagnostics.slice(0, 10)) {
+        console.log(`  [${diagnostic.code}] ${escapeTerminal(diagnostic.owner)}: ${escapeTerminal(diagnostic.message)}`);
+      }
       for (const diagnostic of result.controlFlow.diagnostics.slice(0, 10)) {
         console.log(`    ${escapeTerminal(diagnostic.filePath)}:${diagnostic.span.line} [${diagnostic.code}] ${escapeTerminal(diagnostic.message)}`);
       }

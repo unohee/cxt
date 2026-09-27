@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "factFamily": "intraprocedural-dataflow",
+  "tier": "synthetic-development",
+  "corpusSha256": "68e58e3e627f326da99bfe1aafce52fc547996ba69c5635284a75b831664039f",
+  "generatedAt": "2026-09-27T11:12:39.948Z",
+  "node": "v24.20.0",
+  "durationMs": 141.247302,
+  "processMaxRssKiB": 120132,
+  "pass": true,
+  "results": [
+    {
+      "language": "typescript",
+      "fixtures": 9,
+      "tp": 9,
+      "fp": 0,
+      "fn": 0,
+      "statusCorrect": 9,
+      "readStatusCorrect": 7,
+      "reads": 7,
+      "valueCorrect": 9,
+      "precision": 1,
+      "recall": 1,
+      "failures": [],
+      "pass": true
+    },
+    {
+      "language": "python",
+      "fixtures": 9,
+      "tp": 10,
+      "fp": 0,
+      "fn": 0,
+      "statusCorrect": 9,
+      "readStatusCorrect": 7,
+      "reads": 7,
+      "valueCorrect": 9,
+      "precision": 1,
+      "recall": 1,
+      "failures": [],
+      "pass": true
+    },
+    {
+      "language": "rust",
+      "fixtures": 9,
+      "tp": 11,
+      "fp": 0,
+      "fn": 0,
+      "statusCorrect": 9,
+      "readStatusCorrect": 7,
+      "reads": 7,
+      "valueCorrect": 9,
+      "precision": 1,
+      "recall": 1,
+      "failures": [],
+      "pass": true
+    }
+  ]
+}
