@@ -29,6 +29,7 @@ interface Messages {
   // ── Check handler ──
   scanningRepo: string;
   scanComplete: string;
+  scanIncomplete: string;
   filesScanned: string;
   entitiesFound: string;
   newRegistered: string;
@@ -193,6 +194,7 @@ const en: Messages = {
   // Check handler
   scanningRepo: 'Scanning repository...',
   scanComplete: 'Scan Complete',
+  scanIncomplete: 'Scan Incomplete — previous registry preserved',
   filesScanned: 'Files scanned:',
   entitiesFound: 'Entities found:',
   newRegistered: 'New registered:',
@@ -357,6 +359,7 @@ const ko: Messages = {
   // Check handler
   scanningRepo: '레포지토리 스캔 중...',
   scanComplete: '스캔 완료',
+  scanIncomplete: '스캔 미완료 — 이전 레지스트리 보존',
   filesScanned: '스캔 파일:',
   entitiesFound: '발견 엔티티:',
   newRegistered: '신규 등록:',

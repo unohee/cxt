@@ -1,0 +1,476 @@
+{
+  "schemaVersion": 1,
+  "engine": "lexical",
+  "factFamily": "entities",
+  "tier": "synthetic",
+  "corpusSha256": "4a8c946d55b389ae9b92ebfacf81246a84de1cb58fec3f82960ffd89f52abf79",
+  "generatedAt": "2026-09-27T08:38:57.481Z",
+  "node": "v24.20.0",
+  "durationMs": 9.298969,
+  "processMaxRssKiB": 104008,
+  "pass": false,
+  "gateEnforced": false,
+  "results": [
+    {
+      "language": "typescript",
+      "fixtures": 20,
+      "tp": 13,
+      "fp": 0,
+      "fn": 25,
+      "spanCorrect": 12,
+      "scopeCorrect": 11,
+      "precision": 1,
+      "recall": 0.34210526315789475,
+      "f1": 0.5098039215686275,
+      "spanAccuracy": 0.9230769230769231,
+      "scopeAccuracy": 0.8461538461538461,
+      "failures": [
+        {
+          "id": "typescript/private",
+          "counts": {
+            "tp": 0,
+            "fp": 0,
+            "fn": 3,
+            "spanCorrect": 0,
+            "scopeCorrect": 0
+          }
+        },
+        {
+          "id": "typescript/arrow",
+          "counts": {
+            "tp": 0,
+            "fp": 0,
+            "fn": 1,
+            "spanCorrect": 0,
+            "scopeCorrect": 0
+          }
+        },
+        {
+          "id": "typescript/methods",
+          "counts": {
+            "tp": 2,
+            "fp": 0,
+            "fn": 2,
+            "spanCorrect": 2,
+            "scopeCorrect": 2
+          }
+        },
+        {
+          "id": "typescript/nested",
+          "counts": {
+            "tp": 2,
+            "fp": 0,
+            "fn": 1,
+            "spanCorrect": 2,
+            "scopeCorrect": 1
+          }
+        },
+        {
+          "id": "typescript/template-regex",
+          "counts": {
+            "tp": 1,
+            "fp": 0,
+            "fn": 2,
+            "spanCorrect": 1,
+            "scopeCorrect": 1
+          }
+        },
+        {
+          "id": "typescript/jsx",
+          "counts": {
+            "tp": 1,
+            "fp": 0,
+            "fn": 0,
+            "spanCorrect": 0,
+            "scopeCorrect": 1
+          }
+        },
+        {
+          "id": "typescript/destructuring",
+          "counts": {
+            "tp": 0,
+            "fp": 0,
+            "fn": 5,
+            "spanCorrect": 0,
+            "scopeCorrect": 0
+          }
+        },
+        {
+          "id": "typescript/multiple",
+          "counts": {
+            "tp": 0,
+            "fp": 0,
+            "fn": 2,
+            "spanCorrect": 0,
+            "scopeCorrect": 0
+          }
+        },
+        {
+          "id": "typescript/abstract",
+          "counts": {
+            "tp": 1,
+            "fp": 0,
+            "fn": 1,
+            "spanCorrect": 1,
+            "scopeCorrect": 1
+          }
+        },
+        {
+          "id": "typescript/enum",
+          "counts": {
+            "tp": 0,
+            "fp": 0,
+            "fn": 2,
+            "spanCorrect": 0,
+            "scopeCorrect": 0
+          }
+        },
+        {
+          "id": "typescript/namespace",
+          "counts": {
+            "tp": 1,
+            "fp": 0,
+            "fn": 1,
+            "spanCorrect": 1,
+            "scopeCorrect": 0
+          }
+        },
+        {
+          "id": "typescript/default-function",
+          "counts": {
+            "tp": 0,
+            "fp": 0,
+            "fn": 1,
+            "spanCorrect": 0,
+            "scopeCorrect": 0
+          }
+        },
+        {
+          "id": "typescript/default-class",
+          "counts": {
+            "tp": 0,
+            "fp": 0,
+            "fn": 2,
+            "spanCorrect": 0,
+            "scopeCorrect": 0
+          }
+        },
+        {
+          "id": "typescript/default-arrow",
+          "counts": {
+            "tp": 0,
+            "fp": 0,
+            "fn": 1,
+            "spanCorrect": 0,
+            "scopeCorrect": 0
+          }
+        },
+        {
+          "id": "typescript/async-generator",
+          "counts": {
+            "tp": 0,
+            "fp": 0,
+            "fn": 1,
+            "spanCorrect": 0,
+            "scopeCorrect": 0
+          }
+        }
+      ],
+      "pass": false
+    },
+    {
+      "language": "python",
+      "fixtures": 20,
+      "tp": 25,
+      "fp": 3,
+      "fn": 9,
+      "spanCorrect": 23,
+      "scopeCorrect": 17,
+      "precision": 0.8928571428571429,
+      "recall": 0.7352941176470589,
+      "f1": 0.806451612903226,
+      "spanAccuracy": 0.92,
+      "scopeAccuracy": 0.68,
+      "failures": [
+        {
+          "id": "python/decorator",
+          "counts": {
+            "tp": 0,
+            "fp": 1,
+            "fn": 1,
+            "spanCorrect": 0,
+            "scopeCorrect": 0
+          }
+        },
+        {
+          "id": "python/class",
+          "counts": {
+            "tp": 2,
+            "fp": 0,
+            "fn": 0,
+            "spanCorrect": 2,
+            "scopeCorrect": 1
+          }
+        },
+        {
+          "id": "python/same-method",
+          "counts": {
+            "tp": 4,
+            "fp": 0,
+            "fn": 0,
+            "spanCorrect": 4,
+            "scopeCorrect": 2
+          }
+        },
+        {
+          "id": "python/nested",
+          "counts": {
+            "tp": 1,
+            "fp": 0,
+            "fn": 1,
+            "spanCorrect": 1,
+            "scopeCorrect": 1
+          }
+        },
+        {
+          "id": "python/multiline",
+          "counts": {
+            "tp": 0,
+            "fp": 0,
+            "fn": 1,
+            "spanCorrect": 0,
+            "scopeCorrect": 0
+          }
+        },
+        {
+          "id": "python/tuple",
+          "counts": {
+            "tp": 0,
+            "fp": 0,
+            "fn": 2,
+            "spanCorrect": 0,
+            "scopeCorrect": 0
+          }
+        },
+        {
+          "id": "python/class-constant",
+          "counts": {
+            "tp": 3,
+            "fp": 0,
+            "fn": 0,
+            "spanCorrect": 3,
+            "scopeCorrect": 1
+          }
+        },
+        {
+          "id": "python/decorated-class",
+          "counts": {
+            "tp": 0,
+            "fp": 1,
+            "fn": 1,
+            "spanCorrect": 0,
+            "scopeCorrect": 0
+          }
+        },
+        {
+          "id": "python/properties",
+          "counts": {
+            "tp": 1,
+            "fp": 1,
+            "fn": 1,
+            "spanCorrect": 1,
+            "scopeCorrect": 1
+          }
+        },
+        {
+          "id": "python/nested-class",
+          "counts": {
+            "tp": 3,
+            "fp": 0,
+            "fn": 0,
+            "spanCorrect": 3,
+            "scopeCorrect": 1
+          }
+        },
+        {
+          "id": "python/eof",
+          "counts": {
+            "tp": 2,
+            "fp": 0,
+            "fn": 0,
+            "spanCorrect": 0,
+            "scopeCorrect": 1
+          }
+        },
+        {
+          "id": "python/branch",
+          "counts": {
+            "tp": 0,
+            "fp": 0,
+            "fn": 2,
+            "spanCorrect": 0,
+            "scopeCorrect": 0
+          }
+        }
+      ],
+      "pass": false
+    },
+    {
+      "language": "rust",
+      "fixtures": 20,
+      "tp": 24,
+      "fp": 5,
+      "fn": 4,
+      "spanCorrect": 13,
+      "scopeCorrect": 17,
+      "precision": 0.8275862068965517,
+      "recall": 0.8571428571428571,
+      "f1": 0.8421052631578947,
+      "spanAccuracy": 0.5416666666666666,
+      "scopeAccuracy": 0.7083333333333334,
+      "failures": [
+        {
+          "id": "rust/function",
+          "counts": {
+            "tp": 1,
+            "fp": 0,
+            "fn": 0,
+            "spanCorrect": 0,
+            "scopeCorrect": 1
+          }
+        },
+        {
+          "id": "rust/struct",
+          "counts": {
+            "tp": 1,
+            "fp": 0,
+            "fn": 0,
+            "spanCorrect": 0,
+            "scopeCorrect": 1
+          }
+        },
+        {
+          "id": "rust/trait",
+          "counts": {
+            "tp": 2,
+            "fp": 0,
+            "fn": 0,
+            "spanCorrect": 1,
+            "scopeCorrect": 1
+          }
+        },
+        {
+          "id": "rust/impl",
+          "counts": {
+            "tp": 2,
+            "fp": 1,
+            "fn": 0,
+            "spanCorrect": 1,
+            "scopeCorrect": 1
+          }
+        },
+        {
+          "id": "rust/trait-impl",
+          "counts": {
+            "tp": 1,
+            "fp": 1,
+            "fn": 0,
+            "spanCorrect": 1,
+            "scopeCorrect": 0
+          }
+        },
+        {
+          "id": "rust/same-method",
+          "counts": {
+            "tp": 0,
+            "fp": 2,
+            "fn": 2,
+            "spanCorrect": 0,
+            "scopeCorrect": 0
+          }
+        },
+        {
+          "id": "rust/module",
+          "counts": {
+            "tp": 1,
+            "fp": 0,
+            "fn": 1,
+            "spanCorrect": 1,
+            "scopeCorrect": 0
+          }
+        },
+        {
+          "id": "rust/nested",
+          "counts": {
+            "tp": 2,
+            "fp": 0,
+            "fn": 0,
+            "spanCorrect": 2,
+            "scopeCorrect": 1
+          }
+        },
+        {
+          "id": "rust/constants",
+          "counts": {
+            "tp": 2,
+            "fp": 0,
+            "fn": 0,
+            "spanCorrect": 0,
+            "scopeCorrect": 2
+          }
+        },
+        {
+          "id": "rust/type",
+          "counts": {
+            "tp": 1,
+            "fp": 0,
+            "fn": 0,
+            "spanCorrect": 0,
+            "scopeCorrect": 1
+          }
+        },
+        {
+          "id": "rust/lifetime",
+          "counts": {
+            "tp": 1,
+            "fp": 0,
+            "fn": 0,
+            "spanCorrect": 0,
+            "scopeCorrect": 1
+          }
+        },
+        {
+          "id": "rust/raw-string",
+          "counts": {
+            "tp": 2,
+            "fp": 0,
+            "fn": 0,
+            "spanCorrect": 1,
+            "scopeCorrect": 2
+          }
+        },
+        {
+          "id": "rust/associated-type",
+          "counts": {
+            "tp": 2,
+            "fp": 1,
+            "fn": 0,
+            "spanCorrect": 0,
+            "scopeCorrect": 0
+          }
+        },
+        {
+          "id": "rust/restricted-pub",
+          "counts": {
+            "tp": 1,
+            "fp": 0,
+            "fn": 1,
+            "spanCorrect": 1,
+            "scopeCorrect": 1
+          }
+        }
+      ],
+      "pass": false
+    }
+  ]
+}

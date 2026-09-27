@@ -78,6 +78,35 @@ cxt --lang en scan
 cxt --lang ko bs
 ```
 
+## Parser selection
+
+`scan` uses native tree-sitter for TypeScript/TSX, JavaScript/JSX, Python and
+Rust. It extracts declarations from syntax nodes, preserves exact line ranges,
+and distinguishes nested declarations and same-name methods by scope
+(`src/file.ts::Store.read`). Overloads/repeated bindings also include a source
+position suffix. Go, Java, C/C++, and C# currently use lexical extraction.
+
+```bash
+CXT_PARSER=auto cxt scan     # default; reports parser counts and fallback reasons
+CXT_PARSER=ast cxt scan      # require AST; unsupported/missing parser is an error
+CXT_PARSER=lexical cxt scan  # explicitly use the previous extractor
+```
+
+Native parser packages are optional. In `auto`, an unavailable native parser
+produces a visible diagnostic and uses lexical extraction. A syntax error in
+an available AST parser fails the scan and preserves the previous registry.
+Missing extraction queries and invalid queries also fail the scan.
+
+The public `extractFile` API returns the selected engine, declarations,
+references and diagnostics. `extractEntities` retains its legacy lexical API.
+Call target resolution and BS rules remain heuristic; CFG, dataflow, semantic
+library models and SARIF are tracked in the
+[ten-part implementation roadmap](docs/STATIC_ANALYSIS_ROADMAP.md).
+
+Run `npm run bench:accuracy` for the handwritten declaration corpus and
+`npm run test:package` for a fresh package install, missing-native simulation and CLI
+checks. These tests do not establish CodeQL equivalence.
+
 ## Change Preflight (impact / risk / test gap)
 
 `preflight` turns the relation graph into a deterministic change-review
@@ -95,7 +124,7 @@ exists: verify dynamic dispatch, imports, and framework callbacks in source.
 
 ## Call Graph (who-calls / calls / impact)
 
-`cxt scan` builds a same-project relation graph (`calls`, `uses`, `extends`, `implements`, `overrides`) from regex-extracted references. After a scan, relation queries replace grep for understanding code flow:
+`cxt scan` builds a same-project relation graph (`calls`, `uses`, `extends`, `implements`, `overrides`) from AST references where supported and lexical references otherwise. Target resolution still uses names and file proximity; imports, types and dynamic dispatch are not resolved. After a scan, query the current relation graph with:
 
 ```bash
 cxt who-calls rowsToEntities       # who depends on this function?

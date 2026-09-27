@@ -13,6 +13,9 @@ import { buildIgnoreConfig, shouldSkipDir, shouldSkipFile } from './ignoreRules.
 import type { EntityKind, RiskLevel, RelationType } from './schema.js';
 import type { SqliteRegistryStore } from './sqliteStore.js';
 import { maskLiteralsAndComments } from './lexical.js';
+import { loadTreeSitterFrontend } from '../frontend/treeSitter.js';
+import { entityQualifiedName, FrontendError, parserMode } from '../frontend/types.js';
+import type { FrontendDiagnostic, FrontendResult, ParserMode } from '../frontend/types.js';
 
 // ============ 상수 ============
 
@@ -24,7 +27,7 @@ const SCAN_TIMEOUT_MS = 60_000;
 
 // ============ 언어 정의 ============
 
-type Language = 'typescript' | 'python' | 'go' | 'rust' | 'java' | 'c' | 'cpp' | 'csharp';
+export type Language = 'typescript' | 'python' | 'go' | 'rust' | 'java' | 'c' | 'cpp' | 'csharp';
 
 interface LanguageConfig {
   extensions: string[];
@@ -241,6 +244,8 @@ function isTestFile(name: string, language: Language): boolean {
 export interface ExtractedEntity {
   kind: EntityKind;
   name: string;
+  /** AST 스코프를 포함한 파일 내 식별자. 표시 이름은 name에 보존한다. */
+  scopedName?: string;
   filePath: string;
   lineStart: number;
   lineEnd?: number;
@@ -253,6 +258,7 @@ export interface ExtractedEntity {
 
 // ============ 엔티티 추출 ============
 
+/** Legacy lexical extraction. Use extractFile for the configured frontend and diagnostics. */
 export function extractEntities(
   content: string,
   filePath: string,
@@ -341,6 +347,38 @@ export function extractEntities(
   }
 
   return entities;
+}
+
+/** 실제 scan과 공개 API가 공유하는 프론트엔드 선택 경로. */
+export function extractFile(content: string, filePath: string, language: Language, mode = parserMode()): FrontendResult {
+  mode = parserMode(mode);
+  const diagnostics: FrontendDiagnostic[] = [];
+  if (mode !== 'lexical') {
+    if (language === 'typescript' || language === 'python' || language === 'rust') {
+      // 초기화 실패만 auto fallback을 허용한다. 소스 문법 오류는 오류로 전파한다.
+      let frontend;
+      try {
+        frontend = loadTreeSitterFrontend(language, filePath);
+      } catch (error) {
+        if (!(error instanceof FrontendError) || error.diagnostic.code !== 'parser-unavailable' || mode === 'ast') throw error;
+        diagnostics.push(error.diagnostic);
+      }
+      if (frontend) return frontend.extract(content, filePath);
+    } else {
+      const diagnostic: FrontendDiagnostic = { code: 'unsupported-language', filePath,
+        message: `AST frontend is not available for ${language}; lexical extraction only` };
+      if (mode === 'ast') throw new FrontendError(diagnostic);
+      diagnostics.push(diagnostic);
+    }
+  }
+  const entities = extractEntities(content, filePath, language);
+  const lexicalRefs = extractReferences(content, entities, language);
+  const references = new Map<string, ReferenceSet>();
+  for (const entity of entities) {
+    const refs = lexicalRefs.get(entity.lineStart);
+    if (refs) references.set(entityQualifiedName(entity), refs);
+  }
+  return { engine: 'lexical', entities, references, diagnostics };
 }
 
 // ============ 블록 끝 추정 ============
@@ -871,7 +909,7 @@ function buildTestMap(
       const matchedEntities = entitiesByBasename.get(sourceBasename);
       if (matchedEntities && sourceBasename.length > 0) {
         for (const entity of matchedEntities) {
-          const qName = `${entity.filePath}::${entity.name}`;
+          const qName = entityQualifiedName(entity);
           if (!result.has(qName)) {
             result.set(qName, { hasTests: true, testFile: tf.testFilePath });
           }
@@ -889,7 +927,7 @@ function buildTestMap(
         if (!fileEntities) continue;
         for (const entity of fileEntities) {
           if (symbols.has(entity.name)) {
-            result.set(`${entity.filePath}::${entity.name}`, { hasTests: true, testFile: tf.testFilePath });
+            result.set(entityQualifiedName(entity), { hasTests: true, testFile: tf.testFilePath });
           }
         }
         break;
@@ -900,7 +938,7 @@ function buildTestMap(
       const matchingEntities = entityByName.get(refName);
       if (!matchingEntities) continue;
       for (const entity of matchingEntities) {
-        const qName = `${entity.filePath}::${entity.name}`;
+        const qName = entityQualifiedName(entity);
         if (result.has(qName)) continue;
         if (isNearbyTest(entity.filePath, tf.testFilePath)) {
           result.set(qName, { hasTests: true, testFile: tf.testFilePath });
@@ -950,6 +988,8 @@ export interface ScanResult {
   errors: string[];
   durationMs: number;
   languageBreakdown: Record<string, number>;
+  parserBreakdown: Record<string, number>;
+  diagnostics: FrontendDiagnostic[];
 }
 
 // ============ 메인 스캔 함수 ============
@@ -957,9 +997,10 @@ export interface ScanResult {
 export async function scanRepository(
   projectPath: string,
   projectId: string,
-  options?: { maxDepth?: number; timeoutMs?: number; verbose?: boolean },
+  options?: { maxDepth?: number; timeoutMs?: number; verbose?: boolean; parser?: ParserMode },
 ): Promise<ScanResult> {
   const startTime = Date.now();
+  const mode = parserMode(options?.parser);
   const requestedDepth = options?.maxDepth ?? MAX_DEPTH;
   const requestedTimeout = options?.timeoutMs ?? SCAN_TIMEOUT_MS;
   if (!Number.isFinite(requestedDepth) || requestedDepth < 0 || !Number.isFinite(requestedTimeout) || requestedTimeout <= 0) {
@@ -977,6 +1018,8 @@ export async function scanRepository(
   const testFiles: TestFileInfo[] = [];
   const errors: string[] = [];
   const languageBreakdown: Record<string, number> = {};
+  const parserBreakdown: Record<string, number> = {};
+  const diagnostics: FrontendDiagnostic[] = [];
   let scannedFiles = 0;
   let completeScan = true;
 
@@ -1030,15 +1073,14 @@ export async function scanRepository(
           if (isTestFile(entry.name, language)) {
             testFiles.push(parseTestFile(content, entryRelPath, language));
           } else {
-            const entities = extractEntities(content, entryRelPath, language);
+            const parsed = extractFile(content, entryRelPath, language, mode);
+            const entities = parsed.entities;
             allExtracted.push(...entities);
+            diagnostics.push(...parsed.diagnostics);
+            parserBreakdown[parsed.engine] = (parserBreakdown[parsed.engine] ?? 0) + 1;
 
             // 참조 추출 (관계 그래프 2-pass용).
-            const refs = extractReferences(content, entities, language);
-            for (const ent of entities) {
-              const r = refs.get(ent.lineStart);
-              if (r) refsByQName.set(`${entryRelPath}::${ent.name}`, r);
-            }
+            for (const [key, refs] of parsed.references) refsByQName.set(key, refs);
 
             scannedFiles++;
             languageBreakdown[language] = (languageBreakdown[language] ?? 0) + 1;
@@ -1049,6 +1091,7 @@ export async function scanRepository(
           }
         } catch (err) { // cxt-ignore: exception_hiding — err는 errors[]에 수집되어 ScanResult로 보고됨
           completeScan = false;
+          if (err instanceof FrontendError) diagnostics.push(err.diagnostic);
           errors.push(`${entryRelPath}: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
@@ -1076,6 +1119,8 @@ export async function scanRepository(
       errors,
       durationMs: Date.now() - startTime,
       languageBreakdown,
+      parserBreakdown,
+      diagnostics,
     };
   }
 
@@ -1097,7 +1142,7 @@ export async function scanRepository(
   try {
     store.runInTransaction(() => {
     for (const ext of allExtracted) {
-    const qualifiedName = `${ext.filePath}::${ext.name}`;
+    const qualifiedName = entityQualifiedName(ext);
     extractedQNames.add(qualifiedName);
 
     const testInfo = testMap.get(qualifiedName);
@@ -1117,6 +1162,7 @@ export async function scanRepository(
           kind: ext.kind,
           name: ext.name,
           filePath: ext.filePath,
+          qualifiedName,
           lineStart: ext.lineStart,
           lineEnd: ext.lineEnd,
           signature: ext.signature,
@@ -1146,6 +1192,7 @@ export async function scanRepository(
       }
 
       const needsUpdate =
+        existingEntity.kind !== ext.kind ||
         existingEntity.lineStart !== ext.lineStart ||
         existingEntity.lineEnd !== ext.lineEnd ||
         existingEntity.signature !== ext.signature ||
@@ -1161,6 +1208,7 @@ export async function scanRepository(
 
       if (needsUpdate) {
         store.updateEntity(existingEntity.id, {
+          kind: ext.kind,
           lineStart: ext.lineStart,
           lineEnd: ext.lineEnd,
           signature: ext.signature,
@@ -1216,6 +1264,8 @@ export async function scanRepository(
     errors,
     durationMs: Date.now() - startTime,
     languageBreakdown,
+    parserBreakdown,
+    diagnostics,
   };
 }
 

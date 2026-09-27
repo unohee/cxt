@@ -32,6 +32,7 @@ export interface RegisterEntityInput {
   kind: EntityKind;
   name: string;
   filePath: string;
+  qualifiedName?: string;
   lineStart?: number;
   lineEnd?: number;
   signature?: string;
@@ -52,6 +53,7 @@ export interface RegisterEntityInput {
 }
 
 export interface UpdateEntityInput {
+  kind?: EntityKind;
   name?: string;
   lineStart?: number;
   lineEnd?: number;
@@ -701,7 +703,7 @@ export class SqliteRegistryStore {
   registerEntity(input: RegisterEntityInput): CodeEntity {
     const id = nanoid(12);
     const now = new Date().toISOString();
-    const qualifiedName = `${input.filePath}::${input.name}`;
+    const qualifiedName = input.qualifiedName ?? `${input.filePath}::${input.name}`;
 
     const insertEntity = this.db.prepare(`
       INSERT INTO code_entities (
@@ -788,7 +790,7 @@ export class SqliteRegistryStore {
     const values: unknown[] = [];
 
     const fieldMap: Record<string, string> = {
-      name: 'name', lineStart: 'line_start', lineEnd: 'line_end',
+      kind: 'kind', name: 'name', lineStart: 'line_start', lineEnd: 'line_end',
       signature: 'signature', hasTests: 'has_tests', testFile: 'test_file',
       maintainer: 'maintainer', complexityScore: 'complexity_score',
       riskLevel: 'risk_level',
@@ -809,7 +811,10 @@ export class SqliteRegistryStore {
 
     if (patch.name && patch.name !== existing.name) {
       fields.push('qualified_name = ?');
-      values.push(`${existing.filePath}::${patch.name}`);
+      const boundary = existing.qualifiedName.lastIndexOf(existing.name);
+      values.push(boundary >= 0
+        ? existing.qualifiedName.slice(0, boundary) + patch.name + existing.qualifiedName.slice(boundary + existing.name.length)
+        : `${existing.filePath}::${patch.name}`);
     }
 
     fields.push('updated_at = ?');

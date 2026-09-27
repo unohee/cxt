@@ -22,8 +22,9 @@ export type {
 } from './registry/schema.js';
 
 // Scanner
-export { scanRepository, extractEntities } from './registry/entityScanner.js';
-export type { ScanResult, ExtractedEntity } from './registry/entityScanner.js';
+export { scanRepository, extractEntities, extractFile } from './registry/entityScanner.js';
+export type { ScanResult, ExtractedEntity, Language } from './registry/entityScanner.js';
+export type { LanguageFrontend, FrontendResult, FrontendDiagnostic, ParserMode } from './frontend/types.js';
 
 // BS Detector
 export { scanRepository as scanBs, scanFile as scanFileForBs, scanFileContent, aggregateResults } from './registry/bsDetector.js';

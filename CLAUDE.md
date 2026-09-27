@@ -63,7 +63,7 @@ cxt scan
 cxt audit --json
 ```
 
-`audit` does not replace `scan`: BS detection reads source files directly, while integrity, call-graph, impact, and preflight results use the persisted registry at `~/.cxt/registry.db`. Refresh the registry whenever the checkout has changed. The current analyzer uses the lexical/regex frontend; AST, symbol-resolution, CFG, and dataflow phases are roadmap work and must not be claimed as active capabilities.
+`audit` does not replace `scan`: BS detection reads source files directly, while integrity, call-graph, impact, and preflight results use the persisted registry at `~/.cxt/registry.db`. Refresh the registry whenever the checkout has changed. `scan` uses AST declaration/reference extraction for TS/JS, Python and Rust; other languages use lexical extraction with diagnostics. Symbol resolution, CFG, dataflow and AST BS rules remain roadmap work. See `docs/STATIC_ANALYSIS_ROADMAP.md` and `bench/README.md` for current scope and evidence.
 
 ## Architecture
 
@@ -89,11 +89,14 @@ src/
 
 ## Key Design Decisions
 
-### Regex-based parser (no AST)
-- 8 languages: TypeScript, JavaScript, Python, Go, Rust, Java, C/C++, C#
-- Regex extraction of top-level functions/classes/constants/types
-- Block end estimation: brace counting (C-family) or indent tracking (Python)
-- Complexity score: LOC + nesting depth + parameter count (0-10)
+### AST frontend with explicit lexical fallback
+- `src/frontend/`: `LanguageFrontend`, native tree-sitter loaders, `.scm` declaration queries.
+- AST: TypeScript/TSX, JavaScript/JSX, Python, Rust. Lexical: Go, Java, C/C++, C#.
+- `CXT_PARSER=auto|ast|lexical`. Native unavailability is diagnostic; syntax/query errors preserve the previous registry and fail scan.
+- Declarations retain display names and scoped qualified names; AST ranges/parameters replace brace/indent guesses on supported languages.
+- Complexity is still the existing LOC/nesting/parameter heuristic, not cyclomatic complexity.
+- `npm run build` copies `.scm` assets. Benchmark snapshots must include `scripts/`.
+- Native packages are pinned in optionalDependencies. Root overrides permit contributor installation; the packed consumer must work without inherited overrides (`npm run test:package`).
 
 ### SQLite + FTS5
 - `~/.cxt/registry.db` with per-project entity storage
@@ -117,7 +120,7 @@ src/
 
 ## Conventions
 
-- qualified_name: `{relative_file_path}::{entity_name}`
+- qualified_name: `{relative_file_path}::{scoped_name}` for AST, `{relative_file_path}::{entity_name}` for lexical. AST overload/repeated-binding collisions add `@line:column`.
 - Entity kind: function, class, module, type, constant
 - Entity status: active, deprecated, experimental, planned, broken
 - risk_level: complexity >=8 → high, >=6+untested → high, >=6 → medium, >=4+untested → medium, else low

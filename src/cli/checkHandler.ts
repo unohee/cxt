@@ -180,7 +180,7 @@ export async function handleCheck(
         verbose: opts.verbose,
       });
 
-      console.log(`${c.bold}${m.scanComplete}${c.reset}`);
+      console.log(`${c.bold}${result.errors.length ? m.scanIncomplete : m.scanComplete}${c.reset}`);
       console.log(`${'─'.repeat(40)}`);
       console.log(`  ${m.filesScanned.padEnd(16)}${c.bold}${result.scanned}${c.reset}`);
       console.log(`  ${m.entitiesFound.padEnd(16)}${c.bold}${result.extracted}${c.reset}`);
@@ -189,6 +189,7 @@ export async function handleCheck(
       console.log(`  ${m.markedBroken.padEnd(16)}${result.removed > 0 ? c.red : c.dim}${result.removed}${c.reset}`);
       console.log(`  ${m.testsMapped.padEnd(16)}${c.cyan}${result.testsMapped}${c.reset}`);
       console.log(`  ${'Relations'.padEnd(16)}${c.cyan}${result.relationsLoaded}${c.reset}`);
+      console.log(`  ${'Parsers'.padEnd(16)}${Object.entries(result.parserBreakdown).map(([engine, count]) => `${engine}: ${count}`).join(', ') || 'none'}`);
       console.log(`  ${m.duration.padEnd(16)}${c.dim}${result.durationMs}ms${c.reset}`);
 
       if (Object.keys(result.languageBreakdown).length > 0) {
@@ -205,6 +206,13 @@ export async function handleCheck(
         }
         if (result.errors.length > 10) {
           console.log(`    ${c.dim}${m.andMore(result.errors.length - 10)}${c.reset}`);
+        }
+      }
+
+      if (result.diagnostics.length > 0) {
+        console.log(`\n  Parser diagnostics (${result.diagnostics.length}):`);
+        for (const diagnostic of result.diagnostics.slice(0, 10)) {
+          console.log(`    ${escapeTerminal(diagnostic.filePath)}: ${escapeTerminal(diagnostic.code)} — ${escapeTerminal(diagnostic.message)}`);
         }
       }
 

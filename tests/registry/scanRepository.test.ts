@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { scanRepository } from '../../src/registry/entityScanner.js';
 import { getRegistryStore, closeRegistryStore } from '../../src/registry/sqliteStore.js';
+import * as treeSitter from '../../src/frontend/treeSitter.js';
+import { FrontendError } from '../../src/frontend/types.js';
 
 // scanRepository uses the global registry store singleton.
 // Pre-initialize the singleton with a tmp DB path so tests don't pollute
@@ -27,9 +29,86 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   closeRegistryStore();
   rmSync(projectDir, { recursive: true, force: true });
   rmSync(tmpDbDir, { recursive: true, force: true });
+});
+
+describe('scanRepository — AST frontend and snapshot safety', () => {
+  it('persists private declarations and distinct same-name methods with exact ownership', async () => {
+    write('src/x.ts', 'type Private = number;\nconst convert = (x:number) => x;\nclass A { run() { convert(1); } }\nclass B { run() {} }');
+    const result = await scanRepository(projectDir, 'ast', { parser: 'ast' });
+    expect(result.errors).toEqual([]);
+    expect(result.parserBreakdown).toEqual({ ast: 1 });
+    expect(result.registered).toBe(6);
+    const store = getRegistryStore();
+    expect(store.findEntitiesByName('run', 'ast')).toHaveLength(2);
+    expect(store.getEntityByName('src/x.ts::A.run', 'ast')?.lineStart).toBe(3);
+    const a = store.getEntityByName('src/x.ts::A', 'ast')!;
+    expect(store.getOutgoingRelations(a.id, 'calls')).toEqual([]);
+    const method = store.getEntityByName('src/x.ts::A.run', 'ast')!;
+    expect(store.getOutgoingRelations(method.id, 'calls').map(r => r.targetName)).toEqual(['convert']);
+  });
+
+  it('keeps the complete previous snapshot when any source has a syntax error', async () => {
+    write('src/x.ts', 'function target() {}\nfunction caller() { target(); }');
+    await scanRepository(projectDir, 'ast-failure', { parser: 'ast' });
+    const store = getRegistryStore();
+    const before = store.listEntities({ projectId: 'ast-failure' });
+    const relations = store.countRelations('ast-failure');
+    write('src/x.ts', 'function replacement() {}');
+    write('src/invalid.ts', 'function broken(');
+    const result = await scanRepository(projectDir, 'ast-failure', { parser: 'auto' });
+    expect(result.errors.join(' ')).toContain('invalid.ts');
+    expect(result.diagnostics[0]).toMatchObject({ code: 'syntax-error', filePath: 'src/invalid.ts' });
+    expect(result.registered + result.updated + result.removed).toBe(0);
+    expect(store.listEntities({ projectId: 'ast-failure' })).toEqual(before);
+    expect(store.countRelations('ast-failure')).toBe(relations);
+  });
+
+  it('exposes unavailable native parsers and fails explicit AST mode without replacing data', async () => {
+    write('src/x.ts', 'export function run() {}');
+    await scanRepository(projectDir, 'missing-parser', { parser: 'ast' });
+    vi.spyOn(treeSitter, 'loadTreeSitterFrontend').mockImplementation(() => {
+      throw new FrontendError({ code: 'parser-unavailable', filePath: 'src/x.ts', message: 'native binding unavailable' });
+    });
+    const auto = await scanRepository(projectDir, 'missing-parser', { parser: 'auto' });
+    expect(auto.parserBreakdown).toEqual({ lexical: 1 });
+    expect(auto.diagnostics[0].code).toBe('parser-unavailable');
+    const strict = await scanRepository(projectDir, 'missing-parser', { parser: 'ast' });
+    expect(strict.errors.join(' ')).toContain('native binding unavailable');
+    expect(strict.registered + strict.updated + strict.removed).toBe(0);
+    expect(getRegistryStore().getEntityByName('src/x.ts::run', 'missing-parser')?.status).toBe('active');
+  });
+
+  it('does not downgrade a broken query or missing query asset to lexical success', async () => {
+    write('src/x.ts', 'export function run() {}');
+    vi.spyOn(treeSitter, 'loadTreeSitterFrontend').mockImplementation(() => { throw new Error('invalid extraction query'); });
+    const result = await scanRepository(projectDir, 'bad-query', { parser: 'auto' });
+    expect(result.errors.join(' ')).toContain('invalid extraction query');
+    expect(result.registered).toBe(0);
+    expect(result.parserBreakdown).toEqual({});
+  });
+
+  it('updates declaration kind when a function binding becomes a value', async () => {
+    write('src/x.ts', 'const work = () => 1;');
+    await scanRepository(projectDir, 'kind-change', { parser: 'ast' });
+    write('src/x.ts', 'const work = 1;');
+    await scanRepository(projectDir, 'kind-change', { parser: 'ast' });
+    expect(getRegistryStore().getEntityByName('src/x.ts::work', 'kind-change')?.kind).toBe('constant');
+  });
+
+  it('honors the environment switch and rejects an invalid mode before scanning', async () => {
+    write('src/x.ts', 'type Hidden = string;');
+    vi.stubEnv('CXT_PARSER', 'lexical');
+    const result = await scanRepository(projectDir, 'lexical');
+    expect(result.parserBreakdown).toEqual({ lexical: 1 });
+    expect(result.extracted).toBe(0);
+    vi.stubEnv('CXT_PARSER', 'bogus');
+    await expect(scanRepository(projectDir, 'invalid-mode')).rejects.toThrow('Invalid CXT_PARSER');
+  });
 });
 
 describe('scanRepository — file walking + test mapping', () => {

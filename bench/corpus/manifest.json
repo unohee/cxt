@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "tier": "synthetic",
+  "labelProvenance": "Hand-authored source and declaration labels; no scanner-generated oracle",
+  "license": "Apache-2.0",
+  "files": [
+    { "path": "typescript.json", "language": "typescript", "fixtures": 20 },
+    { "path": "python.json", "language": "python", "fixtures": 20 },
+    { "path": "rust.json", "language": "rust", "fixtures": 20 }
+  ],
+  "pendingTiers": ["self-corpus", "licensed-real-world-slices", "held-out"],
+  "pendingFacts": ["calls-with-line-and-column", "exported", "paramCount"]
+}

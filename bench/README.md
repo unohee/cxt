@@ -1,0 +1,39 @@
+# 정적 분석 정확도 코퍼스
+
+추적: [AGT-3878](https://linear.app/intrect/issue/AGT-3878), [AGT-3879](https://linear.app/intrect/issue/AGT-3879).
+
+현재 코퍼스는 언어당 20개, 총 60개 합성 fixture의 선언 100개를 수기로 라벨링했다. 소스와 정답을 같은 JSON 파일에서 검토할 수 있다. 현재 parser 출력을 정답으로 생성하지 않는다. 범위는 선언(kind/name/start/end)과 스코프다. 호출 위치, export/parameter metadata, 실제 저장소 슬라이스 및 held-out 계층은 후속 작업이며, 기존 P0 전체 완료 조건을 충족했다고 주장하지 않는다.
+
+## 재현
+
+```bash
+npm run bench:accuracy
+npm run bench:accuracy -- --engine lexical --no-gate
+npm test
+npm run test:package
+```
+
+`--output <path>`로 JSON을 저장한다. 기본 AST 실행은 gates.json을 적용하고 실패 시 exit 1이다. `--no-gate`는 과거 lexical 기준선 측정용이며 보고서에 `gateEnforced: false`가 표시된다. `--engine lexical`만 지정하면 현재 AST 게이트를 통과하지 못하고 exit 1이 된다.
+
+## 정답 포맷
+
+`corpus/{typescript,python,rust}.json`은 fixture 배열이다. 필드는 `id`, `language`, `filePath`, `source`, `expected`이며, expected의 각 항목은 `[kind, name, lineStart, lineEnd, scopedName?]`다. 범위는 1부터 시작하는 양끝 포함 줄 번호다. 마지막 항목 생략 시 스코프 없는 name과 동일하다. 선언에 붙은 export/decorator는 범위에 포함한다. 중첩 함수·클래스·메서드는 별도 항목이다. 함수 내부 일반 지역 변수는 선언 인벤토리 대상에서 제외한다. Rust 매크로 토큰 내부 텍스트는 확장된 코드로 추정하지 않는다.
+
+Zod로 언어/종류/범위/필수 필드를 검증하고, 중복 fixture ID 및 소스를 벗어나는 span은 오류로 종료한다. precision/recall은 `(kind,name,lineStart)`의 multiset 일치다. 중복 prediction을 set으로 없애지 않는다. spanAccuracy와 scopeAccuracy는 일치한 선언 중 lineEnd 및 scopedName이 맞는 비율이다. 파싱 실패가 있으면 다른 점수가 높아도 gate 실패다.
+
+## 2026-09-27 기준선
+
+| 엔진 | 언어 | precision | recall | spanAccuracy |
+|---|---|---:|---:|---:|
+| lexical | TypeScript | 100.0% | 34.2% | 92.3% |
+| lexical | Python | 89.3% | 73.5% | 92.0% |
+| lexical | Rust | 82.8% | 85.7% | 54.2% |
+| AST | 세 언어 각각 | 100.0% | 100.0% | 100.0% |
+
+원자료: `lexical-baseline.json`, `ast-baseline.json`. 동일 corpus SHA-256을 기록했다. Node 24/Linux 단일 실행에서 lexical 약 9 ms, AST 약 196 ms였다. 초기 native 로드와 쿼리 컴파일을 포함한다. max RSS는 전체 benchmark 프로세스(tsx 포함)의 최대값이므로 엔진 순수 메모리로 해석하지 않는다.
+
+게이트는 현재 실측치에서 2%p 낮은 0.98이며 언어별로 독립 적용한다. 낮추려면 검토 가능한 근거와 Linear 기록이 필요하다. scorer 회귀검사는 중복 prediction, 빈 결과, 틀린 span/scope를 주입해 gate 실패를 확인한다.
+
+패키지 검사는 임시 prefix에 실제 글로벌 설치 후 CLI를 실행한다. 이어서 해당 임시 설치의 native parser 패키지만 별도 임시 디렉터리로 옮겨 모듈 부재를 실제로 만들고, auto fallback 및 ast 실패를 검증한다. 이 환경의 npm 11.19.0은 글로벌 설치 `--omit=optional`에도 peer로 연결된 parser를 설치했으므로 그 플래그만으로 부재를 가정하지 않는다.
+
+이 코퍼스는 개발 중 구현을 확인하는 회귀 자료다. CodeQL 대비 정확도, 실제 프로젝트의 일반화, 취약점 탐지율 또는 전체 언어 지원을 입증하지 않는다. 이후 심볼/CFG/dataflow/규칙마다 별도 fact family와 독립 정답을 확장한다.
