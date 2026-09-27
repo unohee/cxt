@@ -29,6 +29,7 @@
     "bench:impact": "node --import=tsx bench/impact-accuracy.ts",
     "bench:rules": "node --import=tsx bench/rule-accuracy.ts",
     "bench:incremental": "npm run build && node bench/incremental.mjs",
+    "bench:external": "node --import=tsx bench/external-accuracy.ts",
     "test:package": "npm run build && node scripts/test-packed-frontends.mjs",
     "test:coverage": "vitest run --coverage",
     "prepublishOnly": "npm run build && npm test"

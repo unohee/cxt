@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "revisions": [
+    {
+      "date": "2026-09-27T14:13:42.167Z",
+      "oldSha256": "57dbd26dbc99a25b68e6269df69deddf33a14ecc85b418aff359459891b73acd",
+      "newSha256": "4b4ffcd6f500b6781feb5b4f86797b295d2695686d762f22aa1f790f89dd4e33",
+      "changes": [
+        {
+          "name": "default",
+          "lineStart": 94,
+          "before": "FnvHasher.default",
+          "after": "<FnvHasher as Default>.default"
+        },
+        {
+          "name": "finish",
+          "lineStart": 110,
+          "before": "FnvHasher.finish",
+          "after": "<FnvHasher as Hasher>.finish"
+        },
+        {
+          "name": "write",
+          "lineStart": 115,
+          "before": "FnvHasher.write",
+          "after": "<FnvHasher as Hasher>.write"
+        }
+      ],
+      "reason": "Trait-associated methods must retain the trait to distinguish them from inherent and other trait methods. The v1 author omitted this qualifier; source and analyzer are unchanged.",
+      "evidence": [
+        "fnv.rs:91 impl Default for FnvHasher",
+        "fnv.rs:108 impl Hasher for FnvHasher",
+        "../rust.json rust/trait-impl (pre-existing)",
+        "https://doc.rust-lang.org/reference/paths.html#canonical-paths"
+      ],
+      "firstEvaluation": "../../external-first-evaluation.json"
+    }
+  ]
+}

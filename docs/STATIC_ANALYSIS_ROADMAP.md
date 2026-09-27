@@ -194,3 +194,11 @@ CFG 위 worklist fixed-point solver, reaching definitions/def-use, 값 상태 �
 - 최종 5쌍의 새 프로세스 측정(`/tmp/cxt-incremental-bench-U5UlKV`, `bench/incremental-baseline.json`): cold p50/p95 35.113/40.499초, warm 9.194/11.186초, scan peak RSS 최대 cold 819.7/warm 559.3 MiB. 사전 cold≤60초/warm≤15초/RSS≤1 GiB budget 통과. 59파일/1,603 entities의 10개 실행 facts SHA가 모두 같다. p95는 표본 5개의 최대값이며 호스트에 다른 학습/CI 작업이 실행 중이었다.
 - Local flow 1,083 complete/142 partial, 함수 요약 14 complete/1,211 partial. Warm frontend 59/SCC 1,210 hit는 의미적 coverage 개선이 아니다. Query는 source freshness 미검증을 명시한다. BS/audit의 직접 source 분석은 cache 대상이 아니다.
 - 9 핵심 구현은 In Review. 10 실제/held-out 평가와 CI, 4 resource/ownership 및 AGT-3915 전체 FP 기준은 계속 열린 상태다. 원격 ci-templates의 constitution-gate.yml은 현재 존재함을 확인했지만 Node 언어 workflow는 아직 없다. 전체 목표를 완료로 표시하지 않는다.
+
+## 실행 기록 — 2026-09-27, 10차 실제 선언 코퍼스 착수
+
+- AGT-3878/3879: Zod 4.3.6 util.ts 구간, Ubuntu CPython 3.12.3 fnmatch.py 전체, rust-fnv 1.0.7 lib.rs 구간을 원본/구간/license SHA와 함께 고정했다. `bench:external`은 수기 선언 라벨 32개(TS18/Python6/Rust8)의 span/scope/syntactic export/parameter count를 검증한다. 현재 parser의 출력을 정답으로 사용하지 않는다. source/license/label integrity를 분석 전에 검사하며, vendored 코드의 라이선스를 별도 보존하고 제품 자체 scan에서는 제외한다.
+- 첫 결과 `external-first-evaluation.json`: TS/Python 전 필드 일치, Rust scope 5/8. 원인은 세 trait method 라벨에서 trait 한정자를 누락한 것이었다. Rust Reference와 기존 `rust/trait-impl` 정답에 따라 라벨만 고치고 최초 라벨·SHA·세 수정의 근거를 `expected.v1.json`/`label-revisions.json`에 보존했다. 엔진 변경 없이 정정 회귀 기준선은 모든 지표1.0이다. 첫 결과를 덮어쓰거나 corrected 결과를 unseen 성능으로 주장하지 않는다.
+- 같은 소스 lexical 기준선: TS recall 2/3, Python precision/recall 2/3, Rust precision 8/11/recall1. span/scope/metadata는 `external-lexical-baseline.json`에 별도 기록했다. 세 소스 구간의 선언 평가이며 호출·flow·규칙의 실세계 성능을 의미하지 않는다.
+- 검증: 전체745 tests, 기존 src lint와 신규 benchmark/test의 별도 strict typecheck, AST/lexical gate 실행. source/license/label 변조 및 export/parameter/중복/누락/span/scope mutation의 실패를 확인했다. 로컬 package runtime 변경이 없어 이전 설치 검증을 재사용한다.
+- self/held-out 계층·독립 PR 라벨 리뷰·실제 call/flow/rule 정답·CI는 계속 열린 상태다. AGT-3878/3879는 In Progress를 유지한다.

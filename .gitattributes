@@ -1,0 +1,2 @@
+# Preserve byte-identical upstream license notices, including their whitespace.
+bench/corpus/real-world/PYTHON-COPYRIGHT.txt -whitespace

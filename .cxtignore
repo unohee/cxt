@@ -2,3 +2,5 @@
 # Test files themselves (tests/**/*.test.ts) stay scanned so cxt can use
 # them for test-mapping.
 tests/helpers/
+# 평가용으로 고정한 원본 코드/정답은 제품 자체 scan에 포함하지 않는다.
+bench/corpus/real-world/

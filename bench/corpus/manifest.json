@@ -1,15 +1,19 @@
 {
   "schemaVersion": 1,
-  "tier": "synthetic",
+  "tier": "development",
   "labelProvenance": "Hand-authored source and declaration labels; no scanner-generated oracle",
-  "license": "Apache-2.0",
+  "license": "Apache-2.0 for original fixtures; vendored licenses in real-world/provenance.json",
   "files": [
     { "path": "typescript.json", "language": "typescript", "fixtures": 20 },
     { "path": "python.json", "language": "python", "fixtures": 20 },
     { "path": "rust.json", "language": "rust", "fixtures": 20 },
     { "path": "calls.json", "factFamily": "call-sites", "fixtures": 39 },
-    { "path": "cfg.json", "factFamily": "control-flow", "fixtures": 30 }
+    { "path": "cfg.json", "factFamily": "control-flow", "fixtures": 30 },
+    { "path": "dataflow.json", "factFamily": "dataflow", "fixtures": 27 },
+    { "path": "impact.json", "factFamily": "parameter-value-impact", "fixtures": 15 },
+    { "path": "rules.json", "factFamily": "rules", "fixtures": 42 },
+    { "path": "real-world/provenance.json", "tier": "real-world", "factFamily": "entities-with-metadata", "fixtures": 3, "license": "per-source", "firstEvaluation": "../external-first-evaluation.json", "labelRevisions": "real-world/label-revisions.json" }
   ],
-  "pendingTiers": ["self-corpus", "licensed-real-world-slices", "held-out"],
-  "pendingFacts": ["exported", "paramCount", "dataflow"]
+  "pendingTiers": ["self-corpus", "held-out"],
+  "pendingFacts": ["metadata-for-synthetic-entities", "real-world-call-flow-rule-labels", "independent-label-review"]
 }

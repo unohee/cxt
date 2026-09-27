@@ -2,7 +2,7 @@
 
 추적: [AGT-3878](https://linear.app/intrect/issue/AGT-3878), [AGT-3879](https://linear.app/intrect/issue/AGT-3879).
 
-현재 선언 코퍼스는 언어당 20개, 총 60개 합성 fixture의 선언 100개를 수기로 라벨링했다. 별도의 호출 코퍼스는 다중 파일 사례 39개, 호출 위치 55개다. 소스와 정답을 같은 JSON 파일에서 검토할 수 있다. 현재 parser 출력을 정답으로 생성하지 않는다. export/parameter metadata, 실제 저장소 슬라이스 및 held-out 계층은 후속 작업이며, 기존 P0 전체 완료 조건을 충족했다고 주장하지 않는다.
+합성 선언 코퍼스는 언어당 20개, 총 60개 fixture의 선언 100개를 수기로 라벨링했다. 별도의 호출 코퍼스는 다중 파일 사례 39개, 호출 위치 55개다. 실제 소스 계층은 세 언어 3개 구간/32개 선언과 export/parameter metadata를 추가했다. 현재 parser 출력을 정답으로 생성하지 않으며 라벨 오류 수정 이력도 보존한다. 자기 코드·held-out 계층, 다른 fact family의 실제 소스 정답 및 독립 라벨 리뷰는 후속 작업이며, 기존 P0 전체 완료 조건을 충족했다고 주장하지 않는다.
 
 ## 재현
 
@@ -11,6 +11,7 @@ npm run bench:accuracy
 npm run bench:calls
 npm run bench:cfg
 npm run bench:rules
+npm run bench:external
 npm run bench:incremental
 npm run bench:accuracy -- --engine lexical --no-gate
 npm test
@@ -18,6 +19,12 @@ npm run test:package
 ```
 
 `--output <path>`로 JSON을 저장한다. 기본 AST 실행은 gates.json을 적용하고 실패 시 exit 1이다. `--no-gate`는 과거 lexical 기준선 측정용이며 보고서에 `gateEnforced: false`가 표시된다. `--engine lexical`만 지정하면 현재 AST 게이트를 통과하지 못하고 exit 1이 된다.
+
+## 실제 소스 선언 계층
+
+`npm run bench:external`은 Zod 4.3.6(TypeScript), CPython 3.12(Python), rust-fnv 1.0.7(Rust)의 고정 소스 구간과 수기 라벨 32개를 검사한다. 각 소스의 라이선스·패키지 버전·원본/구간/라벨 SHA는 `corpus/real-world/provenance.json`에 있다. span/scope와 syntactic export/parameter count를 각각 측정하고, source/license/label hash가 달라지면 분석 전에 실패한다. Declaration 네 지표는 각각 ≥0.98, export/parameter 지표는 1.0을 요구한다. 중복·누락·위치·scope·export·parameter mutation이 게이트를 실패시키는지 검사한다.
+
+첫 결과 `external-first-evaluation.json`은 TS/Python 전 지표 1.0, Rust scope 5/8이었다. 수기 라벨이 세 trait method에서 trait 한정자를 누락한 것이 원인이며 Rust Reference 및 기존 `rust/trait-impl` 계약에 따라 정정했다. 최초 라벨과 SHA, 정확한 세 수정은 `expected.v1.json`/`label-revisions.json`에 보존했다. 엔진 변경 없이 정정 결과 `external-baseline.json`은 32개 전 지표 1.0이다. 이 결과는 라벨 검토 후 회귀 기준선이며 unseen 평가나 독립 PR 리뷰 결과로 부르지 않는다. 선택한 소스 구간의 선언/metadata 정확도이고 calls/flow/rules의 실제 소스 정확도를 측정한 것은 아니다.
 
 ## 증분 성능
 
