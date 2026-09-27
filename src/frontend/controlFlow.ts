@@ -115,7 +115,20 @@ export function buildControlFlow(callable: Node, filePath: string, owner: string
       decision(node);
       return { normal: [port(test, 'true')], abrupt: [...value.abrupt, { kind: 'return', port: port(test, 'false') }] };
     }
-    if (['await_expression', 'yield_expression', 'yield', 'await', 'async_block', 'gen_block', 'try_block'].includes(node.type)) {
+    if (node.type === 'await_expression' || node.type === 'await') {
+      // 중단은 함수의 정상 반환이 아니다. resume/exception은 재개 시 가능한
+      // 결과이며 실제 재개 여부나 스케줄러의 진행을 보장하지 않는다.
+      let value = plain(incoming);
+      for (const child of node.namedChildren) {
+        const next = expression(child, value.normal);
+        value = { normal: next.normal, abrupt: [...value.abrupt, ...next.abrupt] };
+      }
+      const suspended = emit('suspend', node, value.normal);
+      graph.suspensionExit ??= emit('suspend-exit', callable, [], 'suspended');
+      edge(port(suspended, 'suspend'), graph.suspensionExit);
+      return { normal: [port(suspended, 'resume')], abrupt: [...value.abrupt, { kind: 'throw', port: port(suspended, 'exception') }] };
+    }
+    if (['yield_expression', 'yield', 'async_block', 'gen_block', 'try_block'].includes(node.type)) {
       diagnostic(node, `Suspension or non-local expression requires a state model: ${node.type}`);
     }
     if (node.type === 'macro_invocation') diagnostic(node, 'Rust macro expansion is unavailable');

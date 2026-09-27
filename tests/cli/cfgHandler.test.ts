@@ -12,7 +12,7 @@ afterEach(() => { closeRegistryStore(); vi.restoreAllMocks(); process.exitCode =
 
 describe('CFG CLI', () => {
   it('reads source-located stored graphs and distinguishes partial from absent', async () => {
-    writeFileSync(join(dir, 'x.ts'), 'function complete(x){if(x) return 1; return 2;}\nasync function partial(){await work();}\nconst value=1;');
+    writeFileSync(join(dir, 'x.ts'), 'function complete(x){if(x) return 1; return 2;}\nfunction* partial(){yield work();}\nconst value=1;');
     const result = await scanRepository(dir, 'cfg-cli', { parser: 'ast' });
     expect(result.errors).toEqual([]);
     expect(result.controlFlow).toMatchObject({ total: 2, complete: 1, partial: 1 });

@@ -169,7 +169,7 @@ describe('AST control flow', () => {
     const outer = graph('function f(){function inner(){return 1;} after();}');
     expect(nodes(outer, 'return 1;')).toEqual([]);
     expect(reachableNodes(outer).has(nodes(outer, 'after()')[0].id)).toBe(true);
-    expect(graph('async function f(){await work();}').completeness).toBe('partial');
+    expect(graph('function* f(){yield 1;}').completeness).toBe('partial');
     expect(graph('fn f(){panic!("bad");}', 'rust').diagnostics[0].message).toContain('macro');
   });
 
@@ -180,5 +180,31 @@ describe('AST control flow', () => {
     expect(cfg.completeness).toBe('partial');
     expect(cfg.diagnostics[0].code).toBe('budget-exceeded');
     expect(cfg.nodes).toHaveLength(5);
+  });
+
+  it.each([
+    ['typescript', 'async function f(){try{await work();}finally{cleanup();}after();}'],
+    ['python', 'async def f():\n try:\n  await work()\n finally:\n  cleanup()\n after()'],
+  ] as const)('models %s await suspension, resumed success and failure through cleanup', (language, source) => {
+    const cfg = graph(source, language);
+    expect(cfg.completeness).toBe('complete');
+    const awaited = cfg.nodes.find(n => n.kind === 'suspend')!;
+    expect(awaited).toBeDefined();
+    const suspended = cfg.edges.find(e => e.from === awaited.id && e.kind === 'suspend')!;
+    const resumed = cfg.edges.find(e => e.from === awaited.id && e.kind === 'resume')!;
+    const rejected = cfg.edges.find(e => e.from === awaited.id && e.kind === 'exception')!;
+    expect(suspended.to).toBe(cfg.suspensionExit);
+    expect(cfg.edges.filter(e => e.from === suspended.to)).toEqual([]);
+    expect(nodes(cfg, 'cleanup()').some(n => reachableNodes(cfg, resumed.to).has(n.id))).toBe(true);
+    expect(nodes(cfg, 'cleanup()').some(n => reachableNodes(cfg, rejected.to).has(n.id))).toBe(true);
+    expect(nodes(cfg, 'after()').some(n => reachableNodes(cfg, rejected.to).has(n.id))).toBe(false);
+    expect(reachableNodes(cfg, rejected.to).has(cfg.exceptionExit)).toBe(true);
+  });
+
+  it('models Rust await inside the current function and leaves deferred async-block semantics partial', () => {
+    const cfg = graph('async fn f(){work().await;after();}', 'rust');
+    expect(cfg.completeness).toBe('complete');
+    expect(cfg.nodes.some(n => n.kind === 'suspend')).toBe(true);
+    expect(graph('fn f(){let future=async {work().await;};}', 'rust').completeness).toBe('partial');
   });
 });

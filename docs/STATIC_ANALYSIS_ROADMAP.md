@@ -129,3 +129,10 @@ CFG 위 worklist fixed-point solver, reaching definitions/def-use, 값 상태 �
 - 검증: lint/build, Vitest 494개, 선언/호출/CFG 게이트, 실제 npm 설치 CLI의 CFG complete/partial strict exit 0/2 및 기존 호출·parser fallback 검사 통과. v4→v5 migration 및 snapshot rollback 확인.
 - 최종 소스 격리 scan(`/tmp/cxt-cfg-verified-iojxfO`): 36 files / 964 entities / errors 0. CFG 721개 중 complete 674 / partial 47, 47,784 nodes / 59,443 edges / 16,775 blocks. 127개 await 및 1개 yield 지점이 partial의 원인이다. audit critical 0 / warning 22 / minor 13 / errors 0 / pass true.
 - 남은 범위: await/yield suspension, comprehensions/macros/exception groups 및 더 넓은 독립 평가. CFG complete는 이 모델 내 제어구조 변환 완료이며 실행 경로의 값·타입 타당성, 종료 보장, 전체 runtime 의미를 입증하지 않는다. AGT-4566은 추가 지원을 위해 In Progress로 유지한다.
+
+### 3차 후속 — await suspension
+
+- await를 별도 suspension terminal과 `suspend`/`resume`/exception edge로 낮췄다. TS/Python await 실패는 catch/finally 경로를 따르고 정상 후속 문장으로 새지 않는다. Rust await도 명시하며 deferred async block과 yield는 partial로 유지한다. scheduler가 실제 재개한다는 보장은 하지 않는다.
+- CFG 코퍼스는 30개/경로 54개로 확장했다. 언어별 complete 9/partial 1이며 모든 정답과 일치한다. 기존 unsupported-await negative는 지원 완료 후 yield로 교체하고 세 언어의 await positive를 별도로 추가했다.
+- 검증: lint/build, 전체 테스트 500개, CFG gate, 실제 패키지 설치 CLI의 await resume edge·strict 0/2 확인. 최신 소스 snapshot `/tmp/cxt-await-verified-0WfxF9`: 36 files / 965 entities / errors 0. CFG 722개 중 complete 721 / partial 1(yield), 47,938 nodes / 59,701 edges / 16,852 blocks. 46개 CFG가 suspension을 포함한다. audit critical 0 / warning 22 / minor 13 / errors 0 / pass true.
+- 3 구현을 In Review로 옮기고 4 함수 내부 dataflow를 시작한다. yield/async iteration/macros/exception groups/독립 평가와 전체 10개 목표는 미완료다.

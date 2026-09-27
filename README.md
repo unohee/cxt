@@ -157,7 +157,7 @@ basic blocks, reachability, structural complexity and completeness diagnostics.
 
 Supported control includes if/elif, short-circuit/ternary/optional chaining/logical assignment,
 loops and labeled jumps, switch fallthrough, match guards, return/throw,
-try/catch/else/finally, Python with/loop-else and Rust `?`.
+try/catch/else/finally, Python with/loop-else, Rust `?` and explicit await suspension/resumption.
 Cleanup paths are copied per pending completion to preserve finally overrides.
 Unknown call/member effects may throw; exception-type and value feasibility are approximated.
 `structuralComplexity` counts explicit decision sites plus one, without counting implicit
@@ -165,7 +165,10 @@ exception edges or copied finally bodies again.
 
 `complete` means the builder lowered the function's control constructs within this model;
 it does not establish path feasibility, termination, type correctness or full runtime semantics.
-Await/yield, comprehensions, macros, exception groups and unproved Rust match exhaustiveness
+Await uses a separate suspension terminal, `suspend`/`resume` edges and an exceptional
+resumption path through handlers/cleanup. This describes possible continuations and does
+not guarantee that the scheduler resumes a suspended task.
+Yield/deferred async blocks, async iteration, comprehensions, macros, exception groups and unproved Rust match exhaustiveness
 produce `partial` diagnostics. A per-function node budget also produces `partial`.
 Lexical files and function signatures without bodies have no CFG.
 Run `npm run bench:cfg` for the handwritten development reachability/complexity corpus.

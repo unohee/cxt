@@ -8,10 +8,10 @@ export interface SourceSpan {
   startOffset: number;
   endOffset: number;
 }
-export type CfgEdgeKind = 'normal' | 'true' | 'false' | 'back' | 'return' | 'throw' | 'exception' | 'break' | 'continue';
+export type CfgEdgeKind = 'normal' | 'true' | 'false' | 'back' | 'return' | 'throw' | 'exception' | 'break' | 'continue' | 'suspend' | 'resume';
 export interface CfgNode {
   id: number;
-  kind: 'entry' | 'exit' | 'exception-exit' | 'operation' | 'condition' | 'return' | 'throw' | 'break' | 'continue' | 'join' | 'cleanup';
+  kind: 'entry' | 'exit' | 'exception-exit' | 'suspend-exit' | 'suspend' | 'operation' | 'condition' | 'return' | 'throw' | 'break' | 'continue' | 'join' | 'cleanup';
   astType: string;
   text: string;
   span: SourceSpan;
@@ -31,6 +31,7 @@ export interface ControlFlowGraph {
   entry: number;
   exit: number;
   exceptionExit: number;
+  suspensionExit?: number;
   nodes: CfgNode[];
   edges: CfgEdge[];
   blocks: BasicBlock[];

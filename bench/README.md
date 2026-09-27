@@ -53,8 +53,8 @@ Zod로 언어/종류/범위/필수 필드를 검증하고, 중복 fixture ID 및
 
 ## CFG 정답과 게이트 — AGT-4566
 
-`corpus/cfg.json`은 언어별 9개, 총 27개의 수기 fixture다. `complexity`, `completeness`, `paths: [fromNodeText, toNodeText, reachable]`가 정답이다. 호출·멤버 접근의 잠재 예외를 포함하는 CFG에서 경로를 확인한다. 존재하지 않는 label은 negative 경로가 맞았다고 세지 않는다. 언어마다 의도적으로 미지원인 구문 1개를 넣어 `partial` 보고도 검사한다.
+`corpus/cfg.json`은 언어별 10개, 총 30개의 수기 fixture다. `complexity`, `completeness`, `paths: [fromNodeText, toNodeText, reachable]`가 정답이다. 호출·멤버 접근의 잠재 예외를 포함하는 CFG에서 경로를 확인한다. 존재하지 않는 label은 negative 경로가 맞았다고 세지 않는다. 언어마다 의도적으로 미지원인 구문 1개를 넣어 `partial` 보고도 검사한다. await 구현 후 기존 TypeScript 미지원 예제를 yield로 교체하고, 세 언어의 await 중단/재개 정답을 추가했다. 중단 terminal에서 후속 문장으로 직접 이동할 수 없으며 재개 edge는 별도로 존재한다.
 
 `structuralComplexity`는 명시적 분기 지점 + 1이다. if/elif, 조건이 있는 loop, switch의 비-default case, match의 비-wildcard arm, guard/catch, 단락 평가, 기본 매개변수, Rust `?`, with 예외 억제 분기를 센다. 암묵적 예외 edge와 finally 경로 복제는 중복 계산하지 않는다. 전체 예외 그래프의 E−N+2 수치와는 구분한다.
 
-게이트: 그래프 생성률 ≥0.98, 구조 복잡도 정확도 ≥0.95, completeness 및 경로 정답 100%. `cfg-baseline.json`: 언어별 9/9 생성, 그중 complete 8/partial 1, 총 경로 45/45, 복잡도 27/27. **생성률은 완전 지원률이 아니다.** 누락 그래프·틀린 복잡도·조작된 completeness·return 뒤 우회 edge·없는 노드 mutation을 모두 실패시킨다. basic block은 모든 노드를 정확히 한 번 포함하고 블록 사이 edge를 보존하는지도 검사한다. 실제 언어/프로젝트 일반화와 path feasibility는 독립 후속 평가 대상이다.
+게이트: 그래프 생성률 ≥0.98, 구조 복잡도 정확도 ≥0.95, completeness 및 경로 정답 100%. `cfg-baseline.json`: 언어별 10/10 생성, 그중 complete 9/partial 1, 총 경로 54/54, 복잡도 30/30. **생성률은 완전 지원률이 아니다.** 누락 그래프·틀린 복잡도·조작된 completeness·return 뒤 우회 edge·없는 노드 mutation을 모두 실패시킨다. basic block은 모든 노드를 정확히 한 번 포함하고 블록 사이 edge를 보존하는지도 검사한다. 실제 언어/프로젝트 일반화와 path feasibility는 독립 후속 평가 대상이다.
