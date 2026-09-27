@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { extractFile } from '../../src/registry/entityScanner.js';
-import { analyzeDataflow } from '../../src/analysis/dataflow.js';
+import { analyzeDataflow, mergeValue, type AbstractValue } from '../../src/analysis/dataflow.js';
 import type { AstLanguage } from '../../src/frontend/types.js';
 
 function analyze(source: string, language: AstLanguage = 'typescript', iterationBudget?: number) {
@@ -11,6 +11,22 @@ function analyze(source: string, language: AstLanguage = 'typescript', iteration
 const returnedAtoms = (result: ReturnType<typeof analyze>['result']) => [...new Set(result.returns.flatMap(r => r.value.atoms))].sort();
 
 describe('intraprocedural fixed point', () => {
+  it('widens joined values while keeping distinct Unicode definitions and their parameter provenance', () => {
+    const make = (definition: string, atoms: string[], parameter: string): AbstractValue => ({
+      atoms, definitions: [definition], parameters: [parameter], alternatives: [{ definition, atoms, parameters: [parameter] }],
+    });
+    const first = make('é', ['number:1', 'number:2', 'number:3', 'number:4', 'number:5'], 'a');
+    const second = make('e\u0301', ['number:6', 'number:7', 'number:8', 'number:9'], 'b');
+    const joined = mergeValue(first, second);
+    expect(joined.atoms).toEqual(['*number']);
+    expect(joined.alternatives).toHaveLength(2);
+    expect(joined.alternatives.find(choice => choice.definition === 'é')?.parameters).toEqual(['a']);
+    expect(joined.alternatives.find(choice => choice.definition === 'e\u0301')?.parameters).toEqual(['b']);
+    expect(mergeValue(joined, make('é', ['number:6', 'number:7', 'number:8', 'number:9'], 'c')).alternatives
+      .find(choice => choice.definition === 'é')).toEqual({ definition: 'é', atoms: ['*number'], parameters: ['a', 'c'] });
+    expect(first.atoms).toHaveLength(5);
+  });
+
   it.each([
     ['typescript', 'function f(input){let x=input;let saved=x;x=2;return saved;}'],
     ['python', 'def f(input):\n x=input\n saved=x\n x=2\n return saved'],

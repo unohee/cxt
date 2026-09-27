@@ -48,6 +48,7 @@ export { scanRepository as scanBs, scanFile as scanFileForBs, scanFileContent, a
 export { analyzeFileContent, scanLegacyFileContent } from './registry/bsDetector.js';
 export { toSarif } from './analysis/sarif.js';
 export { analysisOutcome, bsOutcome, scanOutcome, fingerprintFindings } from './analysis/report.js';
+export { factQuerySchema, factViews, type FactQuery } from './analysis/factQuery.js';
 export { builtInRules, builtInRulePack, rulePackSchema, ruleConfigSchema } from './analysis/rulePack.js';
 export type { BsIssue, BsScanResult, BsSeverity } from './registry/bsDetector.js';
 

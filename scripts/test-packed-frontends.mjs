@@ -99,6 +99,35 @@ for (const mode of ['full', 'missing']) {
     env: { ...process.env, CXT_PARSER: 'auto' } });
   assert.equal(sarifScan.status, 2, sarifScan.stderr + sarifScan.stdout);
   assert.ok(validateSarif(JSON.parse(sarifScan.stdout)), JSON.stringify(validateSarif.errors));
+  const runStored = (args) => {
+    const path = join(scratch, `stored-${mode}.mjs`);
+    writeFileSync(path, `
+      import { pathToFileURL } from 'node:url';
+      const api = await import(pathToFileURL(${JSON.stringify(join(installed, 'dist', 'index.js'))}));
+      api.getRegistryStore(${JSON.stringify(join(scratch, `${mode}.db`))});
+      process.argv = [process.execPath, ${JSON.stringify(join(installed, 'dist', 'cli.js'))}, ...${JSON.stringify(args)}];
+      await import(pathToFileURL(${JSON.stringify(join(installed, 'dist', 'cli.js'))}));
+    `);
+    return spawnSync(process.execPath, [path], { cwd: source, encoding: 'utf8', timeout: 30_000,
+      env: { ...process.env, CXT_PARSER: 'auto' } });
+  };
+  const warm = runStored(['scan', '--json']);
+  assert.equal(warm.status, 2, warm.stderr + warm.stdout);
+  assert.equal(JSON.parse(warm.stdout).cache.frontendHits, mode === 'full' ? 6 : 0);
+  if (mode === 'missing') assert.ok(JSON.parse(warm.stdout).diagnostics.some(item => item.code === 'parser-unavailable'));
+  assert.equal(JSON.parse(warm.stdout).cache.summaryMisses, 0);
+  const full = runStored(['scan', '--full', '--json']);
+  assert.equal(full.status, 2, full.stderr + full.stdout);
+  assert.equal(JSON.parse(full.stdout).cache.frontendHits, 0);
+  const queried = runStored(['query', 'entities', '--limit', '2', '--json']);
+  assert.equal(queried.status, 0, queried.stderr + queried.stdout);
+  assert.equal(JSON.parse(queried.stdout).rows.length, 2);
+  assert.equal(JSON.parse(queried.stdout).freshness, 'not-verified');
+  const mutation = runStored(['query', 'entities', '--order-by', 'name; DELETE FROM code_entities', '--json']);
+  assert.equal(mutation.status, 3, mutation.stderr + mutation.stdout);
+  assert.equal(JSON.parse(mutation.stdout).outcome.status, 'failed');
+  assert.equal(runStored(['query', 'entities', '--limit', '2', '--json']).stdout, queried.stdout);
+  console.log(`${mode}: installed cache/full-scan and restricted fact-query CLI passed`);
   if (mode === 'full') {
     assert.equal(parsedBs.analysis.engines.ast, 3);
     assert.deepEqual(parsedBs.issues.map(issue => issue.ruleId).sort(), ['cxt/debugger-statement', 'cxt/uninitialized-read']);

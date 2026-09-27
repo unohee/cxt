@@ -7,7 +7,7 @@ import { assertOutputOptions, scanOutcome, failedBsScan, bsOutcome } from '../an
 import { toSarif } from '../analysis/sarif.js';
 const c = { reset: '\x1b[0m', bold: '\x1b[1m', dim: '\x1b[2m', red: '\x1b[31m', green: '\x1b[32m', yellow: '\x1b[33m', cyan: '\x1b[36m' };
 
-export async function handleScan(opts: { json?: boolean; sarif?: boolean; verbose?: boolean; project?: string }): Promise<void> {
+export async function handleScan(opts: { json?: boolean; sarif?: boolean; verbose?: boolean; project?: string; full?: boolean }): Promise<void> {
   assertOutputOptions(opts);
   try {
     const store = getRegistryStore();
@@ -23,6 +23,7 @@ export async function handleScan(opts: { json?: boolean; sarif?: boolean; verbos
     }
     const result = await scanRepository(projectPath, projectId, {
       verbose: opts.verbose && !opts.json && !opts.sarif,
+      full: opts.full,
     });
 
     const outcome = scanOutcome(result);
@@ -36,6 +37,7 @@ export async function handleScan(opts: { json?: boolean; sarif?: boolean; verbos
     }
     console.log(`${c.bold}${outcome.status === 'complete' ? m.scanComplete : m.scanIncomplete}${c.reset}`);
     console.log(`  Analysis: ${outcome.status}`);
+    console.log(`  Cache: frontend ${result.cache.frontendHits} reused / ${result.cache.frontendMisses} computed; summaries ${result.cache.summaryHits} reused / ${result.cache.summaryMisses} computed; committed=${result.cache.committed}`);
     console.log(`${'─'.repeat(40)}`);
     console.log(`  ${m.filesScanned.padEnd(16)}${c.bold}${result.scanned}${c.reset}`);
     console.log(`  ${m.entitiesFound.padEnd(16)}${c.bold}${result.extracted}${c.reset}`);

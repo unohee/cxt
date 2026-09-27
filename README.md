@@ -16,6 +16,7 @@ npm install && npm run build && npm link
 # Scan codebase → register entities to local SQLite registry
 cxt scan
 cxt scan -v              # verbose output
+cxt scan --full          # recompute facts and replace caches
 
 # Query registry
 cxt check --stats        # current project statistics
@@ -28,6 +29,7 @@ cxt check --deprecated   # deprecated entities
 cxt check --tag <tag>    # filter by tag
 cxt check --tree         # directory tree view
 cxt check --ci           # CI/CD mode (JSON output, exit 1 on critical)
+cxt query calls --where '[{"column":"resolution","op":"eq","value":"unresolved"}]' --json
 
 # Call-graph queries (after cxt scan)
 cxt who-calls <name>     # entities that call/extend/implement <name>
@@ -198,6 +200,19 @@ Direct named imports and proven aliases are supported. Namespace callable proof,
 framework callbacks and resource lifecycles remain incomplete. User JSON packs
 are schema checked before scan; invalid packs preserve the previous snapshot.
 See [configuration, schema and limits](docs/LIBRARY_MODELS.md).
+
+## Incremental facts and bounded queries
+
+`scan` reuses file frontend and function-component caches by content, engine,
+parser, linked call dependencies and model manifest. All facts and caches commit
+as one snapshot; failed scans preserve the previous snapshot. `scan --full`
+recomputes every stage. Cache hits retain the original completeness diagnostics.
+
+`query entities|calls|cfg|flows|summaries` reads persisted facts using allowlisted
+columns, bound `eq`/`prefix` filters and a maximum of 500 rows. It accepts no raw
+SQL. JSON explicitly reports `freshness: not-verified`; refresh with `scan` before
+using the results for the current checkout. See [contracts and performance
+measurements](docs/INCREMENTAL_FACTS.md).
 
 ## Change Preflight (impact / risk / test gap)
 

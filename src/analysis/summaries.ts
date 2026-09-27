@@ -4,6 +4,7 @@ import type { FunctionSummary, SummaryParameter } from './summaryTypes.js';
 import type { DataExpr } from './dataflowTypes.js';
 import { analyzeDataflow, applicableCallSummary, mergeValue, type DataflowResult } from './dataflow.js';
 import { externalKey, modelSummary, type LibraryModelCatalog } from './libraryModels.js';
+import { hashText, type AnalysisCache } from './cache.js';
 
 const sorted = (values: string[]) => [...new Set(values)].sort();
 const topAtoms = ['*boolean', '*function', '*number', '*object', '*string', 'null', 'undefined', 'unit'];
@@ -12,7 +13,9 @@ export interface SummaryAnalysis {
   flows: DataflowResult[];
   summaries: FunctionSummary[];
   components: string[][];
+  cache: { reusedComponents: number; computedComponents: number };
 }
+interface CachedComponent { flows: DataflowResult[]; summaries: FunctionSummary[] }
 
 /** 원본 CFG를 보존하고 resolved call의 정확한 source span만 effect에 연결한다. */
 export function linkSummaryCalls(graphs: ControlFlowGraph[], sites: ResolvedCallSite[], models?: LibraryModelCatalog): ControlFlowGraph[] {
@@ -169,12 +172,14 @@ function joinSummary(left: FunctionSummary, right: FunctionSummary): FunctionSum
       bindings: sorted([...left.effects.bindings, ...right.effects.bindings]), parameters: sorted([...left.effects.parameters, ...right.effects.parameters]) } };
 }
 
-export function analyzeSummaries(input: ControlFlowGraph[], sites: ResolvedCallSite[], options: { componentIterationBudget?: number; checkDeadline?: () => void; models?: LibraryModelCatalog } = {}): SummaryAnalysis {
+export function analyzeSummaries(input: ControlFlowGraph[], sites: ResolvedCallSite[], options: { componentIterationBudget?: number; checkDeadline?: () => void; models?: LibraryModelCatalog;
+  cache?: AnalysisCache; engineKey?: string } = {}): SummaryAnalysis {
   const limit = options.componentIterationBudget ?? 16;
   if (!Number.isSafeInteger(limit) || limit < 1) throw new RangeError('componentIterationBudget must be a positive safe integer');
   const graphs = linkSummaryCalls(input, sites, options.models), byOwner = new Map(graphs.map(graph => [graph.owner, graph]));
   const components = summaryComponents(graphs), summaries = new Map<string, FunctionSummary>(), flows = new Map<string, DataflowResult>();
   const contexts = new Map<string, string>();
+  const cache = { reusedComponents: 0, computedComponents: 0 };
   const solve = (graph: ControlFlowGraph) => {
     options.checkDeadline?.();
     const context = JSON.stringify(Object.values(graph.dataflow?.effects ?? {}).filter(effect => effect.value.kind === 'call').map(effect => {
@@ -187,6 +192,26 @@ export function analyzeSummaries(input: ControlFlowGraph[], sites: ResolvedCallS
   };
   components.forEach((component, id) => component.forEach(owner => summaries.set(owner, seed(byOwner.get(owner)!, id))));
   for (const component of components) {
+    options.checkDeadline?.();
+    const members = new Set(component);
+    const dependencies = sorted(component.flatMap(owner => Object.values(byOwner.get(owner)!.dataflow?.effects ?? {})
+      .flatMap(effect => effect.value.kind === 'call' && effect.value.target && !members.has(effect.value.target) ? [effect.value.target] : [])));
+    const cacheKey = hashText(JSON.stringify(component));
+    const inputHash = hashText(JSON.stringify({ engine: options.engineKey, limit, graphs: component.map(owner => byOwner.get(owner)),
+      dependencies: dependencies.map(owner => {
+        const summary = summaries.get(owner);
+        return [owner, summary ? { ...summary, component: 0, iterations: 0 } : null];
+      }), models: options.models?.manifest }));
+    const cached = options.cache?.get('summary', cacheKey, inputHash) as CachedComponent | undefined;
+    if (cached) {
+      const id = summaries.get(component[0])!.component;
+      for (const summary of cached.summaries) summaries.set(summary.owner, { ...summary, component: id });
+      for (const flow of cached.flows) flows.set(flow.owner, flow);
+      cache.reusedComponents++;
+      options.cache!.set('summary', cacheKey, inputHash, cached);
+      continue;
+    }
+    cache.computedComponents++;
     const recursive = component.length > 1 || Object.values(byOwner.get(component[0])!.dataflow?.effects ?? {})
       .some(effect => effect.value.kind === 'call' && effect.value.target === component[0]);
     let converged = false;
@@ -208,6 +233,7 @@ export function analyzeSummaries(input: ControlFlowGraph[], sites: ResolvedCallS
         solve(byOwner.get(owner)!);
       }
     }
+    options.cache?.set('summary', cacheKey, inputHash, { flows: component.map(owner => flows.get(owner)!), summaries: component.map(owner => summaries.get(owner)!) });
   }
-  return { graphs, flows: [...flows.values()], summaries: [...summaries.values()], components };
+  return { graphs, flows: [...flows.values()], summaries: [...summaries.values()], components, cache };
 }

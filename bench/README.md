@@ -11,12 +11,17 @@ npm run bench:accuracy
 npm run bench:calls
 npm run bench:cfg
 npm run bench:rules
+npm run bench:incremental
 npm run bench:accuracy -- --engine lexical --no-gate
 npm test
 npm run test:package
 ```
 
 `--output <path>`로 JSON을 저장한다. 기본 AST 실행은 gates.json을 적용하고 실패 시 exit 1이다. `--no-gate`는 과거 lexical 기준선 측정용이며 보고서에 `gateEnforced: false`가 표시된다. `--engine lexical`만 지정하면 현재 AST 게이트를 통과하지 못하고 exit 1이 된다.
+
+## 증분 성능
+
+`npm run bench:incremental -- /absolute/git/repo 5`는 입력을 임시 snapshot에 고정하고 cold/warm을 각각 새 프로세스에서 측정한다. 전체 fact 내용의 동등성, 사전 cold 60초/warm 15초/scan peak RSS 1 GiB budget을 검사하며 모든 raw 결과와 DB를 보존한다. 표본 5개 p95는 최대값이다. [무효화·질의·측정 계약](../docs/INCREMENTAL_FACTS.md)을 참고한다.
 
 ## 정답 포맷
 

@@ -20,6 +20,11 @@ import type { ResolvedCallSite, SymbolValue } from '../analysis/symbols.js';
 import type { ControlFlowGraph } from '../analysis/cfg.js';
 import type { DataflowResult } from '../analysis/dataflow.js';
 import type { FunctionSummary } from '../analysis/summaryTypes.js';
+import { hashText, type AnalysisCacheEntry, type CacheKind } from '../analysis/cache.js';
+import { compileFactQuery, factViews, type FactQuery } from '../analysis/factQuery.js';
+
+// 테이블 교체 중 SQLite가 이전 view를 재검증하지 않도록 파생 view만 제거한다.
+const DROP_FACT_VIEWS = Object.keys(factViews).map(name => `DROP VIEW IF EXISTS cxt_query_${name};`).join('\n');
 
 function boundedPagination(value: number | undefined, fallback: number, min: number, max: number, name: string): number {
   const resolved = value ?? fallback;
@@ -194,7 +199,7 @@ export class SqliteRegistryStore {
   //           omitted — P1 (tree-sitter frontend) is expected to extend
   //           EntityKind and pinning it now would force another rebuild.
   //           relations' relation_type CHECK moves to P2 v4 (code_call_sites).
-  private static readonly SCHEMA_VERSION = 8;
+  private static readonly SCHEMA_VERSION = 9;
 
   // The last version in which the FTS index schema (set of indexed columns)
   // changed. Decoupled from the user_version bump: through v2 "version went up"
@@ -376,6 +381,7 @@ export class SqliteRegistryStore {
             ${SqliteRegistryStore.entityTableDdl('code_entities_v2')}
             INSERT OR IGNORE INTO code_entities_v2 (${v2CopyCols})
               SELECT ${v2CopyCols} FROM code_entities;
+            ${DROP_FACT_VIEWS}
             DROP TABLE code_entities;
             ALTER TABLE code_entities_v2 RENAME TO code_entities;
             `);
@@ -393,7 +399,7 @@ export class SqliteRegistryStore {
     const refreshedColInfo = this.db.prepare("PRAGMA table_info(code_entities)").all() as Array<{ name: string; notnull: number }>;
     const refreshedCols = new Map(refreshedColInfo.map(r => [r.name, r]));
     const lineStartCol = refreshedCols.get('line_start');
-    if (lineStartCol && lineStartCol.notnull === 1) {
+    if (currentVersion <= SqliteRegistryStore.SCHEMA_VERSION && lineStartCol && lineStartCol.notnull === 1) {
       this.db.pragma('foreign_keys = OFF');
       try {
         this.db.transaction(() => this.db.exec(`
@@ -444,6 +450,7 @@ export class SqliteRegistryStore {
           ${refreshedCols.has('notes') ? "COALESCE(notes, '')" : "''"},
           created_at, updated_at
         FROM code_entities;
+        ${DROP_FACT_VIEWS}
         DROP TABLE code_entities;
         ALTER TABLE code_entities_new RENAME TO code_entities;
         `))();
@@ -536,6 +543,7 @@ export class SqliteRegistryStore {
             ${SqliteRegistryStore.entityTableDdl('code_entities_v3')}
             INSERT INTO code_entities_v3 (${v3CopyCols})
               SELECT ${v3CopyCols} FROM code_entities;
+            ${DROP_FACT_VIEWS}
             DROP TABLE code_entities;
             ALTER TABLE code_entities_v3 RENAME TO code_entities;
             `);
@@ -679,6 +687,31 @@ export class SqliteRegistryStore {
           project_id TEXT PRIMARY KEY NOT NULL,
           manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json))
         );
+        CREATE TABLE IF NOT EXISTS code_analysis_cache (
+          project_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('frontend', 'summary')),
+          cache_key TEXT NOT NULL,
+          input_hash TEXT NOT NULL,
+          payload_hash TEXT NOT NULL,
+          payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+          PRIMARY KEY (project_id, kind, cache_key)
+        );
+        CREATE VIEW IF NOT EXISTS cxt_query_entities AS SELECT project_id, qualified_name, name, file_path, kind, status, risk_level, has_tests, line_start, line_end FROM code_entities;
+        CREATE VIEW IF NOT EXISTS cxt_query_calls AS SELECT c.project_id, c.file_path, c.line, c.column_number, source.qualified_name AS caller, target.qualified_name AS target, c.resolution, c.reason, c.confidence
+          FROM code_call_sites c LEFT JOIN code_entities source ON source.id = c.caller_id AND source.project_id = c.project_id
+          LEFT JOIN code_entities target ON target.id = c.target_id AND target.project_id = c.project_id;
+        CREATE VIEW IF NOT EXISTS cxt_query_cfg AS SELECT f.project_id, e.qualified_name AS owner, e.file_path, f.completeness,
+          json_array_length(f.graph_json, '$.nodes') AS node_count, json_array_length(f.graph_json, '$.edges') AS edge_count,
+          json_extract(f.graph_json, '$.structuralComplexity') AS structural_complexity
+          FROM code_control_flow f JOIN code_entities e ON e.id = f.owner_id AND e.project_id = f.project_id;
+        CREATE VIEW IF NOT EXISTS cxt_query_flows AS SELECT f.project_id, e.qualified_name AS owner, e.file_path, f.completeness,
+          json_extract(f.result_json, '$.iterations') AS iterations, json_array_length(f.result_json, '$.unknownEffects') AS unknown_effect_count,
+          json_array_length(f.result_json, '$.definitions') AS definition_count
+          FROM code_dataflow f JOIN code_entities e ON e.id = f.owner_id AND e.project_id = f.project_id;
+        CREATE VIEW IF NOT EXISTS cxt_query_summaries AS SELECT f.project_id, e.qualified_name AS owner, e.file_path, f.completeness,
+          json_extract(f.summary_json, '$.mayReturn') AS may_return, json_extract(f.summary_json, '$.mayThrow') AS may_throw,
+          json_extract(f.summary_json, '$.returnParameters') AS return_parameters, json_extract(f.summary_json, '$.returnAtoms') AS return_atoms
+          FROM code_function_summaries f JOIN code_entities e ON e.id = f.owner_id AND e.project_id = f.project_id;
       `)).immediate();
       this.db.transaction(() => {
         const columns = this.db.prepare('PRAGMA table_info(code_call_sites)').all() as Array<{ name: string }>;
@@ -755,6 +788,28 @@ export class SqliteRegistryStore {
   }
 
   // ============ 엔티티 CRUD ============
+
+  queryFacts(projectId: string, query: FactQuery): Array<Record<string, string | number | null>> {
+    const compiled = compileFactQuery(projectId, query), statement = this.db.prepare(compiled.sql);
+    if (!statement.readonly || !statement.reader) throw new Error('Fact queries must be read-only row queries');
+    return statement.all(...compiled.parameters) as Array<Record<string, string | number | null>>;
+  }
+
+  getAnalysisCache(projectId: string, kind: CacheKind, key: string, inputHash: string): unknown | undefined {
+    const row = this.db.prepare('SELECT payload_json, payload_hash FROM code_analysis_cache WHERE project_id = ? AND kind = ? AND cache_key = ? AND input_hash = ?')
+      .get(projectId, kind, key, inputHash) as { payload_json: string; payload_hash: string } | undefined;
+    if (!row) return undefined;
+    if (hashText(row.payload_json) !== row.payload_hash) throw new Error(`Analysis cache integrity mismatch: ${kind}:${key}`);
+    return JSON.parse(row.payload_json) as unknown;
+  }
+
+  replaceAnalysisCache(projectId: string, entries: AnalysisCacheEntry[]): void {
+    const insert = this.db.prepare('INSERT INTO code_analysis_cache(project_id, kind, cache_key, input_hash, payload_hash, payload_json) VALUES (?, ?, ?, ?, ?, ?)');
+    this.db.transaction(() => {
+      this.db.prepare('DELETE FROM code_analysis_cache WHERE project_id = ?').run(projectId);
+      for (const entry of entries) insert.run(projectId, entry.kind, entry.key, entry.inputHash, entry.payloadHash, entry.payload);
+    })();
+  }
 
   /** 여러 공개 저장 연산을 하나의 원자적 작업으로 묶는다. */
   runInTransaction<T>(operation: () => T): T {
@@ -1696,6 +1751,7 @@ export class SqliteRegistryStore {
     const tx = this.db.transaction((id: string) => {
       this.db.prepare('DELETE FROM code_call_sites WHERE project_id = ?').run(id);
       this.db.prepare('DELETE FROM code_model_manifests WHERE project_id = ?').run(id);
+      this.db.prepare('DELETE FROM code_analysis_cache WHERE project_id = ?').run(id);
       deleteRelations.run(id, id);
       return deleteEntities.run(id).changes;
     });

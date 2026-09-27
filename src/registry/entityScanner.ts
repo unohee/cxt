@@ -22,6 +22,7 @@ import { analyzeSummaries } from '../analysis/summaries.js';
 import { loadLibraryModels, type ModelManifest } from '../analysis/libraryModels.js';
 import type { DataflowDiagnostic } from '../analysis/dataflowTypes.js';
 import { resolveSymbols } from '../analysis/resolveSymbols.js';
+import { cacheEntry, deserializeFrontend, engineFingerprint, hashText, serializeFrontend, type AnalysisCache, type AnalysisCacheEntry } from '../analysis/cache.js';
 
 // ============ 상수 ============
 
@@ -1003,6 +1004,7 @@ export interface ScanResult {
     diagnostics: Array<DataflowDiagnostic & { filePath: string; owner: string }> };
   summaries: { total: number; complete: number; partial: number; components: number };
   models: { manifest: ModelManifest; calls: Record<string, number> };
+  cache: { engine: string; frontendHits: number; frontendMisses: number; summaryHits: number; summaryMisses: number; committed: boolean };
 }
 
 // ============ 메인 스캔 함수 ============
@@ -1010,7 +1012,7 @@ export interface ScanResult {
 export async function scanRepository(
   projectPath: string,
   projectId: string,
-  options?: { maxDepth?: number; timeoutMs?: number; verbose?: boolean; parser?: ParserMode },
+  options?: { maxDepth?: number; timeoutMs?: number; verbose?: boolean; parser?: ParserMode; full?: boolean },
 ): Promise<ScanResult> {
   const startTime = Date.now();
   const mode = parserMode(options?.parser);
@@ -1026,6 +1028,12 @@ export async function scanRepository(
   const timeoutMs = Math.min(requestedTimeout, SCAN_TIMEOUT_MS);
   const verbose = options?.verbose ?? false;
   const store = getRegistryStore();
+  const cache = { engine: engineFingerprint(), frontendHits: 0, frontendMisses: 0, summaryHits: 0, summaryMisses: 0, committed: false };
+  const entries = new Map<string, AnalysisCacheEntry>();
+  const analysisCache: AnalysisCache = {
+    get: (kind, key, inputHash) => options?.full ? undefined : store.getAnalysisCache(projectId, kind, key, inputHash),
+    set: (kind, key, inputHash, value) => { entries.set(`${kind}:${key}`, cacheEntry(kind, key, inputHash, value)); },
+  };
   const ignoreConfig = buildIgnoreConfig(projectPath);
 
   const allExtracted: ExtractedEntity[] = [];
@@ -1095,7 +1103,20 @@ export async function scanRepository(
           if (isTestFile(entry.name, language)) {
             testFiles.push(parseTestFile(content, entryRelPath, language));
           } else {
-            const parsed = extractFile(content, entryRelPath, language, mode);
+            const inputHash = hashText(JSON.stringify([cache.engine, mode, language, content]));
+            const cached = analysisCache.get('frontend', entryRelPath, inputHash) as ReturnType<typeof serializeFrontend> | undefined;
+            let reusable = !!cached;
+            if (cached && mode !== 'lexical' && ['typescript', 'python', 'rust'].includes(language)) {
+              // 캐시가 native runtime 부재 또는 강제 AST 정책을 가려서는 안 된다.
+              try { loadTreeSitterFrontend(language as 'typescript' | 'python' | 'rust', entryRelPath); reusable = cached.engine === 'ast'; }
+              catch (error) {
+                if (!(error instanceof FrontendError) || error.diagnostic.code !== 'parser-unavailable' || mode === 'ast') throw error;
+                reusable = false;
+              }
+            }
+            const parsed = reusable ? deserializeFrontend(cached!) : extractFile(content, entryRelPath, language, mode);
+            if (reusable) cache.frontendHits++; else cache.frontendMisses++;
+            analysisCache.set('frontend', entryRelPath, inputHash, serializeFrontend(parsed));
             const entities = parsed.entities;
             allExtracted.push(...entities);
             diagnostics.push(...parsed.diagnostics);
@@ -1150,6 +1171,7 @@ export async function scanRepository(
       dataflow,
       summaries,
       models,
+      cache,
     };
   }
 
@@ -1267,9 +1289,10 @@ export async function scanRepository(
     // ============ 관계 그래프 적재 (2-pass) ============
     const semantic = resolveSymbols(symbolFiles);
     store.replaceCallSitesForProject(projectId, semantic.calls);
-    const analysis = analyzeSummaries(cfgs, semantic.calls, { models: libraryModels, checkDeadline: () => {
+    const analysis = analyzeSummaries(cfgs, semantic.calls, { models: libraryModels, cache: analysisCache, engineKey: cache.engine, checkDeadline: () => {
       if (Date.now() - startTime > timeoutMs) throw new Error('scan timed out during dataflow');
     } });
+    cache.summaryHits = analysis.cache.reusedComponents; cache.summaryMisses = analysis.cache.computedComponents;
     store.replaceControlFlowForProject(projectId, analysis.graphs);
     const graphByOwner = new Map(cfgs.map(graph => [graph.owner, graph]));
     for (const flow of analysis.flows) {
@@ -1297,7 +1320,10 @@ export async function scanRepository(
       if (source && target) relations.push({ sourceId: source.id, targetId: target.id, relationType: base.type });
     }
     relationsLoaded = completeScan ? store.replaceRelationsForProject(projectId, relations) : 0;
+    store.replaceAnalysisCache(projectId, [...entries.values()]);
+    if (Date.now() - startTime > timeoutMs) throw new Error('scan timed out during snapshot commit');
     });
+    cache.committed = true;
   } catch (err) {
     errors.push(err instanceof Error ? err.message : String(err));
     registered = 0;
@@ -1337,6 +1363,7 @@ export async function scanRepository(
     dataflow,
     summaries,
     models,
+    cache,
   };
 }
 

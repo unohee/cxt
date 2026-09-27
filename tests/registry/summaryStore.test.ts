@@ -43,7 +43,7 @@ describe('summary persistence', () => {
       migrated.replaceSummariesForProject('p', results.summaries);
       expect(migrated.getSummaries('p')).toEqual(results.summaries);
       const check = new Database(path, { readonly: true });
-      try { expect(check.pragma('user_version', { simple: true })).toBe(8); expect(check.pragma('foreign_key_check')).toEqual([]); }
+      try { expect(check.pragma('user_version', { simple: true })).toBe(9); expect(check.pragma('foreign_key_check')).toEqual([]); }
       finally { check.close(); }
     } finally { migrated.close(); }
   });

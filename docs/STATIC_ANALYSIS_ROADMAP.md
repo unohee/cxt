@@ -185,3 +185,12 @@ CFG 위 worklist fixed-point solver, reaching definitions/def-use, 값 상태 �
 - 실제 현재 저장소 CLI `bs --sarif -v`(`/tmp/cxt-sarif-verified-BIlDJK`): 96 files / 179 findings / 57.166초 / exit 2 / schema valid. parser/flow diagnostics 322개를 partial 상태로 출력했다. 실제 GitHub 업로드나 alert acceptance는 실행하지 않았다. 전체 fact DB timeout은 아직 9단계 해결 대상이다.
 - 한 기존 self-scan 테스트가 부하에서 5초를 넘겼다. 이 테스트의 본래 대상인 실제 bsDetector.ts 전체 파일의 AST critical 규칙을 직접 검사하도록 좁혔고 unrelated warning dataflow solver는 분리했다. timeout 값을 늘리지 않았으며 전체 CLI/패키지의 solver 검증은 유지했다.
 - 8 핵심 구현은 In Review. 다음 9의 증분 cache/invalidation/read-only query와 cold scan 성능을 진행한다. 10의 독립 평가·CI 및 4 resource/ownership, AGT-3915 전체 FP 목표는 열린 상태다.
+
+## 실행 기록 — 2026-09-27, 9차 증분 snapshot과 fact query
+
+- 9: DB v9에 content/engine/parser frontend cache와 linked CFG/callee summary/model manifest SCC cache를 추가했다. 매 scan 현재 imports를 재해석하며 전체 facts/cache를 원자적으로 교체한다. `scan --full` 재계산과 `query entities|calls|cfg|flows|summaries`의 project-bound/allowlist/parameterized/bounded read 계약을 제공한다. [계약과 측정](INCREMENTAL_FACTS.md).
+- 검증: 전체 742 tests, lint/build, 실제 tarball 설치 CLI(`/tmp/cxt-packed-frontends-3LzhFv`). 변경 없음/엔진·파일·전이 의존성·삭제·재귀 SCC·모델 변경·native 복구, incremental/full 동등성, cache corruption 및 저장 실패 rollback. 55개 query 구조 mutation 거부, filter data 무해 처리, project 격리와 기존 facts 보존을 확인했다. 레거시 table rebuild가 query view 때문에 실패하는 사례를 실제 재현하고 transaction 안에서 파생 view를 재생성하도록 수정했다.
+- 초기 5회 측정은 4번째 cold가 60.017초 dataflow timeout/rollback으로 실패(`/tmp/cxt-incremental-bench-IPjtZp`). CPU profile에 따라 추상값 정규화 반복을 줄였고 동일 고정 입력의 전체 facts SHA 및 기존 CFG 226개의 결과 일치를 확인했다. cap/분석 budget을 늘리지 않았다.
+- 최종 5쌍의 새 프로세스 측정(`/tmp/cxt-incremental-bench-U5UlKV`, `bench/incremental-baseline.json`): cold p50/p95 35.113/40.499초, warm 9.194/11.186초, scan peak RSS 최대 cold 819.7/warm 559.3 MiB. 사전 cold≤60초/warm≤15초/RSS≤1 GiB budget 통과. 59파일/1,603 entities의 10개 실행 facts SHA가 모두 같다. p95는 표본 5개의 최대값이며 호스트에 다른 학습/CI 작업이 실행 중이었다.
+- Local flow 1,083 complete/142 partial, 함수 요약 14 complete/1,211 partial. Warm frontend 59/SCC 1,210 hit는 의미적 coverage 개선이 아니다. Query는 source freshness 미검증을 명시한다. BS/audit의 직접 source 분석은 cache 대상이 아니다.
+- 9 핵심 구현은 In Review. 10 실제/held-out 평가와 CI, 4 resource/ownership 및 AGT-3915 전체 FP 기준은 계속 열린 상태다. 원격 ci-templates의 constitution-gate.yml은 현재 존재함을 확인했지만 Node 언어 workflow는 아직 없다. 전체 목표를 완료로 표시하지 않는다.

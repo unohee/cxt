@@ -1,0 +1,460 @@
+{
+  "timestamp": "2026-09-27T13:57:41.517Z",
+  "source": "/home/unohee/dev/cxt",
+  "sourceHash": "f13bfbd96cb8d2c9d482bcb7ab83555326952a2d5035a9d610eff19fcb4b8e8b",
+  "artifacts": "/tmp/cxt-incremental-bench-U5UlKV",
+  "samplesPerMode": 5,
+  "budgets": {
+    "scanMs": 60000,
+    "warmMs": 15000,
+    "scanMaxRssKiB": 1048576
+  },
+  "environment": {
+    "node": "v24.20.0",
+    "platform": "linux",
+    "arch": "x64",
+    "cpu": "AMD Ryzen 7 5800X 8-Core Processor",
+    "cpuCount": 16,
+    "memoryBytes": 65184235520,
+    "load": [
+      34.36,
+      36.82,
+      33.66
+    ]
+  },
+  "samples": [
+    {
+      "mode": "cold",
+      "sample": 0,
+      "durationMs": 35113,
+      "scanMaxRssKiB": 811620,
+      "cpuUsage": {
+        "user": 29085126,
+        "system": 2031557
+      },
+      "loadBefore": [
+        34.36,
+        36.82,
+        33.66
+      ],
+      "loadAfter": [
+        33.4,
+        36.33,
+        33.61
+      ],
+      "databaseBytes": 190611456,
+      "factHash": "23be2c58f32e48f9493e7cf9e6ccd472efd2d385c601b8f5e42c829dcb02dd3b",
+      "cache": {
+        "engine": "bdfa177dbe98c18fdd6b407c54001242dc715311ad56773e7c1f2c646363738c",
+        "frontendHits": 0,
+        "frontendMisses": 59,
+        "summaryHits": 0,
+        "summaryMisses": 1210,
+        "committed": true
+      },
+      "scanned": 59,
+      "extracted": 1603,
+      "dataflow": {
+        "complete": 1083,
+        "partial": 142
+      },
+      "summaries": {
+        "total": 1225,
+        "complete": 14,
+        "partial": 1211,
+        "components": 1210
+      }
+    },
+    {
+      "mode": "warm",
+      "sample": 0,
+      "durationMs": 9194,
+      "scanMaxRssKiB": 572688,
+      "cpuUsage": {
+        "user": 4327658,
+        "system": 2030288
+      },
+      "loadBefore": [
+        33.4,
+        36.33,
+        33.61
+      ],
+      "loadAfter": [
+        33.06,
+        36.16,
+        33.59
+      ],
+      "databaseBytes": 190611456,
+      "factHash": "23be2c58f32e48f9493e7cf9e6ccd472efd2d385c601b8f5e42c829dcb02dd3b",
+      "cache": {
+        "engine": "bdfa177dbe98c18fdd6b407c54001242dc715311ad56773e7c1f2c646363738c",
+        "frontendHits": 59,
+        "frontendMisses": 0,
+        "summaryHits": 1210,
+        "summaryMisses": 0,
+        "committed": true
+      },
+      "scanned": 59,
+      "extracted": 1603,
+      "dataflow": {
+        "complete": 1083,
+        "partial": 142
+      },
+      "summaries": {
+        "total": 1225,
+        "complete": 14,
+        "partial": 1211,
+        "components": 1210
+      }
+    },
+    {
+      "mode": "cold",
+      "sample": 1,
+      "durationMs": 40499,
+      "scanMaxRssKiB": 781048,
+      "cpuUsage": {
+        "user": 29009811,
+        "system": 2407983
+      },
+      "loadBefore": [
+        33.06,
+        36.16,
+        33.59
+      ],
+      "loadAfter": [
+        34.4,
+        36.12,
+        33.68
+      ],
+      "databaseBytes": 190607360,
+      "factHash": "23be2c58f32e48f9493e7cf9e6ccd472efd2d385c601b8f5e42c829dcb02dd3b",
+      "cache": {
+        "engine": "bdfa177dbe98c18fdd6b407c54001242dc715311ad56773e7c1f2c646363738c",
+        "frontendHits": 0,
+        "frontendMisses": 59,
+        "summaryHits": 0,
+        "summaryMisses": 1210,
+        "committed": true
+      },
+      "scanned": 59,
+      "extracted": 1603,
+      "dataflow": {
+        "complete": 1083,
+        "partial": 142
+      },
+      "summaries": {
+        "total": 1225,
+        "complete": 14,
+        "partial": 1211,
+        "components": 1210
+      }
+    },
+    {
+      "mode": "warm",
+      "sample": 1,
+      "durationMs": 11186,
+      "scanMaxRssKiB": 559424,
+      "cpuUsage": {
+        "user": 5303872,
+        "system": 1795289
+      },
+      "loadBefore": [
+        35.17,
+        36.25,
+        33.74
+      ],
+      "loadAfter": [
+        35.54,
+        36.29,
+        33.78
+      ],
+      "databaseBytes": 190607360,
+      "factHash": "23be2c58f32e48f9493e7cf9e6ccd472efd2d385c601b8f5e42c829dcb02dd3b",
+      "cache": {
+        "engine": "bdfa177dbe98c18fdd6b407c54001242dc715311ad56773e7c1f2c646363738c",
+        "frontendHits": 59,
+        "frontendMisses": 0,
+        "summaryHits": 1210,
+        "summaryMisses": 0,
+        "committed": true
+      },
+      "scanned": 59,
+      "extracted": 1603,
+      "dataflow": {
+        "complete": 1083,
+        "partial": 142
+      },
+      "summaries": {
+        "total": 1225,
+        "complete": 14,
+        "partial": 1211,
+        "components": 1210
+      }
+    },
+    {
+      "mode": "cold",
+      "sample": 2,
+      "durationMs": 34717,
+      "scanMaxRssKiB": 824356,
+      "cpuUsage": {
+        "user": 30309900,
+        "system": 2033770
+      },
+      "loadBefore": [
+        35.54,
+        36.29,
+        33.78
+      ],
+      "loadAfter": [
+        32.2,
+        35.41,
+        33.58
+      ],
+      "databaseBytes": 190619648,
+      "factHash": "23be2c58f32e48f9493e7cf9e6ccd472efd2d385c601b8f5e42c829dcb02dd3b",
+      "cache": {
+        "engine": "bdfa177dbe98c18fdd6b407c54001242dc715311ad56773e7c1f2c646363738c",
+        "frontendHits": 0,
+        "frontendMisses": 59,
+        "summaryHits": 0,
+        "summaryMisses": 1210,
+        "committed": true
+      },
+      "scanned": 59,
+      "extracted": 1603,
+      "dataflow": {
+        "complete": 1083,
+        "partial": 142
+      },
+      "summaries": {
+        "total": 1225,
+        "complete": 14,
+        "partial": 1211,
+        "components": 1210
+      }
+    },
+    {
+      "mode": "warm",
+      "sample": 2,
+      "durationMs": 10466,
+      "scanMaxRssKiB": 569088,
+      "cpuUsage": {
+        "user": 4813345,
+        "system": 1918800
+      },
+      "loadBefore": [
+        32.5,
+        35.42,
+        33.59
+      ],
+      "loadAfter": [
+        32.84,
+        35.39,
+        33.6
+      ],
+      "databaseBytes": 190619648,
+      "factHash": "23be2c58f32e48f9493e7cf9e6ccd472efd2d385c601b8f5e42c829dcb02dd3b",
+      "cache": {
+        "engine": "bdfa177dbe98c18fdd6b407c54001242dc715311ad56773e7c1f2c646363738c",
+        "frontendHits": 59,
+        "frontendMisses": 0,
+        "summaryHits": 1210,
+        "summaryMisses": 0,
+        "committed": true
+      },
+      "scanned": 59,
+      "extracted": 1603,
+      "dataflow": {
+        "complete": 1083,
+        "partial": 142
+      },
+      "summaries": {
+        "total": 1225,
+        "complete": 14,
+        "partial": 1211,
+        "components": 1210
+      }
+    },
+    {
+      "mode": "cold",
+      "sample": 3,
+      "durationMs": 35231,
+      "scanMaxRssKiB": 802796,
+      "cpuUsage": {
+        "user": 30878534,
+        "system": 2657306
+      },
+      "loadBefore": [
+        32.84,
+        35.39,
+        33.6
+      ],
+      "loadAfter": [
+        30.29,
+        34.47,
+        33.36
+      ],
+      "databaseBytes": 190627840,
+      "factHash": "23be2c58f32e48f9493e7cf9e6ccd472efd2d385c601b8f5e42c829dcb02dd3b",
+      "cache": {
+        "engine": "bdfa177dbe98c18fdd6b407c54001242dc715311ad56773e7c1f2c646363738c",
+        "frontendHits": 0,
+        "frontendMisses": 59,
+        "summaryHits": 0,
+        "summaryMisses": 1210,
+        "committed": true
+      },
+      "scanned": 59,
+      "extracted": 1603,
+      "dataflow": {
+        "complete": 1083,
+        "partial": 142
+      },
+      "summaries": {
+        "total": 1225,
+        "complete": 14,
+        "partial": 1211,
+        "components": 1210
+      }
+    },
+    {
+      "mode": "warm",
+      "sample": 3,
+      "durationMs": 7947,
+      "scanMaxRssKiB": 554084,
+      "cpuUsage": {
+        "user": 5053528,
+        "system": 2164565
+      },
+      "loadBefore": [
+        29.95,
+        34.33,
+        33.32
+      ],
+      "loadAfter": [
+        28.83,
+        34.03,
+        33.23
+      ],
+      "databaseBytes": 190627840,
+      "factHash": "23be2c58f32e48f9493e7cf9e6ccd472efd2d385c601b8f5e42c829dcb02dd3b",
+      "cache": {
+        "engine": "bdfa177dbe98c18fdd6b407c54001242dc715311ad56773e7c1f2c646363738c",
+        "frontendHits": 59,
+        "frontendMisses": 0,
+        "summaryHits": 1210,
+        "summaryMisses": 0,
+        "committed": true
+      },
+      "scanned": 59,
+      "extracted": 1603,
+      "dataflow": {
+        "complete": 1083,
+        "partial": 142
+      },
+      "summaries": {
+        "total": 1225,
+        "complete": 14,
+        "partial": 1211,
+        "components": 1210
+      }
+    },
+    {
+      "mode": "cold",
+      "sample": 4,
+      "durationMs": 33139,
+      "scanMaxRssKiB": 839388,
+      "cpuUsage": {
+        "user": 28779896,
+        "system": 2113320
+      },
+      "loadBefore": [
+        28.83,
+        34.03,
+        33.23
+      ],
+      "loadAfter": [
+        29.52,
+        33.69,
+        33.15
+      ],
+      "databaseBytes": 190599168,
+      "factHash": "23be2c58f32e48f9493e7cf9e6ccd472efd2d385c601b8f5e42c829dcb02dd3b",
+      "cache": {
+        "engine": "bdfa177dbe98c18fdd6b407c54001242dc715311ad56773e7c1f2c646363738c",
+        "frontendHits": 0,
+        "frontendMisses": 59,
+        "summaryHits": 0,
+        "summaryMisses": 1210,
+        "committed": true
+      },
+      "scanned": 59,
+      "extracted": 1603,
+      "dataflow": {
+        "complete": 1083,
+        "partial": 142
+      },
+      "summaries": {
+        "total": 1225,
+        "complete": 14,
+        "partial": 1211,
+        "components": 1210
+      }
+    },
+    {
+      "mode": "warm",
+      "sample": 4,
+      "durationMs": 7745,
+      "scanMaxRssKiB": 570824,
+      "cpuUsage": {
+        "user": 5136110,
+        "system": 1974864
+      },
+      "loadBefore": [
+        29.52,
+        33.69,
+        33.15
+      ],
+      "loadAfter": [
+        29.95,
+        33.65,
+        33.14
+      ],
+      "databaseBytes": 190599168,
+      "factHash": "23be2c58f32e48f9493e7cf9e6ccd472efd2d385c601b8f5e42c829dcb02dd3b",
+      "cache": {
+        "engine": "bdfa177dbe98c18fdd6b407c54001242dc715311ad56773e7c1f2c646363738c",
+        "frontendHits": 59,
+        "frontendMisses": 0,
+        "summaryHits": 1210,
+        "summaryMisses": 0,
+        "committed": true
+      },
+      "scanned": 59,
+      "extracted": 1603,
+      "dataflow": {
+        "complete": 1083,
+        "partial": 142
+      },
+      "summaries": {
+        "total": 1225,
+        "complete": 14,
+        "partial": 1211,
+        "components": 1210
+      }
+    }
+  ],
+  "statistics": {
+    "cold": {
+      "p50Ms": 35113,
+      "p95Ms": 40499,
+      "maxRssKiB": 839388
+    },
+    "warm": {
+      "p50Ms": 9194,
+      "p95Ms": 11186,
+      "maxRssKiB": 572688
+    }
+  },
+  "pass": true
+}

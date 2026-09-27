@@ -45,26 +45,36 @@ export interface DataflowResult {
 }
 type State = Map<string, AbstractValue>;
 const unknownAtoms = ['undefined', 'null', '*boolean', '*number', '*string', '*object', '*function', 'unit'];
+const normalizedUnknownAtoms = [...unknownAtoms].sort();
 const unique = (values: string[]) => [...new Set(values)].sort();
-const atomType = (atom: string) => atom.startsWith('*') ? atom.slice(1) : atom.split(':')[0];
+const atomType = (atom: string) => atom.startsWith('*') ? atom.slice(1) : atom.slice(0, atom.indexOf(':') < 0 ? atom.length : atom.indexOf(':'));
+const wideningTypes = new Set(['number', 'string', 'boolean', 'object', 'function']);
 function normalizeAtoms(atoms: string[]): string[] {
-  let normalized = unique(atoms);
-  for (const type of ['number', 'string', 'boolean', 'object', 'function']) {
-    const group = normalized.filter(atom => atomType(atom) === type);
-    if (group.includes(`*${type}`) || group.length > (type === 'object' || type === 'function' ? 32 : 8)) {
-      normalized = [...normalized.filter(atom => atomType(atom) !== type), `*${type}`];
-    }
+  if (atoms === unknownAtoms) return [...normalizedUnknownAtoms];
+  if (atoms.length < 2) return [...atoms];
+  const normalized = unique(atoms), counts = new Map<string, number>(), wildcards = new Set<string>();
+  for (const atom of normalized) {
+    const type = atomType(atom);
+    if (!wideningTypes.has(type)) continue;
+    counts.set(type, (counts.get(type) ?? 0) + 1);
+    if (atom.startsWith('*')) wildcards.add(type);
   }
-  return normalized.sort();
+  const widened = new Set([...counts].filter(([type, count]) => count > (type === 'object' || type === 'function' ? 32 : 8)
+    || wildcards.has(type) && count > 1).map(([type]) => type));
+  return widened.size ? [...normalized.filter(atom => !widened.has(atomType(atom))), ...[...widened].map(type => `*${type}`)].sort() : normalized;
 }
 function value(atoms: string[], definitions: string[] = [], parameters: string[] = [], alternatives?: AbstractValue['alternatives']): AbstractValue {
   const normalized = normalizeAtoms(atoms);
+  const normalizedDefinitions = unique(definitions), normalizedParameters = unique(parameters);
+  // 모든 정의가 같은 값을 받는 일반 경로에서 정의마다 동일 정규화를 반복하지 않는다.
+  if (!alternatives) return { atoms: normalized, definitions: normalizedDefinitions, parameters: normalizedParameters,
+    alternatives: [...normalizedDefinitions].sort((a, b) => a.localeCompare(b)).map(definition => ({ definition, atoms: [...normalized], parameters: [...normalizedParameters] })) };
   const grouped = new Map<string, { atoms: string[]; parameters: string[] }>();
-  for (const alternative of alternatives ?? unique(definitions).map(definition => ({ definition, atoms: normalized, parameters }))) {
+  for (const alternative of alternatives) {
     const old = grouped.get(alternative.definition);
     grouped.set(alternative.definition, { atoms: normalizeAtoms([...old?.atoms ?? [], ...alternative.atoms]), parameters: unique([...old?.parameters ?? [], ...alternative.parameters]) });
   }
-  return { atoms: normalized, definitions: unique(definitions), parameters: unique(parameters),
+  return { atoms: normalized, definitions: normalizedDefinitions, parameters: normalizedParameters,
     alternatives: [...grouped].sort(([a], [b]) => a.localeCompare(b)).map(([definition, choice]) => ({ definition, ...choice })) };
 }
 const unknown = (sources: AbstractValue[] = []) => value(unknownAtoms, sources.flatMap(v => v.definitions), sources.flatMap(v => v.parameters));
@@ -75,8 +85,21 @@ const sameValue = (left: AbstractValue, right: AbstractValue) => left === right 
     const other = right.alternatives[i];
     return choice.definition === other.definition && sameList(choice.atoms, other.atoms) && sameList(choice.parameters, other.parameters);
   }));
-export const mergeValue = (left: AbstractValue, right: AbstractValue) => sameValue(left, right) ? left
-  : value([...left.atoms, ...right.atoms], [...left.definitions, ...right.definitions], [...left.parameters, ...right.parameters], [...left.alternatives, ...right.alternatives]);
+export function mergeValue(left: AbstractValue, right: AbstractValue): AbstractValue {
+  if (sameValue(left, right)) return left;
+  const mergeList = (a: string[], b: string[]) => sameList(a, b) ? a : unique([...a, ...b]);
+  const mergeAtoms = (a: string[], b: string[]) => sameList(a, b) ? a : normalizeAtoms([...a, ...b]);
+  // 이미 정규화된 choice를 보존하고 겹치는 정의의 값만 합친다.
+  // localeCompare가 같아도 Unicode bytes가 다른 정의는 별개로 유지한다.
+  const alternatives = new Map(left.alternatives.map(choice => [choice.definition, choice]));
+  for (const choice of right.alternatives) {
+    const previous = alternatives.get(choice.definition);
+    alternatives.set(choice.definition, previous ? { definition: choice.definition,
+      atoms: mergeAtoms(previous.atoms, choice.atoms), parameters: mergeList(previous.parameters, choice.parameters) } : choice);
+  }
+  return { atoms: mergeAtoms(left.atoms, right.atoms), definitions: mergeList(left.definitions, right.definitions),
+    parameters: mergeList(left.parameters, right.parameters), alternatives: [...alternatives.values()].sort((a, b) => a.definition.localeCompare(b.definition)) };
+}
 function joinState(existing: State | undefined, incoming: State): { state: State; changed: boolean } {
   if (!existing) return { state: new Map(incoming), changed: true };
   const state = new Map(existing);

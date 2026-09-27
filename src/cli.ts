@@ -31,7 +31,7 @@ let initialLocale: string = detectLocale();
 const valueOptions = new Set([
   '--search', '--tag', '--dir', '--kind', '--project', '--status', '--untag', '--note',
   '--risk', '--warn', '--output', '-o', '--ext', '--target', '--path', '--type', '--depth',
-  '--days', '--keep-days',
+  '--days', '--keep-days', '--where', '--order-by', '--limit', '--offset',
 ]);
 const protectedValues = new Map<string, string>();
 function findExplicitLang(args: string[]): { found: boolean; value?: string } {
@@ -176,10 +176,27 @@ program
   .option('-v, --verbose', h('Verbose output', '상세 출력'))
   .option('--json', h('JSON output including analysis status', '분석 상태를 포함한 JSON 출력'))
   .option('--sarif', h('SARIF 2.1.0 output', 'SARIF 2.1.0 출력'))
+  .option('--full', h('Recompute all facts and refresh caches', '모든 fact를 재계산하고 캐시 갱신'))
   .option('--project <id>', h('Project ID override', '프로젝트 ID 재정의'))
   .action(async (opts) => {
     const { handleScan } = await import('./cli/scanHandler.js');
     await handleScan(opts);
+  });
+
+program
+  .command('query')
+  .description(h('Read stored facts through bounded SQL views', '제한된 SQL view로 저장된 fact 읽기'))
+  .argument('<view>', 'entities | calls | cfg | flows | summaries')
+  .option('--where <json>', h('JSON filter array: column, op (eq/prefix), value', 'JSON 필터 배열: column, op(eq/prefix), value'))
+  .option('--order-by <column>', h('Sort by an allowed column', '허용된 열로 정렬'))
+  .option('--descending', h('Descending sort', '내림차순 정렬'))
+  .option('--limit <count>', h('Maximum rows (1-500, default 100)', '최대 행 수(1-500, 기본 100)'))
+  .option('--offset <count>', h('Row offset (0-100000)', '행 시작 위치(0-100000)'))
+  .option('--project <id>', h('Project ID override', '프로젝트 ID 재정의'))
+  .option('--json', h('JSON output', 'JSON 출력'))
+  .action(async (view, opts) => {
+    const { handleQuery } = await import('./cli/queryHandler.js');
+    handleQuery(view, opts);
   });
 
 // ---- bs (shortcut) ----

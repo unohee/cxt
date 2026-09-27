@@ -28,6 +28,7 @@
     "bench:flow": "node --import=tsx bench/dataflow-accuracy.ts",
     "bench:impact": "node --import=tsx bench/impact-accuracy.ts",
     "bench:rules": "node --import=tsx bench/rule-accuracy.ts",
+    "bench:incremental": "npm run build && node bench/incremental.mjs",
     "test:package": "npm run build && node scripts/test-packed-frontends.mjs",
     "test:coverage": "vitest run --coverage",
     "prepublishOnly": "npm run build && npm test"
