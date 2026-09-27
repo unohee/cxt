@@ -1,16 +1,15 @@
-import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import type Parser from 'tree-sitter';
 import type { EntityKind } from '../registry/schema.js';
 import type { ExtractedEntity, ReferenceSet } from '../registry/entityScanner.js';
-import { entityQualifiedName, FrontendError } from './types.js';
+import { entityQualifiedName } from './types.js';
+import { createNativeParser, parseCheckedTree } from './nativeParser.js';
 import type { AstLanguage, FrontendResult, LanguageFrontend } from './types.js';
 import { extractSymbolFacts } from './symbolFacts.js';
 import { buildControlFlow } from './controlFlow.js';
 import { attachDataflowFacts } from './dataflowFacts.js';
 
 type Node = Parser.SyntaxNode;
-const require = createRequire(import.meta.url);
 const CALLABLE = new Set(['function_declaration', 'generator_function_declaration', 'function_signature',
   'method_definition', 'abstract_method_signature', 'arrow_function', 'function_expression',
   'generator_function', 'function_definition', 'lambda', 'function_item', 'function_signature_item', 'closure_expression']);
@@ -31,23 +30,8 @@ interface Declaration {
 
 /** Optional native dependencies are loaded only at the frontend boundary. */
 export function loadTreeSitterFrontend(language: AstLanguage, filePath: string): LanguageFrontend {
-  let parser: Parser;
-  let grammar: Parser.Language;
-  let Query: typeof Parser.Query;
+  const { parser, grammar, Query } = createNativeParser(language, filePath);
   const javascript = language === 'typescript' && /\.(?:jsx?|mjs|cjs)$/.test(filePath);
-  try {
-    const NativeParser = require('tree-sitter') as typeof Parser;
-    Query = NativeParser.Query;
-    grammar = javascript ? require('tree-sitter-javascript') as Parser.Language : language === 'typescript'
-      ? (require('tree-sitter-typescript') as Record<string, Parser.Language>)[/\.[jt]sx$/.test(filePath) ? 'tsx' : 'typescript']
-      : require(`tree-sitter-${language}`) as Parser.Language;
-    parser = new NativeParser();
-    parser.setLanguage(grammar);
-    parser.setTimeoutMicros(500_000);
-  } catch (error) {
-    throw new FrontendError({ code: 'parser-unavailable', filePath,
-      message: `${language}: ${error instanceof Error ? error.message : String(error)}` });
-  }
   // 배포 누락이나 쿼리 결함은 parser 부재와 다르므로 fallback으로 숨기지 않는다.
   const query = new Query(grammar, readFileSync(new URL(`./queries/${javascript ? 'javascript' : language}.scm`, import.meta.url), 'utf8'));
   return { language, extract: (content, path) => extract(parser, query, language, content, path) };
@@ -164,18 +148,7 @@ function references(declaration: Declaration, byNode: Map<number, Declaration[]>
 }
 
 function extract(parser: Parser, query: Parser.Query, language: AstLanguage, content: string, filePath: string): FrontendResult {
-  const tree = parser.parse(content);
-  if (!tree) throw new FrontendError({ code: 'syntax-error', filePath, message: 'Parser timeout or cancellation' });
-  if (tree.rootNode.hasError) {
-    let error = tree.rootNode;
-    while (true) {
-      const child = error.children.find(n => n.hasError || n.isMissing);
-      if (!child) break;
-      error = child;
-    }
-    throw new FrontendError({ code: 'syntax-error', filePath, message: `Invalid ${language} syntax`,
-      line: error.startPosition.row + 1, column: error.startPosition.column + 1 });
-  }
+  const tree = parseCheckedTree(parser, language, filePath, content);
   const found = query.captures(tree.rootNode).flatMap(capture => declarations(capture.node, language));
   const claimed = new Set(found.map(declaration => declaration.callable.id));
   const stack = [tree.rootNode];

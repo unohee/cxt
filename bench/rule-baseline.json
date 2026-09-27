@@ -1,0 +1,373 @@
+{
+  "schemaVersion": 1,
+  "factFamily": "structural-rules",
+  "tier": "synthetic-development",
+  "corpusSha256": "eaa936df760de8ef016f4d50ab43318ca89e9e418ea5c38b898fa0aeac311713",
+  "generatedAt": "2026-09-27T13:00:02.425Z",
+  "durationMs": 429.218049,
+  "processMaxRssKiB": 123956,
+  "results": [
+    {
+      "rule": "cxt/bare-except-pass",
+      "fixtures": 2,
+      "languages": [
+        "python"
+      ],
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "invalidSpans": 0,
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "partialAnalyses": [],
+      "failures": [],
+      "pass": true
+    },
+    {
+      "rule": "cxt/typed-except-pass",
+      "fixtures": 2,
+      "languages": [
+        "python"
+      ],
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "invalidSpans": 0,
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "partialAnalyses": [],
+      "failures": [],
+      "pass": true
+    },
+    {
+      "rule": "cxt/marked-success-return",
+      "fixtures": 2,
+      "languages": [
+        "typescript"
+      ],
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "invalidSpans": 0,
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "partialAnalyses": [],
+      "failures": [],
+      "pass": true
+    },
+    {
+      "rule": "cxt/hardcoded-secret",
+      "fixtures": 2,
+      "languages": [
+        "typescript"
+      ],
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "invalidSpans": 0,
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "partialAnalyses": [],
+      "failures": [],
+      "pass": true
+    },
+    {
+      "rule": "cxt/debugger-statement",
+      "fixtures": 2,
+      "languages": [
+        "typescript"
+      ],
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "invalidSpans": 0,
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "partialAnalyses": [],
+      "failures": [],
+      "pass": true
+    },
+    {
+      "rule": "cxt/rust-unwrap",
+      "fixtures": 2,
+      "languages": [
+        "rust"
+      ],
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "invalidSpans": 0,
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "partialAnalyses": [],
+      "failures": [],
+      "pass": true
+    },
+    {
+      "rule": "cxt/rust-incomplete",
+      "fixtures": 2,
+      "languages": [
+        "rust"
+      ],
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "invalidSpans": 0,
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "partialAnalyses": [
+        "rust-incomplete-positive"
+      ],
+      "failures": [],
+      "pass": true
+    },
+    {
+      "rule": "cxt/success-log",
+      "fixtures": 2,
+      "languages": [
+        "typescript"
+      ],
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "invalidSpans": 0,
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "partialAnalyses": [],
+      "failures": [],
+      "pass": true
+    },
+    {
+      "rule": "cxt/python-fake-data",
+      "fixtures": 2,
+      "languages": [
+        "python"
+      ],
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "invalidSpans": 0,
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "partialAnalyses": [],
+      "failures": [],
+      "pass": true
+    },
+    {
+      "rule": "cxt/todo-comment",
+      "fixtures": 2,
+      "languages": [
+        "typescript"
+      ],
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "invalidSpans": 0,
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "partialAnalyses": [],
+      "failures": [],
+      "pass": true
+    },
+    {
+      "rule": "cxt/console-log",
+      "fixtures": 2,
+      "languages": [
+        "typescript"
+      ],
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "invalidSpans": 0,
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "partialAnalyses": [],
+      "failures": [],
+      "pass": true
+    },
+    {
+      "rule": "cxt/as-any",
+      "fixtures": 2,
+      "languages": [
+        "typescript"
+      ],
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "invalidSpans": 0,
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "partialAnalyses": [],
+      "failures": [],
+      "pass": true
+    },
+    {
+      "rule": "cxt/any-type",
+      "fixtures": 2,
+      "languages": [
+        "typescript"
+      ],
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "invalidSpans": 0,
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "partialAnalyses": [],
+      "failures": [],
+      "pass": true
+    },
+    {
+      "rule": "cxt/non-null-assertion",
+      "fixtures": 2,
+      "languages": [
+        "typescript"
+      ],
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "invalidSpans": 0,
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "partialAnalyses": [],
+      "failures": [],
+      "pass": true
+    },
+    {
+      "rule": "cxt/eval-call",
+      "fixtures": 2,
+      "languages": [
+        "typescript"
+      ],
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "invalidSpans": 0,
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "partialAnalyses": [],
+      "failures": [],
+      "pass": true
+    },
+    {
+      "rule": "cxt/rust-discard-error",
+      "fixtures": 2,
+      "languages": [
+        "rust"
+      ],
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "invalidSpans": 0,
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "partialAnalyses": [
+        "rust-discard-error-positive"
+      ],
+      "failures": [],
+      "pass": true
+    },
+    {
+      "rule": "cxt/placeholder-url",
+      "fixtures": 2,
+      "languages": [
+        "typescript"
+      ],
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "invalidSpans": 0,
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "partialAnalyses": [],
+      "failures": [],
+      "pass": true
+    },
+    {
+      "rule": "cxt/magic-number",
+      "fixtures": 2,
+      "languages": [
+        "python"
+      ],
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "invalidSpans": 0,
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "partialAnalyses": [],
+      "failures": [],
+      "pass": true
+    },
+    {
+      "rule": "cxt/long-line",
+      "fixtures": 2,
+      "languages": [
+        "typescript"
+      ],
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "invalidSpans": 0,
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "partialAnalyses": [],
+      "failures": [],
+      "pass": true
+    },
+    {
+      "rule": "cxt/catch-swallow",
+      "fixtures": 2,
+      "languages": [
+        "typescript"
+      ],
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "invalidSpans": 0,
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "partialAnalyses": [],
+      "failures": [],
+      "pass": true
+    },
+    {
+      "rule": "cxt/uninitialized-read",
+      "fixtures": 2,
+      "languages": [
+        "python"
+      ],
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "invalidSpans": 0,
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "partialAnalyses": [],
+      "failures": [],
+      "pass": true
+    }
+  ],
+  "pass": true
+}

@@ -61,7 +61,7 @@ export function attachDataflowFacts(root: Node, symbols: SymbolFacts, graphs: Co
     while (true) {
       const frame = symbols.scopes[scope];
       if (frame.redirects?.[name] !== undefined) return frame.redirects[name];
-      if ((scope === origin || frame.kind !== 'class') && bindings.has(`${scope}:${name}`)) return scope;
+      if (!frame.memberOnly && (scope === origin || frame.kind !== 'class') && bindings.has(`${scope}:${name}`)) return scope;
       if (frame.parent === null) return 0;
       scope = frame.parent;
     }

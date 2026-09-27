@@ -98,6 +98,7 @@ interface Messages {
   bsFakeData: string;
   bsRustSilentError: string;
   bsCatchSwallow: string;
+  bsUninitializedRead: string;
 
   bsWhyExceptionHiding: string;
   bsWhyHardcodedSecret: string;
@@ -245,7 +246,7 @@ const en: Messages = {
   bsEmptyCatch: 'Empty catch block — exception silenced',
   bsExceptPass: 'except: pass — Python exception hiding',
   bsExceptExceptionPass: 'except Exception: pass — all exceptions ignored',
-  bsFakeReturn: 'Hardcoded success return — no real logic',
+  bsFakeReturn: 'Success literal with placeholder comment — verify implementation',
   bsHardcodedSecret: 'Hardcoded secret/token pattern',
   bsDebugger: 'Leftover debugger statement',
   bsTodoFixme: 'TODO/FIXME with empty implementation',
@@ -259,10 +260,11 @@ const en: Messages = {
   bsLongLine: 'Line over 200 chars — poor readability',
   bsRustUnwrap: 'unwrap()/expect() in production — runtime panic risk',
   bsRustTodo: 'todo!()/unimplemented!() — incomplete, must not ship',
-  bsFakeSuccess: 'Fake success print — claims done without real verification',
+  bsFakeSuccess: 'Success log — verify that completed work supports the message',
   bsFakeData: 'np.random/faker in production — fabricated data',
   bsRustSilentError: 'Silent error swallow (let _ = / .ok();) — error ignored',
-  bsCatchSwallow: 'catch block swallows exception (no throw/reject) — make it explicit or cxt-ignore',
+  bsCatchSwallow: 'catch has a path without explicit throw/reject — review handling or cxt-ignore',
+  bsUninitializedRead: 'Read before initialization in local dataflow',
 
   bsWhyExceptionHiding: 'why: the handler discards every exception, so the failure never surfaces at runtime — being unreached today does not fix it',
   bsWhyHardcodedSecret: 'why: the credential is already exposed in source and version history whether or not the code path runs — it must be rotated, not argued away',
@@ -410,7 +412,7 @@ const ko: Messages = {
   bsEmptyCatch: '빈 catch 블록 — 예외를 완전히 무시',
   bsExceptPass: 'except: pass — Python 예외 은폐',
   bsExceptExceptionPass: 'except Exception: pass — 모든 예외 무시',
-  bsFakeReturn: '하드코딩된 성공 반환 — 실제 로직 없이 true/ok 반환',
+  bsFakeReturn: '성공 리터럴과 placeholder 주석 — 실제 구현 확인 필요',
   bsHardcodedSecret: '하드코딩된 비밀키/토큰 패턴',
   bsDebugger: 'debugger 문 잔류',
   bsTodoFixme: 'TODO/FIXME + 빈 구현 (pass/return/throw)',
@@ -424,10 +426,11 @@ const ko: Messages = {
   bsLongLine: '200자 이상 긴 줄 — 가독성 저하',
   bsRustUnwrap: 'production unwrap()/expect() — runtime panic 위험',
   bsRustTodo: 'todo!()/unimplemented!() — 미완성, release 금지',
-  bsFakeSuccess: '가짜 성공 출력 — 실제 검증 없이 완료 선언',
+  bsFakeSuccess: '성공 출력 — 메시지를 뒷받침하는 작업 완료 근거 확인 필요',
   bsFakeData: 'np.random/faker로 위장 데이터 생성 (production)',
   bsRustSilentError: '에러 silent 무시 (let _ = / .ok();) — 예외 은폐',
-  bsCatchSwallow: 'catch 블록이 예외를 삼킴 (throw/reject 없음) — 명시하거나 cxt-ignore',
+  bsCatchSwallow: 'catch에 명시적 throw/reject 없는 경로 — 처리 검토 또는 cxt-ignore',
+  bsUninitializedRead: '함수 내부 dataflow에서 초기화 전 읽기',
 
   bsWhyExceptionHiding: '근거: 모든 예외를 버리므로 실패가 런타임에 드러나지 않는다 — 지금 호출되지 않는다는 사실은 해결이 아니다',
   bsWhyHardcodedSecret: '근거: 코드 경로 실행 여부와 무관하게 소스와 형상 이력에 이미 노출되어 있다 — 논증이 아니라 교체가 필요하다',

@@ -170,10 +170,11 @@ export function extractSymbolFacts(root: Node, language: AstLanguage, filePath: 
       const receiver: SymbolValue | undefined = kind === 'class'
         ? node.type === 'impl_item' ? expression(field(node, 'type')) : owner ? { kind: 'entity', qualifiedName: owner } : undefined
         : undefined;
-      facts.scopes.push({ id: scope, parent: parentScope, kind, owner, receiver, startOffset: node.startIndex, endOffset: node.endIndex });
+      facts.scopes.push({ id: scope, parent: parentScope, kind, owner, receiver, startOffset: node.startIndex, endOffset: node.endIndex,
+        ...(language === 'typescript' && kind === 'class' ? { memberOnly: true } : {}) });
       if (owner) { const entity = entities.get(owner); if (entity) entity.bodyScope = scope; }
       if (kind === 'function') caller = owner;
-      else if (kind === 'class') caller = owner;
+      else if (kind === 'class' && node.type !== 'object') caller = owner;
       if (node.type === 'impl_item' && receiver) facts.implementations.push({ type: receiver, scope, parentScope });
       if (kind === 'function') {
         facts.scopes[scope].parameters = [];

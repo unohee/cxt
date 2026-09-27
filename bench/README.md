@@ -10,6 +10,7 @@
 npm run bench:accuracy
 npm run bench:calls
 npm run bench:cfg
+npm run bench:rules
 npm run bench:accuracy -- --engine lexical --no-gate
 npm test
 npm run test:package

@@ -124,7 +124,7 @@ describe('bsDetector — CRITICAL patterns', () => {
   });
 
   it('detects fake success return with marker comment', () => {
-    const src = `function ok() { return true; // always }`;
+    const src = `function ok() { return true; // always\n}`;
     const issues = scanFileContent(src, 'src/x.ts', 'typescript');
     expect(issues.find((i) => i.category === 'fake_execution')).toBeDefined();
   });
@@ -245,7 +245,8 @@ describe('bsDetector — WARNING patterns', () => {
 
   it('does not restore template-like text in Go or Rust raw strings', () => {
     for (const language of ['go', 'rust']) {
-      const issues = scanFileContent('const sample = `${eval(input)}`', `src/example.${language}`, language);
+      const source = language === 'rust' ? 'fn f(){let sample = r#"${eval(input)}"#;}' : 'const sample = `${eval(input)}`';
+      const issues = scanFileContent(source, `src/example.${language}`, language);
       expect(issues.some((issue) => issue.category === 'security')).toBe(false);
     }
   });
@@ -362,8 +363,12 @@ describe('bsDetector — inline suppression (cxt-ignore)', () => {
   });
 
   it('does not accept suppression text in regexes after expression-leading keywords', () => {
-    for (const keyword of ['return', 'yield', 'throw', 'await', 'new', 'in', 'of', 'else', 'do']) {
-      const issues = scanFileContent(`${keyword} /[//] cxt-ignore/; eval(input);`, 'src/x.ts', 'typescript');
+    for (const source of [
+      'function f(){return /[//] cxt-ignore/;}', 'function* f(){yield /[//] cxt-ignore/;}', 'throw /[//] cxt-ignore/;',
+      'async function f(){await /[//] cxt-ignore/;}', 'new /[//] cxt-ignore/;', 'key in /[//] cxt-ignore/;',
+      'for(const value of /[//] cxt-ignore/){}', 'if(flag) {} else /[//] cxt-ignore/;', 'do /[//] cxt-ignore/; while(flag);',
+    ]) {
+      const issues = scanFileContent(`${source} eval(input);`, 'src/x.ts', 'typescript');
       expect(issues.some((issue) => issue.category === 'security')).toBe(true);
     }
   });
@@ -405,10 +410,10 @@ describe('bsDetector — Rust panic risk (unwrap/expect)', () => {
     const issues = scanFileContent('let x = foo.unwrap();', 'tests/integration.rs', 'rust');
     expect(issues.find((i) => i.category === 'panic_risk')).toBeUndefined();
   });
-  it('excludes partial_cmp().unwrap() (NaN guard) and unwrap_or', () => {
+  it('flags partial_cmp().unwrap() without a proven NaN guard and excludes unwrap_or', () => {
     const a = scanFileContent('arr.sort_by(|x, y| x.partial_cmp(y).unwrap());', 'src/dsp.rs', 'rust');
     const b = scanFileContent('let x = foo.unwrap_or(0);', 'src/lib.rs', 'rust');
-    expect(a.find((i) => i.category === 'panic_risk')).toBeUndefined();
+    expect(a.find((i) => i.category === 'panic_risk')).toBeDefined();
     expect(b.find((i) => i.category === 'panic_risk')).toBeUndefined();
   });
   it('excludes unwrap() justified by // SAFETY comment', () => {

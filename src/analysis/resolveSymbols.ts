@@ -92,7 +92,7 @@ export function resolveSymbols(files: SymbolFacts[]): SymbolResolution {
     while (true) {
       const frame = facts.scopes[scope];
       if (frame.redirects?.[name] !== undefined) return lookup(facts, frame.redirects[name], name, offset, seen, true, false);
-      const found = skipClass && scope !== origin && frame.kind === 'class' ? [] : facts.bindings.filter(b => b.scope === scope && b.name === name);
+      const found = skipClass && (frame.memberOnly || scope !== origin && frame.kind === 'class') ? [] : facts.bindings.filter(b => b.scope === scope && b.name === name);
       if (found.length) {
         let bindings = found;
         if (bindings.every(b => b.value.kind === 'entity')) {

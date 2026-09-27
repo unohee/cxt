@@ -22,6 +22,13 @@ writeFileSync(join(source, 'caller.ts'), "import { read as alias } from './sampl
 writeFileSync(join(source, 'control.ts'), 'export function branch(x) { if(x) return 1; return 2; }\nexport function* partial() { yield task(); }\nexport async function awaited() { await task(); }\nexport function identity(input){return input;}\nexport function through(input){return identity(input);}\nexport function ignored(input){identity(input);return 0;}');
 writeFileSync(join(source, '.cxt-models.json'), JSON.stringify({ schemaVersion: 1, versions: { node: '22.19.0' }, assumptions: ['unmodified-external-bindings'] }));
 writeFileSync(join(source, 'library.ts'), "import {basename} from 'node:path';export function modeled(){return basename('x');}export function rejected(input){return basename(input);}");
+const rulesSource = join(scratch, 'rules');
+mkdirSync(rulesSource);
+mkdirSync(join(rulesSource, 'commands'));
+writeFileSync(join(rulesSource, 'sample.ts'), 'debugger;\nconst text = "debugger; eval(x)";');
+writeFileSync(join(rulesSource, 'read.py'), 'def read():\n print(x)\n x=1\ndef partial():\n yield 1');
+writeFileSync(join(rulesSource, 'commands', 'report.ts'), 'console.log("complete");');
+writeFileSync(join(rulesSource, '.cxt-rules.json'), JSON.stringify({ schemaVersion: 1, roles: [{ prefix: 'commands', role: 'tooling' }] }));
 
 for (const mode of ['full', 'missing']) {
   const prefix = join(scratch, 'full');
@@ -68,6 +75,25 @@ for (const mode of ['full', 'missing']) {
   assert.equal(clean.status, 0, clean.stderr + clean.stdout);
   assert.match(clean.stdout, mode === 'full' ? /ast: 6/ : /lexical: 6/);
   console.log(`${mode}: installed package; 6 grammar probes and real CLI scan passed`);
+  const bs = spawnSync(process.execPath, [join(installed, 'dist', 'cli.js'), 'bs', '--json'], {
+    cwd: rulesSource, encoding: 'utf8', timeout: 30_000, env: { ...process.env, CXT_PARSER: 'auto' },
+  });
+  assert.equal(bs.status, 1, bs.stderr + bs.stdout);
+  const parsedBs = JSON.parse(bs.stdout);
+  assert.equal(parsedBs.analysis.completeness, 'partial');
+  if (mode === 'full') {
+    assert.equal(parsedBs.analysis.engines.ast, 3);
+    assert.deepEqual(parsedBs.issues.map(issue => issue.ruleId).sort(), ['cxt/debugger-statement', 'cxt/uninitialized-read']);
+    const read = parsedBs.issues.find(issue => issue.ruleId === 'cxt/uninitialized-read');
+    assert.equal(read.line, 2);
+    assert.ok(read.column > 0 && read.endColumn > read.column);
+    assert.equal(read.flow.owner, 'read.py::read');
+    assert.equal(read.precisionBasis, 'policy-estimate');
+  } else {
+    assert.equal(parsedBs.analysis.engines.lexical, 3);
+    assert.ok(parsedBs.analysis.diagnostics.some(diagnostic => diagnostic.code === 'parser-unavailable'));
+  }
+  console.log(`${mode}: installed BS CLI reports rule evidence, role configuration and incomplete coverage`);
   if (mode === 'full') {
     const callProbe = join(scratch, 'calls.mjs');
     writeFileSync(callProbe, `

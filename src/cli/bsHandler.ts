@@ -40,6 +40,7 @@ export async function handleBs(opts: BsOptions): Promise<void> {
       warning: result.warning,
       minor: result.minor,
       errors: result.errors,
+      analysis: result.analysis,
       issues: result.issues.map(i => ({
         file: i.filePath,
         line: i.line,
@@ -48,6 +49,9 @@ export async function handleBs(opts: BsOptions): Promise<void> {
         message: i.message,
         matched: i.matchedText,
         rationale: i.rationale,
+        ruleId: i.ruleId, ruleVersion: i.ruleVersion, column: i.column, endLine: i.endLine, endColumn: i.endColumn,
+        precision: i.precision, precisionBasis: i.precisionBasis, ruleRationale: i.ruleRationale,
+        flow: i.flow,
       })),
     }, null, 2));
     if (result.critical > 0 || result.warning > 0 || result.errors.length > 0) process.exitCode = 1;
@@ -66,6 +70,7 @@ export async function handleBs(opts: BsOptions): Promise<void> {
   console.log(`  CRITICAL:      ${result.critical > 0 ? c.red : c.green}${result.critical}${c.reset}`);
   console.log(`  WARNING:       ${result.warning > 0 ? c.yellow : c.green}${result.warning}${c.reset}`);
   console.log(`  MINOR:         ${result.minor > 0 ? c.dim : c.green}${result.minor}${c.reset}`);
+  if (result.analysis) console.log(`  Analysis:      ${result.analysis.completeness} (${Object.entries(result.analysis.engines).map(([engine, count]) => `${engine}:${count}`).join(', ')})`);
   if (result.errors.length > 0) console.log(`  SCAN ERRORS:   ${c.red}${result.errors.length}${c.reset}`);
 
   if (result.issues.length > 0) {

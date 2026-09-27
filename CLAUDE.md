@@ -105,7 +105,10 @@ src/
 - Auto-migration from old (Rust-era) schemas
 
 ### BS Detector
-- Regex line matching + excludeIf filters to reduce false positives
+- AST predicates for TS/JS/Python/Rust, definite uninitialized-read dataflow; explicit lexical fallback for other languages
+- `src/analysis/rulePack.ts`: 21 rule contracts; `.cxt-rules.json` path roles; AST-comment category suppression
+- Partial CFG/effects skip definite-read solver with diagnostics; scan errors and partial coverage remain visible
+- Migration/measurement: `docs/STRUCTURAL_RULES.md`; rule gate: `npm run bench:rules`
 - i18n files auto-excluded to prevent self-detection
 - Severity: critical (fix now), warning (recommended), minor (info)
 - BS Score = (critical*10 + warning*3 + minor*1) / filesScanned

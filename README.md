@@ -103,8 +103,9 @@ Missing extraction queries and invalid queries also fail the scan.
 The public `extractFile` API returns the selected engine, declarations,
 references, symbol facts and diagnostics. `extractEntities` retains its legacy lexical API.
 AST call resolution follows project-local bindings, imports, aliases and simple receiver types.
-BS rules remain heuristic; interprocedural summaries, semantic
-library models and SARIF are tracked in the
+BS now uses AST predicates and a definite uninitialized-read dataflow rule on these languages.
+Rule metadata, path roles and current completeness limits are documented in
+[Structural rules](docs/STRUCTURAL_RULES.md). Further work, including SARIF, is tracked in the
 [ten-part implementation roadmap](docs/STATIC_ANALYSIS_ROADMAP.md).
 
 Run `npm run bench:accuracy` and `npm run bench:calls` for the handwritten declaration and call corpora, and
@@ -330,8 +331,8 @@ cxt also reads your `.gitignore` for directory patterns, and auto-detects vendor
 | CRITICAL | Hardcoded secrets | all | password/api_key/secret/token |
 | CRITICAL | debugger | TS/JS | Leftover debugger statement |
 | CRITICAL | Fake success return | all | `return true // always` |
-| CRITICAL | Fake success print | TS/JS/Py | `console.log("완료")` / `print("성공")` — claimed without verification |
-| CRITICAL | unwrap()/expect() | Rust | Production panic risk (excludes `partial_cmp`, `unwrap_or`, `// SAFETY:`) |
+| CRITICAL | Success log candidate | TS/JS/Py | Review success claims; a log alone does not establish fake execution |
+| CRITICAL | unwrap()/expect() | Rust | Production panic risk (excludes `unwrap_or`, `// SAFETY:`) |
 | CRITICAL | todo!()/unimplemented!() | Rust | Incomplete, must not ship |
 | CRITICAL | np.random/faker | Python | Fabricated data in production (excludes `seed`, tests) |
 | WARNING | eval() | all | Code injection risk |
@@ -340,10 +341,15 @@ cxt also reads your `.gitignore` for directory patterns, and auto-detects vendor
 | WARNING | `any` type | TS | TypeScript type safety bypass |
 | WARNING | example.com | all | Fake URL hardcoded |
 | WARNING | `let _ = ` / `.ok();` | Rust | Silent error swallow (excludes `// reason:`) |
+| WARNING | Uninitialized read | TS/JS/Py/Rust | Definite uninitialized value in a completed local flow model |
 | MINOR | Magic numbers | all | Unclear hardcoded values |
 | MINOR | 200+ char lines | all | Poor readability |
 
 Production vs test/example separation: Rust patterns exclude `tests/`, `examples/`, `benches/`, `/bin/`, and `build.rs`; fake-data/fake-success patterns exclude test paths.
+
+The AST rules have stable IDs, versions, source spans and policy precision metadata.
+Use `.cxt-rules.json` for explicit path roles; see [contracts and migration notes](docs/STRUCTURAL_RULES.md).
+`analysis.completeness` and diagnostics distinguish partial flow/lexical fallback from completed analysis.
 
 ### Suppressing false positives
 

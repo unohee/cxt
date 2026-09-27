@@ -10,6 +10,7 @@ import { getRegistryStore, closeRegistryStore } from '../registry/sqliteStore.js
 import { resolveProjectId } from './checkHandler.js';
 import { t } from '../i18n.js';
 import { escapeTerminal, resolveProjectDirFilter } from './outputSafety.js';
+import type { BsScanResult } from '../registry/bsDetector.js';
 
 // 색상 헬퍼 (ANSI) — checkHandler 와 동일 팔레트
 const c = {
@@ -73,6 +74,7 @@ export interface AuditResult {
     warnings: number;
   };
   pass: boolean;
+  analysis?: BsScanResult['analysis'];
 }
 
 export async function handleAudit(opts: {
@@ -129,6 +131,7 @@ export async function handleAudit(opts: {
         warnings: stats.withWarnings,
       },
       pass,
+      analysis: bs.analysis,
     };
 
     // ── JSON 모드 (CI 용) ──

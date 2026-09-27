@@ -165,3 +165,14 @@ CFG 위 worklist fixed-point solver, reaching definitions/def-use, 값 상태 �
 - audit의 project ID를 scan과 맞춰 registry.total 1,347 / untested 368 / highRisk 1 / warnings 0을 확인했다. BS는 83 files / critical 0 / warning 33 / minor 25 / errors 0 / pass true다. **이전 5차 audit는 project ID 불일치로 registry.total=0이었으므로 BS 근거로만 사용한다.** audit pass는 현행 critical/error 정책의 결과이며 전체 semantic completeness 판정이 아니다.
 - 실패 증거 `/tmp/cxt-models-verified-DwYoPt`: inline `import(...).Type[]`를 new Map generic 안에 쓰면 tsc는 허용하지만 현재 tree-sitter grammar가 syntax-error를 반환한다. 해당 자체 소스를 `import type`으로 고치고 재측정했다. 전체 snapshot commit 0을 보존했으며 일반 문법 지원 gap은 AGT-4564에 기록했다.
 - 제한: runtime/lockfile 자동 버전 확인, namespace/default/receiver, framework callbacks, resource lifecycle/Rust ownership 및 독립 평가가 남는다. 명시한 가정 하의 제한된 모델 계약이다. 다음은 7 AST 규칙과 8 진단 출력이며, 4의 resource/ownership 기준은 계속 열린 상태다.
+
+## 실행 기록 — 2026-09-27, 7차 구조적 규칙
+
+- 7: 기존 20패턴을 AST로 이식하고 completed local dataflow에서만 진단하는 uninitialized-read를 추가했다. 규칙 ID/version/rationale/precision policy/positive-negative fixture, 명시적 path role, comment-only category suppression, JSON source span/flow evidence를 제공한다. [계약 및 의미 변경](STRUCTURAL_RULES.md).
+- 10: 21규칙/42개 수기 개발 fixture, 규칙별 precision/recall/span gate 및 extra/missing/duplicate/wrong-rule/span mutation 검사. 현재 각 규칙 1.0이며 2개 fixture의 partial flow는 별도 표시한다. CodeQL 동등성이나 실세계 정밀도 근거가 아니다.
+- 검증: 전체 테스트 722개, lint/build, rule/call/flow gates, 실제 tarball 설치와 native 부재 시 BS/scan/CFG/flow/impact CLI 검사 통과(`/tmp/cxt-packed-frontends-nJ9C2N`). 기존 BS 82개 회귀검사는 잘못된 소스 fixture를 실제 문법으로 고쳤으며, Rust partial_cmp unwrap의 잘못된 NaN 면제를 제거했다.
+- 실제 소스에서 object property를 lexical local로 취급하던 오류가 definite-uninitialized 36개로 드러났다. TS object/class의 member-only scope를 변수 lookup에서 제외하고 object initializer의 원래 caller를 유지했다. member lookup/lexical TDZ positive/call target/parameter dependency 회귀로 고정했다.
+- 최신 BS(`/tmp/cxt-rules-verified-de3LoW`): 91 files / critical 0 / warning 120 / minor 53 / errors 0 / 52.586초. partial 진단 unsupported-effect 280 / work-budget 23 / partial-cfg 1. definite-uninitialized 0. 같은 프로세스의 전체 fact DB scan은 60.706초에 dataflow timeout으로 rollback했고 registry total 0이다. 성공한 최신 snapshot으로 오인하지 않는다. 전체 max RSS 899,868 KiB.
+- 성능 수정: partial CFG/effect의 결과는 확정 finding에 쓸 수 없어 solver 전에 사유를 기록한다. 이전 BS timeout(49 files)에서 전체 91 files 처리로 개선됐으며 cap은 늘리지 않았다. 전체 DB scan 성능은 9단계에서 추가로 해결한다.
+- AGT-3915: 현재 vega-router tracked src/scripts Python 70파일의 legacy 44 → AST 16 후보. 원래 HTTP/IP/상수 오탐은 사라지고 shortlist_models.py:230의 400은 유지됐다. 과거 64파일과 범위가 달라 전체 FP≤20%는 미입증이며 이 이슈는 유지한다. 새 평가 코드/가격 단위 후보의 판정이 남았다.
+- 7 핵심 구현은 In Review로 옮기고 8 SARIF/자동화 결과 계약을 진행한다. resource/ownership, grammar/동적 의미 지원, 8–10 및 독립 평가를 완료하지 않았으므로 전체 목표는 계속 진행 중이다.

@@ -18,6 +18,8 @@ export interface SymbolScope {
   endOffset: number;
   owner?: string;
   receiver?: SymbolValue;
+  /** JS object/class members do not introduce lexical names in initializers. */
+  memberOnly?: boolean;
   redirects?: Record<string, number>;
   parameters?: Array<{ index: number; name?: string; receiver: boolean }>;
 }
