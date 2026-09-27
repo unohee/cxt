@@ -111,3 +111,12 @@ CFG 위 worklist fixed-point solver, reaching definitions/def-use, 값 상태 �
 - 검증: lint/build, Vitest 387개, 기존 benchmark harness 6개 통과. 실제 tarball 글로벌 설치 후 6개 grammar probe와 CLI scan 통과. 임시 설치의 native 패키지를 옮긴 뒤 auto fallback/강제 ast 실패를 확인했다. 잘못된 소스의 CLI exit 1 확인. lexical을 현행 정확도 게이트에 넣으면 exit 1.
 - 현재 소스의 격리 DB scan: 28 files / 435 entities / parser diagnostics 0 / scan errors 0. audit: critical 0, warning 18, minor 11, errors 0, pass true. 이 수치는 관계 그래프 정답률을 의미하지 않는다.
 - 남은 범위: 2–9 구현, 10의 호출 정답/실세계·held-out 계층과 CI. AGT-3878/3879의 전체 DoD는 아직 미완료다. 보안 확대 답변 없이 기존 보안 제외 범위를 임의로 바꾸지 않는다.
+
+## 실행 기록 — 2026-09-27, 2차 구현
+
+- 2: AST의 scope/binding/import/re-export/alias/간단한 receiver type을 실제 scan에 연결했다. 미해석을 별도 상태·이유로 남기고 v4 `code_call_sites`에서 source span/caller/target/reason/confidence를 조회한다. relation은 해석된 호출에서 파생하며 recursion을 보존한다. `calls --json` 및 text로 미해석도 확인할 수 있다.
+- 10: 다중 파일 수기 호출 코퍼스 39개/55개 위치와 언어별 precision/recall/site/resolution 게이트, 잘못된 대상·위치·누락·중복 mutation 검사를 추가했다. 현재 개발 코퍼스는 모든 값 1.0이며 독립 평가로 해석하지 않는다.
+- 검증: Vitest 444개, lint/build, 기존 benchmark harness 6개, 선언·호출 게이트, npm tarball의 실제 설치/CLI 조회 통과. v3→v4 migration에서 엔티티/FTS 보존, 호출 저장 실패와 최종 relation 저장 실패 시 이전 snapshot rollback 검증.
+- 실제 현 소스 격리 scan(`/tmp/cxt-symbol-self-MQRsxe`): 32 files / 852 entities / errors 0 / diagnostics 0. 4,061 calls 중 resolved 1,012, unresolved 2,189, external 860. 호출 정답률을 측정한 결과가 아니며 coverage gap을 보여준다.
+- 2의 현재 한계: tsconfig 및 workspace/package 경로, full type inference/subtype dispatch, member mutation, decorator/macro/framework callback 의미는 미완료다. confidence 1/0.9/0은 정책 값이며 확률 보정값이 아니다. 재할당은 CFG/dataflow 전까지 보수적으로 미해석한다. anonymous callback 안의 호출은 별도 함수 소유로 기록한다.
+- 다음: 3 CFG → 4 intraprocedural dataflow → 5 interprocedural summaries. 실제 저장소·held-out 평가 및 나머지 6–9와 CI는 계속 열린 상태다.

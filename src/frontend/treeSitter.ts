@@ -5,12 +5,13 @@ import type { EntityKind } from '../registry/schema.js';
 import type { ExtractedEntity, ReferenceSet } from '../registry/entityScanner.js';
 import { entityQualifiedName, FrontendError } from './types.js';
 import type { AstLanguage, FrontendResult, LanguageFrontend } from './types.js';
+import { extractSymbolFacts } from './symbolFacts.js';
 
 type Node = Parser.SyntaxNode;
 const require = createRequire(import.meta.url);
 const CALLABLE = new Set(['function_declaration', 'generator_function_declaration', 'function_signature',
   'method_definition', 'abstract_method_signature', 'arrow_function', 'function_expression',
-  'generator_function', 'function_definition', 'function_item', 'function_signature_item', 'closure_expression']);
+  'generator_function', 'function_definition', 'lambda', 'function_item', 'function_signature_item', 'closure_expression']);
 const CLASS = new Set(['class', 'class_declaration', 'abstract_class_declaration', 'class_definition', 'struct_item']);
 const TYPE = new Set(['interface_declaration', 'type_alias_declaration', 'enum_declaration',
   'enum_item', 'trait_item', 'type_item']);
@@ -174,6 +175,20 @@ function extract(parser: Parser, query: Parser.Query, language: AstLanguage, con
       line: error.startPosition.row + 1, column: error.startPosition.column + 1 });
   }
   const found = query.captures(tree.rootNode).flatMap(capture => declarations(capture.node, language));
+  const claimed = new Set(found.map(declaration => declaration.callable.id));
+  const stack = [tree.rootNode];
+  while (stack.length) {
+    const node = stack.pop()!;
+    if (CALLABLE.has(node.type) && field(node, 'body') && !claimed.has(node.id)) {
+      // Anonymous callbacks own their calls; attributing those calls to the
+      // surrounding function would fabricate synchronous call edges.
+      found.push({ node, callable: node, range: node, kind: 'function',
+        name: `<lambda@${node.startPosition.row + 1}:${node.startPosition.column + 1}>` });
+      claimed.add(node.id);
+    }
+    for (const child of node.namedChildren) stack.push(child);
+  }
+  found.sort((a, b) => a.node.startIndex - b.node.startIndex);
   const byNode = new Map<number, Declaration[]>();
   for (const declaration of found) {
     const siblings = byNode.get(declaration.node.id) ?? [];
@@ -205,5 +220,7 @@ function extract(parser: Parser, query: Parser.Query, language: AstLanguage, con
     if (kind === 'function' || kind === 'class') refs.set(entityQualifiedName(entity), references(declaration, byNode));
     return entity;
   });
-  return { engine: 'ast', entities, references: refs, diagnostics: [] };
+  const symbols = extractSymbolFacts(tree.rootNode, language, filePath,
+    found.map((declaration, index) => ({ node: declaration.node, callable: declaration.callable, entity: entities[index] })));
+  return { engine: 'ast', entities, references: refs, diagnostics: [], symbols };
 }

@@ -190,6 +190,7 @@ export async function handleCheck(
       console.log(`  ${m.testsMapped.padEnd(16)}${c.cyan}${result.testsMapped}${c.reset}`);
       console.log(`  ${'Relations'.padEnd(16)}${c.cyan}${result.relationsLoaded}${c.reset}`);
       console.log(`  ${'Parsers'.padEnd(16)}${Object.entries(result.parserBreakdown).map(([engine, count]) => `${engine}: ${count}`).join(', ') || 'none'}`);
+      console.log(`  ${'Call sites'.padEnd(16)}${result.callSites.total} (${result.callSites.resolved} resolved, ${result.callSites.unresolved} unresolved, ${result.callSites.external} external)`);
       console.log(`  ${m.duration.padEnd(16)}${c.dim}${result.durationMs}ms${c.reset}`);
 
       if (Object.keys(result.languageBreakdown).length > 0) {

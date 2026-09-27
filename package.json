@@ -23,6 +23,7 @@
     "bench:codex": "node testing/cxt_bench_codex.mjs",
     "test:watch": "vitest",
     "bench:accuracy": "node --import=tsx bench/accuracy.ts",
+    "bench:calls": "node --import=tsx bench/call-accuracy.ts",
     "test:package": "npm run build && node scripts/test-packed-frontends.mjs",
     "test:coverage": "vitest run --coverage",
     "prepublishOnly": "npm run build && npm test"

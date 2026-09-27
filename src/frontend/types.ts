@@ -1,4 +1,5 @@
 import type { ExtractedEntity, ReferenceSet } from '../registry/entityScanner.js';
+import type { SymbolFacts } from '../analysis/symbols.js';
 
 export type ParserMode = 'auto' | 'ast' | 'lexical';
 export type AstLanguage = 'typescript' | 'python' | 'rust';
@@ -16,6 +17,7 @@ export interface FrontendResult {
   entities: ExtractedEntity[];
   references: Map<string, ReferenceSet>;
   diagnostics: FrontendDiagnostic[];
+  symbols?: SymbolFacts;
 }
 
 export interface LanguageFrontend {

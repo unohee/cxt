@@ -63,7 +63,7 @@ cxt scan
 cxt audit --json
 ```
 
-`audit` does not replace `scan`: BS detection reads source files directly, while integrity, call-graph, impact, and preflight results use the persisted registry at `~/.cxt/registry.db`. Refresh the registry whenever the checkout has changed. `scan` uses AST declaration/reference extraction for TS/JS, Python and Rust; other languages use lexical extraction with diagnostics. Symbol resolution, CFG, dataflow and AST BS rules remain roadmap work. See `docs/STATIC_ANALYSIS_ROADMAP.md` and `bench/README.md` for current scope and evidence.
+`audit` does not replace `scan`: BS detection reads source files directly, while integrity, call-graph, impact, and preflight results use the persisted registry at `~/.cxt/registry.db`. Refresh the registry whenever the checkout has changed. `scan` uses AST extraction and project-local symbol/call resolution for TS/JS, Python and Rust; other languages use lexical extraction with diagnostics. Source-located calls, including unresolved/external reasons, live in `code_call_sites` (DB v4) and appear in `calls --json`. Confidence values are policy scores, not calibrated probabilities. Full type/dispatch/package resolution, CFG, dataflow and AST BS rules remain roadmap work. See `docs/STATIC_ANALYSIS_ROADMAP.md` and `bench/README.md` for current scope and evidence.
 
 ## Architecture
 

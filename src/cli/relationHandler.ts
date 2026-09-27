@@ -141,16 +141,21 @@ export async function handleCalls(name: string, opts: RelationOptions): Promise<
     if (!target) { process.exitCode = 1; return; }
 
     const callees = store.getOutgoingRelations(target.id, relType);
+    const callSites = !relType || relType === 'calls' ? store.getCallSites(projectId, target.id) : [];
 
     if (opts.json) {
       console.log(JSON.stringify({
         source: target.qualifiedName,
         callees: callees.map(r => ({ name: r.targetName, file: r.targetFile, type: r.relationType })),
+        callSites,
       }, null, 2));
       return;
     }
 
     console.log(`${c.bold}${safe(m.relCalls(target.name, target.filePath, target.lineStart))}${c.reset}`);
+    for (const site of callSites.filter(site => site.resolution !== 'resolved')) {
+      console.log(`  ${c.yellow}? ${safe(site.expression)}${c.reset} ${c.dim}[${site.resolution}: ${site.reason}] ${safe(site.filePath)}:${site.line}:${site.column}${c.reset}`);
+    }
     if (callees.length === 0) {
       console.log(`  ${c.dim}${m.relCallsNone}${c.reset}\n`);
       return;

@@ -1,0 +1,715 @@
+[
+  {
+    "id": "ts-import",
+    "language": "typescript",
+    "files": {
+      "lib.ts": "export function run() {}",
+      "other.ts": "export function run() {}",
+      "main.ts": "import {run as go} from './lib.js';\nfunction caller() {\n  go();\n}"
+    },
+    "expected": [
+      [
+        "main.ts",
+        3,
+        3,
+        "lib.ts::run"
+      ]
+    ]
+  },
+  {
+    "id": "ts-reexport",
+    "language": "typescript",
+    "files": {
+      "lib.ts": "export function run() {}",
+      "barrel.ts": "export {run as execute} from './lib';",
+      "main.ts": "import {execute} from './barrel';\nfunction caller() {\n  execute();\n}"
+    },
+    "expected": [
+      [
+        "main.ts",
+        3,
+        3,
+        "lib.ts::run"
+      ]
+    ]
+  },
+  {
+    "id": "ts-star-cycle",
+    "language": "typescript",
+    "files": {
+      "a.ts": "export * from './b';\nexport function run() {}",
+      "b.ts": "export * from './a';",
+      "main.ts": "import {run} from './b';\nfunction caller() {\n  run();\n}"
+    },
+    "expected": [
+      [
+        "main.ts",
+        3,
+        3,
+        "a.ts::run"
+      ]
+    ]
+  },
+  {
+    "id": "ts-default-namespace",
+    "language": "typescript",
+    "files": {
+      "lib.ts": "export default class Worker { run() {} }\nexport function helper() {}",
+      "main.ts": "import Worker, * as lib from './lib';\nfunction caller() {\n  const w = new Worker();\n  w.run();\n  lib.helper();\n}"
+    },
+    "expected": [
+      [
+        "main.ts",
+        3,
+        13,
+        "lib.ts::Worker"
+      ],
+      [
+        "main.ts",
+        4,
+        3,
+        "lib.ts::Worker.run"
+      ],
+      [
+        "main.ts",
+        5,
+        3,
+        "lib.ts::helper"
+      ]
+    ]
+  },
+  {
+    "id": "ts-shadow",
+    "language": "typescript",
+    "files": {
+      "lib.ts": "export function run() {}",
+      "main.ts": "import {run} from './lib';\nfunction caller(run: () => void) {\n  run();\n}\nfunction other() {\n  run();\n}"
+    },
+    "expected": [
+      [
+        "main.ts",
+        3,
+        3,
+        null
+      ],
+      [
+        "main.ts",
+        6,
+        3,
+        "lib.ts::run"
+      ]
+    ]
+  },
+  {
+    "id": "ts-unbound",
+    "language": "typescript",
+    "files": {
+      "lib.ts": "export function run() {}",
+      "main.ts": "function caller() {\n  run();\n}"
+    },
+    "expected": [
+      [
+        "main.ts",
+        2,
+        3,
+        null
+      ]
+    ]
+  },
+  {
+    "id": "ts-alias-recursion",
+    "language": "typescript",
+    "files": {
+      "main.ts": "function run() {\n  run();\n}\nfunction caller() {\n  const alias = run;\n  alias();\n}"
+    },
+    "expected": [
+      [
+        "main.ts",
+        2,
+        3,
+        "main.ts::run"
+      ],
+      [
+        "main.ts",
+        6,
+        3,
+        "main.ts::run"
+      ]
+    ]
+  },
+  {
+    "id": "ts-reassignment",
+    "language": "typescript",
+    "files": {
+      "main.ts": "function target() {}\nfunction caller() {\n  let f = target;\n  if (condition) { f = unknown; }\n  f();\n}"
+    },
+    "expected": [
+      [
+        "main.ts",
+        5,
+        3,
+        null
+      ]
+    ]
+  },
+  {
+    "id": "ts-inheritance",
+    "language": "typescript",
+    "files": {
+      "main.ts": "class Base { run() {} }\nclass Derived extends Base {}\nfunction caller(x: Derived) {\n  x.run();\n}"
+    },
+    "expected": [
+      [
+        "main.ts",
+        4,
+        3,
+        "main.ts::Base.run"
+      ]
+    ]
+  },
+  {
+    "id": "ts-object",
+    "language": "typescript",
+    "files": {
+      "main.ts": "const handlers = { run() {} };\nfunction caller() {\n  handlers.run();\n  run();\n}"
+    },
+    "expected": [
+      [
+        "main.ts",
+        3,
+        3,
+        "main.ts::handlers.run"
+      ],
+      [
+        "main.ts",
+        4,
+        3,
+        null
+      ]
+    ]
+  },
+  {
+    "id": "ts-overload",
+    "language": "typescript",
+    "files": {
+      "main.ts": "function run(x:number):number;\nfunction run(x:string):string;\nfunction run(x:any) { return x; }\nfunction caller() {\n  run(1);\n}"
+    },
+    "expected": [
+      [
+        "main.ts",
+        5,
+        3,
+        "main.ts::run@3:1"
+      ]
+    ]
+  },
+  {
+    "id": "ts-external",
+    "language": "typescript",
+    "files": {
+      "main.ts": "import {readFile} from 'node:fs';\nfunction caller() {\n  readFile('x');\n}"
+    },
+    "expected": [
+      [
+        "main.ts",
+        3,
+        3,
+        null,
+        "external"
+      ]
+    ]
+  },
+  {
+    "id": "ts-namespace",
+    "language": "typescript",
+    "files": {
+      "main.ts": "namespace Util { export function run() {} }\nfunction caller() {\n  Util.run();\n}"
+    },
+    "expected": [
+      [
+        "main.ts",
+        3,
+        3,
+        "main.ts::Util.run"
+      ]
+    ]
+  },
+  {
+    "id": "ts-nested",
+    "language": "typescript",
+    "files": {
+      "main.ts": "function run() {}\nfunction outer() {\n  function run() {}\n  function inner() {\n    run();\n  }\n  inner();\n}"
+    },
+    "expected": [
+      [
+        "main.ts",
+        5,
+        5,
+        "main.ts::outer.run"
+      ],
+      [
+        "main.ts",
+        7,
+        3,
+        "main.ts::outer.inner"
+      ]
+    ]
+  },
+  {
+    "id": "py-import",
+    "language": "python",
+    "files": {
+      "lib.py": "def run(): pass",
+      "other.py": "def run(): pass",
+      "main.py": "from lib import run as go\ndef caller():\n  go()"
+    },
+    "expected": [
+      [
+        "main.py",
+        3,
+        3,
+        "lib.py::run"
+      ]
+    ]
+  },
+  {
+    "id": "py-relative",
+    "language": "python",
+    "files": {
+      "pkg/__init__.py": "",
+      "pkg/lib.py": "def run(): pass",
+      "pkg/main.py": "from .lib import run as go\ndef caller():\n  go()"
+    },
+    "expected": [
+      [
+        "pkg/main.py",
+        3,
+        3,
+        "pkg/lib.py::run"
+      ]
+    ]
+  },
+  {
+    "id": "py-namespace",
+    "language": "python",
+    "files": {
+      "lib.py": "def run(): pass",
+      "main.py": "import lib as ns\ndef caller():\n  ns.run()"
+    },
+    "expected": [
+      [
+        "main.py",
+        3,
+        3,
+        "lib.py::run"
+      ]
+    ]
+  },
+  {
+    "id": "py-shadow",
+    "language": "python",
+    "files": {
+      "main.py": "def run(): pass\ndef caller(run):\n  run()\ndef other():\n  run()"
+    },
+    "expected": [
+      [
+        "main.py",
+        3,
+        3,
+        null
+      ],
+      [
+        "main.py",
+        5,
+        3,
+        "main.py::run"
+      ]
+    ]
+  },
+  {
+    "id": "py-alias",
+    "language": "python",
+    "files": {
+      "main.py": "def run(): pass\ndef caller():\n  f = run\n  f()"
+    },
+    "expected": [
+      [
+        "main.py",
+        4,
+        3,
+        "main.py::run"
+      ]
+    ]
+  },
+  {
+    "id": "py-method",
+    "language": "python",
+    "files": {
+      "lib.py": "class Worker:\n  def run(self): pass",
+      "main.py": "from lib import Worker\ndef caller():\n  w = Worker()\n  w.run()"
+    },
+    "expected": [
+      [
+        "main.py",
+        3,
+        7,
+        "lib.py::Worker"
+      ],
+      [
+        "main.py",
+        4,
+        3,
+        "lib.py::Worker.run"
+      ]
+    ]
+  },
+  {
+    "id": "py-self-inheritance",
+    "language": "python",
+    "files": {
+      "main.py": "class Base:\n  def run(self): pass\nclass Derived(Base):\n  def caller(self):\n    self.run()"
+    },
+    "expected": [
+      [
+        "main.py",
+        5,
+        5,
+        "main.py::Base.run"
+      ]
+    ]
+  },
+  {
+    "id": "py-recursion",
+    "language": "python",
+    "files": {
+      "main.py": "def recursive():\n  recursive()\ndef caller():\n  def inner(): pass\n  inner()"
+    },
+    "expected": [
+      [
+        "main.py",
+        2,
+        3,
+        "main.py::recursive"
+      ],
+      [
+        "main.py",
+        5,
+        3,
+        "main.py::caller.inner"
+      ]
+    ]
+  },
+  {
+    "id": "py-reassign",
+    "language": "python",
+    "files": {
+      "main.py": "def run(): pass\ndef caller():\n  f = run\n  f = unknown\n  f()"
+    },
+    "expected": [
+      [
+        "main.py",
+        5,
+        3,
+        null
+      ]
+    ]
+  },
+  {
+    "id": "py-unbound-external",
+    "language": "python",
+    "files": {
+      "lib.py": "def run(): pass",
+      "main.py": "import requests\ndef caller():\n  run()\n  requests.get('url')"
+    },
+    "expected": [
+      [
+        "main.py",
+        3,
+        3,
+        null
+      ],
+      [
+        "main.py",
+        4,
+        3,
+        null,
+        "external"
+      ]
+    ]
+  },
+  {
+    "id": "rust-module",
+    "language": "rust",
+    "files": {
+      "src/lib.rs": "pub mod helper;\nfn caller() {\n  helper::run();\n}",
+      "src/helper.rs": "pub fn run() {}"
+    },
+    "expected": [
+      [
+        "src/lib.rs",
+        3,
+        3,
+        "src/helper.rs::run"
+      ]
+    ]
+  },
+  {
+    "id": "rust-use-alias",
+    "language": "rust",
+    "files": {
+      "src/lib.rs": "mod helper;\nuse crate::helper::run as go;\nfn caller() {\n  go();\n}",
+      "src/helper.rs": "pub fn run() {}"
+    },
+    "expected": [
+      [
+        "src/lib.rs",
+        4,
+        3,
+        "src/helper.rs::run"
+      ]
+    ]
+  },
+  {
+    "id": "rust-use-group",
+    "language": "rust",
+    "files": {
+      "src/lib.rs": "mod helper;\nuse crate::helper::{run as go, Worker};\nfn caller(w: Worker) {\n  go();\n  w.run();\n}",
+      "src/helper.rs": "pub fn run() {}\npub struct Worker;\nimpl Worker { pub fn run(&self) {} }"
+    },
+    "expected": [
+      [
+        "src/lib.rs",
+        4,
+        3,
+        "src/helper.rs::run"
+      ],
+      [
+        "src/lib.rs",
+        5,
+        3,
+        "src/helper.rs::Worker.run"
+      ]
+    ]
+  },
+  {
+    "id": "rust-crate-path",
+    "language": "rust",
+    "files": {
+      "src/lib.rs": "pub mod helper;\nfn caller() {\n  crate::helper::run();\n}",
+      "src/helper.rs": "pub fn run() {}"
+    },
+    "expected": [
+      [
+        "src/lib.rs",
+        3,
+        3,
+        "src/helper.rs::run"
+      ]
+    ]
+  },
+  {
+    "id": "rust-inline-module",
+    "language": "rust",
+    "files": {
+      "src/lib.rs": "mod helper { pub fn run() {} }\nfn caller() {\n  helper::run();\n}"
+    },
+    "expected": [
+      [
+        "src/lib.rs",
+        3,
+        3,
+        "src/lib.rs::helper.run"
+      ]
+    ]
+  },
+  {
+    "id": "rust-self",
+    "language": "rust",
+    "files": {
+      "src/lib.rs": "struct Worker;\nimpl Worker {\n  fn run(&self) {}\n  fn caller(&self) {\n    self.run();\n  }\n}"
+    },
+    "expected": [
+      [
+        "src/lib.rs",
+        5,
+        5,
+        "src/lib.rs::Worker.run"
+      ]
+    ]
+  },
+  {
+    "id": "rust-new",
+    "language": "rust",
+    "files": {
+      "src/lib.rs": "struct Worker;\nimpl Worker {\n  fn new() -> Self { Worker }\n  fn run(&self) {}\n}\nfn caller() {\n  let w = Worker::new();\n  w.run();\n}"
+    },
+    "expected": [
+      [
+        "src/lib.rs",
+        7,
+        11,
+        "src/lib.rs::Worker.new"
+      ],
+      [
+        "src/lib.rs",
+        8,
+        3,
+        "src/lib.rs::Worker.run"
+      ]
+    ]
+  },
+  {
+    "id": "rust-recursion",
+    "language": "rust",
+    "files": {
+      "src/lib.rs": "fn run() {\n  run();\n}\nfn caller() {\n  let alias = run;\n  alias();\n}"
+    },
+    "expected": [
+      [
+        "src/lib.rs",
+        2,
+        3,
+        "src/lib.rs::run"
+      ],
+      [
+        "src/lib.rs",
+        6,
+        3,
+        "src/lib.rs::run"
+      ]
+    ]
+  },
+  {
+    "id": "rust-shadow",
+    "language": "rust",
+    "files": {
+      "src/lib.rs": "fn run() {}\nfn caller(run: fn()) {\n  run();\n}"
+    },
+    "expected": [
+      [
+        "src/lib.rs",
+        3,
+        3,
+        null
+      ]
+    ]
+  },
+  {
+    "id": "rust-unbound-external",
+    "language": "rust",
+    "files": {
+      "src/lib.rs": "use external::run;\nfn caller() {\n  run();\n  missing();\n}",
+      "src/other.rs": "pub fn missing() {}"
+    },
+    "expected": [
+      [
+        "src/lib.rs",
+        3,
+        3,
+        null,
+        "external"
+      ],
+      [
+        "src/lib.rs",
+        4,
+        3,
+        null
+      ]
+    ]
+  },
+  {
+    "id": "ts-star-unknown",
+    "language": "typescript",
+    "files": {
+      "lib.ts": "export function run() {}",
+      "barrel.ts": "export * from './lib'; export * from 'external';",
+      "main.ts": "import {run} from './barrel';\nrun();"
+    },
+    "expected": [
+      [
+        "main.ts",
+        2,
+        1,
+        null
+      ]
+    ]
+  },
+  {
+    "id": "ts-owned-member-shadows-base",
+    "language": "typescript",
+    "files": {
+      "main.ts": "class Base { run(){} }\nclass Child extends Base { run = unknown; }\nconst c = new Child();\nc.run();"
+    },
+    "expected": [
+      [
+        "main.ts",
+        3,
+        11,
+        "main.ts::Child"
+      ],
+      [
+        "main.ts",
+        4,
+        1,
+        null
+      ]
+    ]
+  },
+  {
+    "id": "ts-nested-invocation-span",
+    "language": "typescript",
+    "files": {
+      "main.ts": "function run() {}\nrun()();"
+    },
+    "expected": [
+      [
+        "main.ts",
+        2,
+        1,
+        "main.ts::run",
+        "resolved",
+        2,
+        6
+      ],
+      [
+        "main.ts",
+        2,
+        1,
+        null,
+        "unresolved",
+        2,
+        8
+      ]
+    ]
+  },
+  {
+    "id": "py-loop-binding-shadow",
+    "language": "python",
+    "files": {
+      "main.py": "def run(): pass\ndef caller():\n for run in callbacks:\n  run()"
+    },
+    "expected": [
+      [
+        "main.py",
+        4,
+        3,
+        null
+      ]
+    ]
+  },
+  {
+    "id": "rs-loop-binding-shadow",
+    "language": "rust",
+    "files": {
+      "main.rs": "fn run() {}\nfn caller() {\n for run in callbacks {\n  run();\n }\n}"
+    },
+    "expected": [
+      [
+        "main.rs",
+        4,
+        3,
+        null
+      ]
+    ]
+  }
+]

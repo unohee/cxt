@@ -16,6 +16,7 @@ import type {
   WarningSeverity, WarningCategory, RelationType,
   FileBrief, RegistryStats,
 } from './schema.js';
+import type { ResolvedCallSite, SymbolValue } from '../analysis/symbols.js';
 
 function boundedPagination(value: number | undefined, fallback: number, min: number, max: number, name: string): number {
   const resolved = value ?? fallback;
@@ -190,7 +191,7 @@ export class SqliteRegistryStore {
   //           omitted — P1 (tree-sitter frontend) is expected to extend
   //           EntityKind and pinning it now would force another rebuild.
   //           relations' relation_type CHECK moves to P2 v4 (code_call_sites).
-  private static readonly SCHEMA_VERSION = 3;
+  private static readonly SCHEMA_VERSION = 4;
 
   // The last version in which the FTS index schema (set of indexed columns)
   // changed. Decoupled from the user_version bump: through v2 "version went up"
@@ -500,7 +501,7 @@ export class SqliteRegistryStore {
       // Forward-compat guard: a future (v4+) DB whose schema legitimately
       // differs must never be "healed" down to the canonical 26 columns by an
       // older binary. State-based healing applies only to versions we know (≤3).
-      if (currentVersion <= SqliteRegistryStore.SCHEMA_VERSION && !readsV3Schema()) {
+      if (currentVersion <= 3 && !readsV3Schema()) {
         // Copy only columns the source actually has (mirrors the v1→v2 path):
         // a degraded legacy table missing e.g. `signature` must not crash the
         // rebuild with "no such column". Missing columns take their DDL defaults.
@@ -625,6 +626,34 @@ export class SqliteRegistryStore {
       CREATE INDEX IF NOT EXISTS idx_cer_target ON code_entity_relations(target_id, relation_type);
     `);
 
+    // v4 adds source-located call facts independently of the entity/FTS schema.
+    if (currentVersion <= SqliteRegistryStore.SCHEMA_VERSION) {
+      this.db.transaction(() => this.db.exec(`
+        CREATE TABLE IF NOT EXISTS code_call_sites (
+          project_id TEXT NOT NULL,
+          file_path TEXT NOT NULL,
+          line INTEGER NOT NULL CHECK (line > 0),
+          column_number INTEGER NOT NULL CHECK (column_number > 0),
+          end_line INTEGER NOT NULL CHECK (end_line >= line),
+          end_column INTEGER NOT NULL CHECK (end_column > 0),
+          source_offset INTEGER NOT NULL CHECK (source_offset >= 0),
+          scope_id INTEGER NOT NULL CHECK (scope_id >= 0),
+          caller_id TEXT REFERENCES code_entities(id) ON DELETE CASCADE,
+          target_id TEXT REFERENCES code_entities(id) ON DELETE CASCADE,
+          expression TEXT NOT NULL,
+          callee_json TEXT NOT NULL CHECK (json_valid(callee_json)),
+          resolution TEXT NOT NULL CHECK (resolution IN ('resolved', 'unresolved', 'external')),
+          reason TEXT NOT NULL,
+          confidence REAL NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
+          PRIMARY KEY (project_id, file_path, line, column_number, end_line, end_column),
+          CHECK ((resolution = 'resolved' AND target_id IS NOT NULL) OR (resolution != 'resolved' AND target_id IS NULL))
+        );
+        CREATE INDEX IF NOT EXISTS idx_ccs_caller ON code_call_sites(caller_id);
+        CREATE INDEX IF NOT EXISTS idx_ccs_target ON code_call_sites(target_id);
+        CREATE INDEX IF NOT EXISTS idx_ccs_resolution ON code_call_sites(project_id, resolution);
+      `)).immediate();
+    }
+
     // ── FTS virtual table + triggers ──
     // INT-1478: rebuild only on first open or when the FTS-indexed column set
     // actually changed. INT-3881: decoupled from the user_version bump so that
@@ -698,6 +727,54 @@ export class SqliteRegistryStore {
   /** 여러 공개 저장 연산을 하나의 원자적 작업으로 묶는다. */
   runInTransaction<T>(operation: () => T): T {
     return this.db.transaction(operation)();
+  }
+
+  replaceCallSitesForProject(projectId: string, sites: ResolvedCallSite[]): number {
+    const entities = this.db.prepare('SELECT id, qualified_name FROM code_entities WHERE project_id = ?')
+      .all(projectId) as Array<{ id: string; qualified_name: string }>;
+    const ids = new Map(entities.map(e => [e.qualified_name, e.id]));
+    const insert = this.db.prepare(`INSERT INTO code_call_sites
+      (project_id, file_path, line, column_number, end_line, end_column, source_offset, scope_id,
+       caller_id, target_id, expression, callee_json, resolution, reason, confidence)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    return this.db.transaction(() => {
+      this.db.prepare('DELETE FROM code_call_sites WHERE project_id = ?').run(projectId);
+      for (const site of sites) {
+        const callerId = site.caller ? ids.get(site.caller) : null;
+        const targetId = site.target ? ids.get(site.target) : null;
+        if (site.caller && !callerId) throw new Error(`Unregistered call-site caller: ${site.caller}`);
+        if (site.target && !targetId) throw new Error(`Unregistered call-site target: ${site.target}`);
+        insert.run(projectId, site.filePath, site.line, site.column, site.endLine, site.endColumn,
+          site.offset, site.scope, callerId, targetId, site.expression, JSON.stringify(site.callee),
+          site.resolution, site.reason, site.confidence);
+      }
+      return sites.length;
+    })();
+  }
+
+  getCallSites(projectId: string, callerId?: string): ResolvedCallSite[] {
+    const rows = this.db.prepare(`SELECT c.*, source.qualified_name AS caller, target.qualified_name AS target
+      FROM code_call_sites c
+      LEFT JOIN code_entities source ON source.id = c.caller_id
+      LEFT JOIN code_entities target ON target.id = c.target_id
+      WHERE c.project_id = ? ${callerId ? 'AND c.caller_id = ?' : ''}
+      ORDER BY c.file_path, c.line, c.column_number, c.end_line, c.end_column`)
+      .all(...(callerId ? [projectId, callerId] : [projectId])) as Array<{
+        file_path: string; caller: string | null; target: string | null; scope_id: number; callee_json: string;
+        expression: string; line: number; column_number: number; end_line: number; end_column: number;
+        source_offset: number; resolution: ResolvedCallSite['resolution']; reason: ResolvedCallSite['reason']; confidence: number;
+      }>;
+    return rows.map(row => ({ filePath: row.file_path, caller: row.caller ?? undefined, target: row.target ?? undefined,
+      scope: row.scope_id, callee: JSON.parse(row.callee_json) as SymbolValue, expression: row.expression,
+      line: row.line, column: row.column_number, endLine: row.end_line, endColumn: row.end_column,
+      offset: row.source_offset, resolution: row.resolution, reason: row.reason, confidence: row.confidence }));
+  }
+
+  getCallSiteRelations(projectId: string): Array<{ sourceId: string; targetId: string; relationType: RelationType }> {
+    const rows = this.db.prepare(`SELECT DISTINCT caller_id, target_id FROM code_call_sites
+      WHERE project_id = ? AND caller_id IS NOT NULL AND resolution = 'resolved'`)
+      .all(projectId) as Array<{ caller_id: string; target_id: string }>;
+    return rows.map(row => ({ sourceId: row.caller_id, targetId: row.target_id, relationType: 'calls' }));
   }
 
   registerEntity(input: RegisterEntityInput): CodeEntity {
@@ -1505,6 +1582,7 @@ export class SqliteRegistryStore {
     `);
     const deleteEntities = this.db.prepare('DELETE FROM code_entities WHERE project_id = ?');
     const tx = this.db.transaction((id: string) => {
+      this.db.prepare('DELETE FROM code_call_sites WHERE project_id = ?').run(id);
       deleteRelations.run(id, id);
       return deleteEntities.run(id).changes;
     });

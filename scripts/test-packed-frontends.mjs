@@ -18,6 +18,7 @@ mkdirSync(source);
 writeFileSync(join(source, 'sample.ts'), 'export function read() {}');
 writeFileSync(join(source, 'sample.py'), 'def read(): pass');
 writeFileSync(join(source, 'sample.rs'), 'pub fn read() {}');
+writeFileSync(join(source, 'caller.ts'), "import { read as alias } from './sample.js';\nexport function caller() { alias(); missing(); }\ncaller();");
 
 for (const mode of ['full', 'missing']) {
   const prefix = join(scratch, 'full');
@@ -62,9 +63,24 @@ for (const mode of ['full', 'missing']) {
   const clean = spawnSync(process.execPath, [probe], { cwd: source, encoding: 'utf8', timeout: 30_000,
     env: { ...process.env, CXT_PARSER: 'auto' } });
   assert.equal(clean.status, 0, clean.stderr + clean.stdout);
-  assert.match(clean.stdout, mode === 'full' ? /ast: 3/ : /lexical: 3/);
+  assert.match(clean.stdout, mode === 'full' ? /ast: 4/ : /lexical: 4/);
   console.log(`${mode}: installed package; 6 grammar probes and real CLI scan passed`);
   if (mode === 'full') {
+    const callProbe = join(scratch, 'calls.mjs');
+    writeFileSync(callProbe, `
+      import { pathToFileURL } from 'node:url';
+      const api = await import(pathToFileURL(${JSON.stringify(join(installed, 'dist', 'index.js'))}));
+      api.getRegistryStore(${JSON.stringify(join(scratch, 'full.db'))});
+      process.argv = [process.execPath, ${JSON.stringify(join(installed, 'dist', 'cli.js'))}, 'calls', 'caller', '--json'];
+      await import(pathToFileURL(${JSON.stringify(join(installed, 'dist', 'cli.js'))}));
+    `);
+    const calls = spawnSync(process.execPath, [callProbe], { cwd: source, encoding: 'utf8', timeout: 30_000 });
+    assert.equal(calls.status, 0, calls.stderr + calls.stdout);
+    const parsedCalls = JSON.parse(calls.stdout);
+    assert.deepEqual(parsedCalls.callSites.map(site => [site.line, site.target ?? null, site.resolution]),
+      [[2, 'sample.ts::read', 'resolved'], [2, null, 'unresolved']]);
+    assert.equal(parsedCalls.callees[0].file, 'sample.ts');
+    console.log('full: installed CLI resolves imports and exposes unresolved call-site locations');
     writeFileSync(join(source, 'sample.ts'), 'export function broken(');
     const invalid = spawnSync(process.execPath, [probe], { cwd: source, encoding: 'utf8', timeout: 30_000,
       env: { ...process.env, CXT_PARSER: 'auto' } });

@@ -16,6 +16,8 @@ import { maskLiteralsAndComments } from './lexical.js';
 import { loadTreeSitterFrontend } from '../frontend/treeSitter.js';
 import { entityQualifiedName, FrontendError, parserMode } from '../frontend/types.js';
 import type { FrontendDiagnostic, FrontendResult, ParserMode } from '../frontend/types.js';
+import type { SymbolFacts } from '../analysis/symbols.js';
+import { resolveSymbols } from '../analysis/resolveSymbols.js';
 
 // ============ 상수 ============
 
@@ -990,6 +992,7 @@ export interface ScanResult {
   languageBreakdown: Record<string, number>;
   parserBreakdown: Record<string, number>;
   diagnostics: FrontendDiagnostic[];
+  callSites: { total: number; resolved: number; unresolved: number; external: number };
 }
 
 // ============ 메인 스캔 함수 ============
@@ -1020,6 +1023,8 @@ export async function scanRepository(
   const languageBreakdown: Record<string, number> = {};
   const parserBreakdown: Record<string, number> = {};
   const diagnostics: FrontendDiagnostic[] = [];
+  const symbolFiles: SymbolFacts[] = [];
+  const callSites = { total: 0, resolved: 0, unresolved: 0, external: 0 };
   let scannedFiles = 0;
   let completeScan = true;
 
@@ -1080,7 +1085,8 @@ export async function scanRepository(
             parserBreakdown[parsed.engine] = (parserBreakdown[parsed.engine] ?? 0) + 1;
 
             // 참조 추출 (관계 그래프 2-pass용).
-            for (const [key, refs] of parsed.references) refsByQName.set(key, refs);
+            if (parsed.symbols) symbolFiles.push(parsed.symbols);
+            else for (const [key, refs] of parsed.references) refsByQName.set(key, refs);
 
             scannedFiles++;
             languageBreakdown[language] = (languageBreakdown[language] ?? 0) + 1;
@@ -1121,6 +1127,7 @@ export async function scanRepository(
       languageBreakdown,
       parserBreakdown,
       diagnostics,
+      callSites,
     };
   }
 
@@ -1236,7 +1243,16 @@ export async function scanRepository(
     }
 
     // ============ 관계 그래프 적재 (2-pass) ============
-    const relations = completeScan ? resolveRelations(store, projectId, refsByQName) : [];
+    const semantic = resolveSymbols(symbolFiles);
+    store.replaceCallSitesForProject(projectId, semantic.calls);
+    callSites.total = semantic.calls.length;
+    for (const call of semantic.calls) callSites[call.resolution]++;
+    const relations = [...resolveRelations(store, projectId, refsByQName), ...store.getCallSiteRelations(projectId)];
+    for (const base of semantic.bases) {
+      const source = store.getEntityByName(base.source, projectId);
+      const target = store.getEntityByName(base.target, projectId);
+      if (source && target) relations.push({ sourceId: source.id, targetId: target.id, relationType: base.type });
+    }
     relationsLoaded = completeScan ? store.replaceRelationsForProject(projectId, relations) : 0;
     });
   } catch (err) {
@@ -1246,6 +1262,7 @@ export async function scanRepository(
     testsMapped = 0;
     removed = 0;
     relationsLoaded = 0;
+    callSites.total = callSites.resolved = callSites.unresolved = callSites.external = 0;
     completeScan = false;
   }
   if (verbose) {
@@ -1266,6 +1283,7 @@ export async function scanRepository(
     languageBreakdown,
     parserBreakdown,
     diagnostics,
+    callSites,
   };
 }
 

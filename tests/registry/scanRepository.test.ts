@@ -58,6 +58,7 @@ describe('scanRepository — AST frontend and snapshot safety', () => {
     const store = getRegistryStore();
     const before = store.listEntities({ projectId: 'ast-failure' });
     const relations = store.countRelations('ast-failure');
+    const callSites = store.getCallSites('ast-failure');
     write('src/x.ts', 'function replacement() {}');
     write('src/invalid.ts', 'function broken(');
     const result = await scanRepository(projectDir, 'ast-failure', { parser: 'auto' });
@@ -66,6 +67,45 @@ describe('scanRepository — AST frontend and snapshot safety', () => {
     expect(result.registered + result.updated + result.removed).toBe(0);
     expect(store.listEntities({ projectId: 'ast-failure' })).toEqual(before);
     expect(store.countRelations('ast-failure')).toBe(relations);
+    expect(store.getCallSites('ast-failure')).toEqual(callSites);
+  });
+
+  it('atomically rolls back entities, call facts and relations when final relation persistence fails', async () => {
+    write('src/x.ts', 'function run() { run(); }');
+    await scanRepository(projectDir, 'rollback', { parser: 'ast' });
+    const store = getRegistryStore();
+    const before = store.listEntities({ projectId: 'rollback' });
+    const sites = store.getCallSites('rollback');
+    const relations = store.countRelations('rollback');
+    write('src/x.ts', 'function replacement() { missing(); }');
+    vi.spyOn(store, 'replaceRelationsForProject').mockImplementation(() => { throw new Error('injected storage failure'); });
+    const result = await scanRepository(projectDir, 'rollback', { parser: 'ast' });
+    expect(result.errors).toEqual(['injected storage failure']);
+    expect(result.registered + result.updated + result.removed + result.relationsLoaded).toBe(0);
+    expect(result.callSites.total).toBe(0);
+    expect(store.listEntities({ projectId: 'rollback' })).toEqual(before);
+    expect(store.getCallSites('rollback')).toEqual(sites);
+    expect(store.countRelations('rollback')).toBe(relations);
+  });
+
+  it('stores each call site and derives deduplicated recursive and imported edges on rescan', async () => {
+    write('src/lib.ts', 'export function target() {}');
+    write('src/main.ts', "import { target as alias } from './lib';\nimport { external } from 'package';\nfunction caller() { alias(); alias(); caller(); unknown(); external(); }\ncaller();");
+    const result = await scanRepository(projectDir, 'facts', { parser: 'ast' });
+    expect(result.errors).toEqual([]);
+    expect(result.callSites).toEqual({ total: 6, resolved: 4, unresolved: 1, external: 1 });
+    const store = getRegistryStore();
+    const caller = store.getEntityByName('src/main.ts::caller', 'facts')!;
+    const sites = store.getCallSites('facts');
+    expect(sites).toHaveLength(6);
+    expect(sites[5]).toMatchObject({ caller: undefined, target: caller.qualifiedName, line: 4, column: 1 });
+    expect(store.getOutgoingRelations(caller.id, 'calls')).toHaveLength(2);
+    await scanRepository(projectDir, 'facts', { parser: 'ast' });
+    expect(store.getCallSites('facts')).toEqual(sites);
+    write('src/main.ts', 'function caller() { absent(); }');
+    await scanRepository(projectDir, 'facts', { parser: 'ast' });
+    expect(store.getCallSites('facts')).toHaveLength(1);
+    expect(store.getOutgoingRelations(caller.id, 'calls')).toEqual([]);
   });
 
   it('exposes unavailable native parsers and fails explicit AST mode without replacing data', async () => {
@@ -303,8 +343,8 @@ export class Derived extends Base { go() {} }
     expect(rels.map((r) => r.targetName)).toContain('Base');
   });
 
-  it('skips ambiguous call targets (same name in multiple files)', async () => {
-    // `shared` defined in two files → ambiguous, edge must be skipped
+  it('resolves an imported symbol despite same-name declarations in other files', async () => {
+    // The import binding identifies x.ts; y.ts must never enter this edge.
     write('src/x.ts', 'export function shared() { return 1; }');
     write('src/y.ts', 'export function shared() { return 2; }');
     write('src/z.ts', `
@@ -316,8 +356,8 @@ export function uses() { return shared(); }
     const store = getRegistryStore();
     const uses = store.findEntitiesByName('uses', 'rel-5')[0];
     const callees = store.getOutgoingRelations(uses.id);
-    // 'shared' is ambiguous (2 candidates, neither in z.ts) → not linked
-    expect(callees.map((c) => c.targetName)).not.toContain('shared');
+    expect(callees.map((c) => c.targetName)).toEqual(['shared']);
+    expect(callees[0].targetFile).toBe('src/x.ts');
   });
 
   it('clears stale edges on re-scan', async () => {

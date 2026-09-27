@@ -26,6 +26,11 @@ export { scanRepository, extractEntities, extractFile } from './registry/entityS
 export type { ScanResult, ExtractedEntity, Language } from './registry/entityScanner.js';
 export type { LanguageFrontend, FrontendResult, FrontendDiagnostic, ParserMode } from './frontend/types.js';
 
+// Symbol resolution
+export { resolveSymbols } from './analysis/resolveSymbols.js';
+export type { SymbolResolution } from './analysis/resolveSymbols.js';
+export type { SymbolFacts, SymbolValue, CallSite, ResolvedCallSite, ResolutionReason } from './analysis/symbols.js';
+
 // BS Detector
 export { scanRepository as scanBs, scanFile as scanFileForBs, scanFileContent, aggregateResults } from './registry/bsDetector.js';
 export type { BsIssue, BsScanResult, BsSeverity } from './registry/bsDetector.js';

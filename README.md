@@ -98,12 +98,13 @@ an available AST parser fails the scan and preserves the previous registry.
 Missing extraction queries and invalid queries also fail the scan.
 
 The public `extractFile` API returns the selected engine, declarations,
-references and diagnostics. `extractEntities` retains its legacy lexical API.
-Call target resolution and BS rules remain heuristic; CFG, dataflow, semantic
+references, symbol facts and diagnostics. `extractEntities` retains its legacy lexical API.
+AST call resolution follows project-local bindings, imports, aliases and simple receiver types.
+BS rules remain heuristic; CFG, dataflow, semantic
 library models and SARIF are tracked in the
 [ten-part implementation roadmap](docs/STATIC_ANALYSIS_ROADMAP.md).
 
-Run `npm run bench:accuracy` for the handwritten declaration corpus and
+Run `npm run bench:accuracy` and `npm run bench:calls` for the handwritten declaration and call corpora, and
 `npm run test:package` for a fresh package install, missing-native simulation and CLI
 checks. These tests do not establish CodeQL equivalence.
 
@@ -124,7 +125,7 @@ exists: verify dynamic dispatch, imports, and framework callbacks in source.
 
 ## Call Graph (who-calls / calls / impact)
 
-`cxt scan` builds a same-project relation graph (`calls`, `uses`, `extends`, `implements`, `overrides`) from AST references where supported and lexical references otherwise. Target resolution still uses names and file proximity; imports, types and dynamic dispatch are not resolved. After a scan, query the current relation graph with:
+`cxt scan` builds a same-project relation graph. For AST languages, calls are resolved through lexical scopes, local imports/re-exports, aliases, constructors and simple annotated receiver types. Recursive calls and each call's source location are retained. Unresolved and external calls carry reasons; they do not create target edges. Lexical languages still use the earlier name/file-proximity heuristic. After a scan, query the current relation graph with:
 
 ```bash
 cxt who-calls rowsToEntities       # who depends on this function?
@@ -133,6 +134,18 @@ cxt impact SqliteRegistryStore     # if I change this class, what breaks?
 ```
 
 Ambiguous names are rejected with candidate suggestions — disambiguate with the qualified name (`src/file.ts::name`). Use `--type calls|extends|implements` to filter, `--json` for scripts.
+
+`calls --json` includes `callSites` with 1-based start/end positions (end exclusive),
+caller/target qualified names, `resolution`, `reason`, and `confidence`.
+Confidence is a policy score (1 for direct bindings/imports, 0.9 for receiver inference,
+0 for unresolved/external), **not a calibrated probability**. The human output also lists unresolved calls.
+The v4 registry persists these facts in `code_call_sites` and replaces them atomically with entities and relations.
+
+This is a partial semantic resolver: tsconfig path mapping, package/workspace resolution,
+full type inference, subtype dispatch, member mutation, decorators, macros and framework callbacks
+are not modeled. Multiple writes remain unresolved until dataflow analysis is available.
+Calls through these constructs may remain unknown or require source review; an empty caller list
+does not establish that a function is unused.
 
 ## Benchmark — does it cut agent tool calls?
 
