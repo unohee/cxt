@@ -1,5 +1,5 @@
 {
-  "typescript": { "precision": 1.01, "recall": 0.98, "spanAccuracy": 0.98, "scopeAccuracy": 0.98 },
+  "typescript": { "precision": 0.98, "recall": 0.98, "spanAccuracy": 0.98, "scopeAccuracy": 0.98 },
   "python": { "precision": 0.98, "recall": 0.98, "spanAccuracy": 0.98, "scopeAccuracy": 0.98 },
   "rust": { "precision": 0.98, "recall": 0.98, "spanAccuracy": 0.98, "scopeAccuracy": 0.98 }
 }
