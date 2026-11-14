@@ -11,7 +11,7 @@ import { attachDataflowFacts } from './dataflowFacts.js';
 
 type Node = Parser.SyntaxNode;
 const CALLABLE = new Set(['function_declaration', 'generator_function_declaration', 'function_signature',
-  'method_definition', 'abstract_method_signature', 'arrow_function', 'function_expression',
+  'method_definition', 'abstract_method_signature', 'method_signature', 'arrow_function', 'function_expression',
   'generator_function', 'function_definition', 'lambda', 'function_item', 'function_signature_item', 'closure_expression']);
 const CLASS = new Set(['class', 'class_declaration', 'abstract_class_declaration', 'class_definition', 'struct_item']);
 const TYPE = new Set(['interface_declaration', 'type_alias_declaration', 'enum_declaration',

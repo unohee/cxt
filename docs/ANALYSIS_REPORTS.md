@@ -6,6 +6,7 @@ cxt bs --sarif > findings.sarif
 cxt audit --sarif > audit.sarif
 cxt scan --json
 cxt scan --sarif > scan.sarif
+cxt flow path/to/function --sarif > flow.sarif
 ```
 
 `--json`과 `--sarif`는 함께 사용할 수 없다. `-v`를 추가해도 machine output의
@@ -55,12 +56,20 @@ audit의 registry 통계는 저장된 메타데이터이고 실제 테스트 cov
   matched text가 짧은 요약이므로 전체 소스 내용의 identity hash로 쓰지 않는다.
 - dataflow: reaching-definition/read 위치를 relatedLocations와 codeFlows에 싣는다.
   `evidenceKind=definition-read-endpoints`이며 중간 실행 경로 전체를 복원했다고
-  주장하지 않는다. 관련 source span은 solver definition에서 가져온다.
+  주장하지 않는다. 관련 source span은 solver definition에서 가져온다. `flow --sarif`는
+  resource acquire/release와 ownership moved-state source CFG node를 각각
+  `cxt/resource-*` 및 `cxt/ownership-use-after-move` result로 내보낸다. 이 경로도
+  정적 provenance만 제공하며 runtime execution trace를 주장하지 않는다.
+- semantic flow 결과의 `primaryLocationLineHash`도 rule/file/normalized source text/provenance의
+  SHA-256으로 생성해 line shift와 결과 순서 변화에 안정적인 fingerprint를 유지한다.
 - 실행 상태: invocation의 executionSuccessful은 failed에서만 false다. partial 분석은
   실행 자체는 성공했고 결과 coverage가 제한된 상태다. exitCode와 analysisStatus,
   toolExecutionNotifications에 이 차이를 남긴다. 알지 못하는 진단 줄 번호는 만들지 않는다.
-- fact scan SARIF에는 결함 result를 만들지 않는다. 분석 diagnostics와 fact counts를
-  포함한다. bs/audit는 같은 finding 목록을 내보내며 audit는 registry 통계도 포함한다.
+- fact scan SARIF는 현재 commit된 flow snapshot의 resource/ownership semantic result를
+  포함하며, 불완전 scan에서 보존된 이전 snapshot은 현재 결과로 재사용하지 않는다. 분석
+  diagnostics와 fact counts도 포함한다. bs/audit는 같은 finding 목록을 내보내며 audit는
+  registry 통계도 포함한다. 개별 함수의 semantic finding은 `flow --sarif`에서
+  source/provenance codeFlow와 함께 조회한다.
 
 실제 GitHub 업로드·alert 수용은 실행하지 않았다. schema validation과 CLI 통합 검사는
 외부 서비스에서 alert가 승인됐다는 증거가 아니다.

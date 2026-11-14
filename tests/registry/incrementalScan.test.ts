@@ -43,10 +43,10 @@ describe('incremental fact snapshots', () => {
       expect.objectContaining({ completeness: 'complete', structural_complexity: 1, node_count: expect.any(Number), edge_count: expect.any(Number) }),
     ]);
     expect(store().queryFacts('p', { view: 'flows', where: [{ column: 'owner', op: 'eq', value: 'a.ts::f' }] })).toEqual([
-      expect.objectContaining({ completeness: 'complete', unknown_effect_count: 0, definition_count: expect.any(Number) }),
+      expect.objectContaining({ completeness: 'complete', unknown_effect_count: 0, definition_count: expect.any(Number), resource_finding_count: 0, ownership_finding_count: 0, taint_finding_count: 0 }),
     ]);
     expect(store().queryFacts('p', { view: 'summaries', where: [{ column: 'owner', op: 'eq', value: 'a.ts::f' }] })).toEqual([
-      expect.objectContaining({ completeness: 'complete', may_return: 1, may_throw: 0, return_atoms: '["number:1"]', return_parameters: '[]' }),
+      expect.objectContaining({ completeness: 'complete', may_return: 1, may_throw: 0, return_atoms: '["number:1"]', return_parameters: '[]', moved_parameter_count: 0, borrowed_parameter_count: 0, taint_sink_parameter_count: 0, callback_invocation_count: 0 }),
     ]);
     const before = snapshot(); closeRegistryStore(); store();
     const warm = await scanRepository(root, 'p'); expect(warm.errors).toEqual([]);

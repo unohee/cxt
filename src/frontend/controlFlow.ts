@@ -154,13 +154,129 @@ export function buildControlFlow(callable: Node, filePath: string, owner: string
       edge(port(suspended, 'suspend'), graph.suspensionExit);
       return { normal: [port(suspended, 'resume')], abrupt: [...value.abrupt, { kind: 'throw', port: port(suspended, 'exception') }] };
     }
-    if (['yield_expression', 'yield', 'async_block', 'gen_block', 'try_block'].includes(node.type)) {
+    if (['yield_expression', 'yield', 'yield_statement'].includes(node.type)) {
+      // Generator suspension has the same local CFG contract as await: the
+      // yielded value is evaluated once, control leaves the function, and a
+      // later resume continues at the successor. Injected exceptions are
+      // represented as an abrupt edge so try/finally cleanup remains visible.
+      let value = plain(incoming);
+      for (const child of node.namedChildren) {
+        const next = expression(child, value.normal);
+        value = { normal: next.normal, abrupt: [...value.abrupt, ...next.abrupt] };
+      }
+      const suspended = emit('suspend', node, value.normal);
+      graph.suspensionExit ??= emit('suspend-exit', callable, [], 'suspended');
+      edge(port(suspended, 'suspend'), graph.suspensionExit);
+      const delegated = language === 'python' && node.type === 'yield' && node.text.trimStart().startsWith('yield from ');
+      if (delegated) {
+        const exhausted = emit('condition', node, [port(suspended, 'resume')], 'yield from exhausted');
+        decision(node, 'yield-from');
+        const next = emit('suspend', node, [port(exhausted, 'false')], 'yield from resume');
+        edge(port(next, 'suspend'), graph.suspensionExit);
+        edge(port(next, 'resume'), exhausted);
+        return { normal: [port(exhausted, 'true')], abrupt: [...value.abrupt,
+          { kind: 'throw', port: port(suspended, 'exception') }, { kind: 'throw', port: port(next, 'exception') }] };
+      }
+      return { normal: [port(suspended, 'resume')], abrupt: [...value.abrupt, { kind: 'throw', port: port(suspended, 'exception') }] };
+    }
+    if (['async_block', 'gen_block', 'try_block'].includes(node.type)) {
       diagnostic(node, `Suspension or non-local expression requires a state model: ${node.type}`);
     }
     if (node.type === 'macro_invocation') diagnostic(node, 'Rust macro expansion is unavailable');
     if (['list_comprehension', 'set_comprehension', 'dictionary_comprehension', 'generator_expression'].includes(node.type)) {
+      const clauses = node.namedChildren.filter(child => child.type === 'for_in_clause');
+      const filters = node.namedChildren.filter(child => child.type === 'if_clause');
+      if (language === 'python' && node.type === 'generator_expression') {
+        // Python evaluates only the outermost iterable when creating a
+        // generator expression. Element/filter calls are deferred until the
+        // iterator is consumed, so do not add eager call/throw effects here.
+        diagnostic(node, 'Generator expression body is deferred until iteration');
+        const outerIterable = field(clauses[0], 'right') ?? clauses[0]?.namedChild(1);
+        const eager = expression(outerIterable, incoming);
+        const lazy = operation(node, eager.normal, false, 'operation', 'lazy generator expression');
+        return { normal: lazy.normal, abrupt: [...eager.abrupt] };
+      }
+      // A single synchronous for-clause without a filter has ordinary loop
+      // semantics that fit this local CFG: iterator exhaustion exits, each
+      // iteration binds the target, and the element expression loops back.
+      // Generator expressions retain the conservative partial contract until
+      // lazy evaluation and resume semantics are modeled separately. Filters
+      // are assigned to the clause immediately preceding them below.
+      if (language === 'python' && node.type !== 'generator_expression' && clauses.length >= 1
+        ) {
+        const comprehensionNode = node;
+        const element = node.namedChildren.find(child => child.type !== 'for_in_clause') ?? node.namedChild(0);
+        function nested(index: number, ports: Port[]): Flow {
+          const clause = clauses[index];
+          const iterable = field(clause, 'right') ?? clause.namedChild(1);
+          const source = expression(iterable, ports);
+          const header = emit('join', clause, source.normal, `comprehension iterator header ${index + 1}`);
+          const next = operation(clause, [port(header)], true, 'operation', 'comprehension iterator next');
+          const asyncIteration = language === 'python' && clause.text.trimStart().startsWith('async for ');
+          let iteratorValue = next;
+          if (asyncIteration) {
+            const suspended = emit('suspend', clause, next.normal, 'async comprehension iterator next');
+            graph.suspensionExit ??= emit('suspend-exit', callable, [], 'suspended');
+            edge(port(suspended, 'suspend'), graph.suspensionExit);
+            iteratorValue = {
+              normal: [port(suspended, 'resume')],
+              abrupt: [...next.abrupt, { kind: 'throw', port: port(suspended, 'exception') }],
+            };
+          }
+          const test = emit('condition', clause, iteratorValue.normal, 'iterator has next');
+          decision(clause, `comprehension-iteration-${index}`);
+          const binding = emit('operation', clause, [port(test, 'true')], 'comprehension iteration binding');
+          graph.nodes[binding].binding = 'iteration';
+          const clausePosition = comprehensionNode.namedChildren.indexOf(clause);
+          const nextClausePosition = index + 1 < clauses.length
+            ? comprehensionNode.namedChildren.indexOf(clauses[index + 1])
+            : Number.POSITIVE_INFINITY;
+          const localFilters = filters.filter(filter => {
+            const position = comprehensionNode.namedChildren.indexOf(filter);
+            return position > clausePosition && position < nextClausePosition;
+          });
+          function applyFilters(filterPorts: Port[]): { normal: Port[]; abrupt: Completion[] } {
+            let current = filterPorts;
+            const abrupt: Completion[] = [];
+            for (const filter of localFilters) {
+              const checked = expression(filter.namedChild(0), current);
+              abrupt.push(...checked.abrupt);
+              const filterTest = emit('condition', filter, checked.normal, 'comprehension filter');
+              decision(filter, 'comprehension-filter');
+              edge(port(filterTest, 'back'), header);
+              current = [port(filterTest, 'true')];
+            }
+            return { normal: current, abrupt };
+          }
+          let body: Flow;
+          const filtered = applyFilters([port(binding)]);
+          if (index + 1 < clauses.length) {
+            body = nested(index + 1, filtered.normal);
+            body.abrupt.push(...filtered.abrupt);
+          }
+          else {
+            const evaluated = expression(element, filtered.normal);
+            for (const sourcePort of evaluated.normal) edge(port(sourcePort.id, 'back'), header);
+            body = { normal: [port(test, 'false')], abrupt: [...filtered.abrupt, ...evaluated.abrupt] };
+          }
+          // Exhausting an inner iterator advances the enclosing iterator.
+          if (index + 1 < clauses.length) for (const sourcePort of body.normal) edge(port(sourcePort.id, 'back'), header);
+          return { normal: [port(test, 'false')], abrupt: [...source.abrupt, ...iteratorValue.abrupt, ...body.abrupt] };
+        }
+        const loops = nested(0, incoming);
+        const result = operation(node, loops.normal, true);
+        return { normal: result.normal, abrupt: [...loops.abrupt, ...result.abrupt] };
+      }
       diagnostic(node, `Comprehension/generator control is not lowered: ${node.type}`);
-      return operation(node, incoming, true);
+      // Preserve evaluation effects of calls and member reads nested inside
+      // the comprehension before recording the result as partial. Iteration
+      // binding and zero/many-iteration control remain intentionally unknown.
+      let nested = plain(incoming);
+      for (const child of node.namedChildren) {
+        const next = expression(child, nested.normal);
+        nested = { normal: next.normal, abrupt: [...nested.abrupt, ...next.abrupt] };
+      }
+      return operation(node, nested.normal, true);
     }
     // 타입·패턴·property 이름은 평가식이 아니다. 자식의 부수 효과를 순서대로 보존한다.
     const skippedFields = ['type', 'return_type', 'name', 'pattern', 'property', 'attribute', 'field', 'label'];
@@ -203,11 +319,9 @@ export function buildControlFlow(callable: Node, filePath: string, owner: string
     completion.kind === kind && (completion.label === undefined || completion.label === label);
 
   function loop(node: Node, incoming: Port[], label?: string): Flow {
-    if (node.children.some(child => child.type === 'async' || child.type === 'await')) {
-      diagnostic(node, 'Async iteration suspension/cancellation requires a state model');
-    }
     const isDo = node.type === 'do_statement';
     const isForEach = ['for_in_statement', 'for_expression'].includes(node.type) || (language === 'python' && node.type === 'for_statement');
+    const asyncIteration = isForEach && node.children.some(child => child.type === 'async' || child.type === 'await');
     const initNode = isForEach ? field(node, 'right') ?? field(node, 'value') : field(node, 'initializer');
     const init = initNode ? statement(initNode, incoming) : plain(incoming);
     const header = emit('join', node, init.normal, 'loop header');
@@ -215,7 +329,18 @@ export function buildControlFlow(callable: Node, filePath: string, owner: string
     const unconditional = node.type === 'loop_expression' || (node.type === 'for_statement' && !isForEach && (!condition || condition.type === 'empty_statement'));
     const conditionEntry = isDo ? emit('join', node, [], 'do condition') : header;
     const conditionIncoming = [port(conditionEntry)];
-    const value = isForEach ? operation(node, conditionIncoming, true, 'operation', 'iterator next') : expression(condition, conditionIncoming);
+    let value: Flow;
+    if (!isForEach) value = expression(condition, conditionIncoming);
+    else {
+      const next = operation(node, conditionIncoming, true, 'operation', 'iterator next');
+      if (!asyncIteration) value = next;
+      else {
+        const suspended = emit('suspend', node, next.normal, 'async iterator next');
+        graph.suspensionExit ??= emit('suspend-exit', callable, [], 'suspended');
+        edge(port(suspended, 'suspend'), graph.suspensionExit);
+        value = { normal: [port(suspended, 'resume')], abrupt: [...next.abrupt, { kind: 'throw', port: port(suspended, 'exception') }] };
+      }
+    }
     const test = emit('condition', condition ?? node, value.normal, unconditional ? 'true' : isForEach ? 'iterator has next' : condition?.text);
     if (!unconditional) decision(node);
     let bodyIncoming = isDo ? [port(header)] : [port(test, 'true')];
@@ -264,22 +389,38 @@ export function buildControlFlow(callable: Node, filePath: string, owner: string
     const result: Flow = { normal: succeeded.normal, abrupt: [...succeeded.abrupt, ...body.abrupt.filter(c => c.kind !== 'throw')] };
     let pending = body.abrupt.filter(c => c.kind === 'throw').map(c => c.port);
     for (const handler of catches) {
-      if (handler.type === 'except_group_clause') diagnostic(handler, 'Exception groups require split/recombine semantics');
-      const type = field(handler, 'value');
-      decision(handler);
+      // tree-sitter-python represents both `except` and `except*` as
+      // `except_clause`; the literal `*` child is the only reliable local
+      // discriminator.  Model each except* arm as consuming only the
+      // matching subgroup while carrying the unmatched subgroup to the next
+      // arm.  This keeps the normal continuation and unhandled remainder
+      // separate instead of treating an exception group as an ordinary
+      // first-match catch.
+      const exceptionGroup = language === 'python' && handler.type === 'except_clause'
+        && handler.children.some(child => child.type === '*');
+      const rawType = field(handler, 'value');
+      // Python's `except T as name` stores the whole `as_pattern` in the
+      // value field.  The exception matcher must evaluate only T; the alias
+      // is handled by the separate exception-binding operation.
+      const type = rawType?.type === 'as_pattern' ? rawType.namedChild(0) : rawType;
+      decision(handler, exceptionGroup ? 'exception-group-split' : 'exception-match');
       const checked = expression(type, pending);
       result.abrupt.push(...checked.abrupt);
-      const dispatch = emit('condition', handler, checked.normal, type ? `exception matches ${type.text}` : 'catch all');
+      const dispatch = emit('condition', handler, checked.normal,
+        exceptionGroup ? `exception group matches ${type?.text ?? 'catch all'}` : type ? `exception matches ${type.text}` : 'catch all');
       const bind = emit('operation', handler, [port(dispatch, 'true')], 'exception binding');
       graph.nodes[bind].binding = 'exception';
       let caught = statement(field(handler, 'body') ?? handler.namedChildren.find(n => n.type === 'block')!, [port(bind)]);
-      if (language === 'python' && type?.type === 'as_pattern') {
+      if (language === 'python' && rawType?.type === 'as_pattern') {
         caught = applyFinally(handler, caught, sources => {
           const clear = operation(handler, sources, false, 'operation', 'clear exception binding');
           graph.nodes[clear.normal[0].id].binding = 'exception-clear'; return clear;
         });
       }
       result.normal.push(...caught.normal); result.abrupt.push(...caught.abrupt);
+      // For except* the false branch is the remainder of the group and must
+      // be tested by subsequent arms. Ordinary except retains first-match
+      // semantics and also clears the pending remainder after a catch-all.
       pending = type ? [port(dispatch, 'false')] : [];
     }
     result.abrupt.push(...pending.map(source => ({ kind: 'throw' as const, port: source })));
@@ -288,26 +429,43 @@ export function buildControlFlow(callable: Node, filePath: string, owner: string
   }
   function withStatement(node: Node, incoming: Port[]): Flow {
     const items = node.namedChildren.find(n => n.type === 'with_clause')?.namedChildren ?? [];
+    const asyncWith = node.children.some(child => child.type === 'async');
+    function suspend(operationFlow: Flow, item: Node, text: string): Flow {
+      if (!asyncWith) return operationFlow;
+      const suspended = emit('suspend', item, operationFlow.normal, text);
+      graph.suspensionExit ??= emit('suspend-exit', callable, [], 'suspended');
+      edge(port(suspended, 'suspend'), graph.suspensionExit);
+      return { normal: [port(suspended, 'resume')], abrupt: [...operationFlow.abrupt, { kind: 'throw', port: port(suspended, 'exception') }] };
+    }
     function resource(index: number, ports: Port[]): Flow {
       if (index === items.length) return statement(field(node, 'body')!, ports);
       const item = items[index];
-      const value = expression(field(item, 'value'), ports);
-      const entered = operation(item, value.normal, true, 'operation', '__enter__');
+      const context = field(item, 'value');
+      const manager = context?.type === 'as_pattern' ? field(context, 'value') ?? context.namedChild(0) : context;
+      const value = expression(manager, ports);
+      const enteredOperation = operation(item, value.normal, true, 'operation', asyncWith ? '__aenter__' : '__enter__');
+      graph.nodes[enteredOperation.normal[0].id].resourceSource = manager ? span(manager) : undefined;
+      if (field(field(item, 'value') ?? item, 'alias')) graph.nodes[enteredOperation.normal[0].id].binding = 'resource-enter';
+      const entered = suspend(enteredOperation, item, 'async context enter');
       const inner = resource(index + 1, entered.normal);
       const after: Flow = { normal: [], abrupt: [...value.abrupt, ...entered.abrupt] };
-      const clean = applyFinally(item, inner, sources => operation(item, sources, true, 'cleanup', '__exit__'));
-      // Only an exceptional completion may be suppressed by __exit__.
+      const clean = applyFinally(item, inner, sources => {
+        const exitOperation = operation(item, sources, true, 'cleanup', asyncWith ? '__aexit__' : '__exit__');
+        graph.nodes[exitOperation.normal[0].id].resourceSource = manager ? span(manager) : undefined;
+        return suspend(exitOperation, item, 'async context exit');
+      });
+      // Only an exceptional completion may be suppressed by the context exit protocol.
       after.normal.push(...clean.normal);
       for (const completion of clean.abrupt) {
         if (completion.kind === 'throw' && completion.port.kind !== 'exception') {
-          const test = emit('condition', item, [completion.port], '__exit__ suppresses exception');
+          const test = emit('condition', item, [completion.port], `${asyncWith ? '__aexit__' : '__exit__'} suppresses exception`);
+          graph.nodes[test].resourceSource = manager ? span(manager) : undefined;
           decision(item, 'suppression');
           after.normal.push(port(test, 'true')); after.abrupt.push({ kind: 'throw', port: port(test, 'false') });
         } else after.abrupt.push(completion);
       }
       return after;
     }
-    if (node.children.some(n => n.type === 'async')) diagnostic(node, 'async with suspension/cancellation requires a state model');
     return resource(0, incoming);
   }
 

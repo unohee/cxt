@@ -10,6 +10,7 @@
   (internal_module)
   (method_definition)
   (abstract_method_signature)
+  (method_signature)
   (variable_declarator)
   (public_field_definition)
 ] @declaration

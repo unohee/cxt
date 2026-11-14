@@ -155,6 +155,7 @@ describe('AST control flow', () => {
   it('runs Python context exits in reverse order and permits exception suppression', () => {
     const cfg = graph('def f():\n with first() as a, second() as b:\n  raise error\n after()', 'python');
     expect(reaches(cfg, 'raise error', '__exit__')).toBe(true);
+    expect(nodes(cfg, '__enter__').map(node => node.binding)).toEqual(['resource-enter', 'resource-enter']);
     expect(reaches(cfg, 'raise error', 'after()')).toBe(true);
     const exits = nodes(cfg, '__exit__');
     const inner = exits.filter(n => n.span.column === Math.max(...exits.map(n => n.span.column)));
@@ -165,11 +166,16 @@ describe('AST control flow', () => {
     expect(cfg.completeness).toBe('complete');
   });
 
-  it('isolates nested function bodies and reports unsupported suspension/macros', () => {
+  it('isolates nested function bodies and models generator suspension while reporting macros', () => {
     const outer = graph('function f(){function inner(){return 1;} after();}');
     expect(nodes(outer, 'return 1;')).toEqual([]);
     expect(reachableNodes(outer).has(nodes(outer, 'after()')[0].id)).toBe(true);
-    expect(graph('function* f(){yield 1;}').completeness).toBe('partial');
+    const generator = graph('function* f(){yield 1;after();}');
+    expect(generator.completeness).toBe('complete');
+    const yielded = generator.nodes.find(node => node.kind === 'suspend')!;
+    expect(generator.edges).toContainEqual({ from: yielded.id, to: generator.suspensionExit, kind: 'suspend' });
+    expect(generator.edges).toContainEqual(expect.objectContaining({ from: yielded.id, kind: 'resume' }));
+    expect(reachableNodes(generator, yielded.id).has(nodes(generator, 'after()')[0].id)).toBe(true);
     expect(graph('fn f(){panic!("bad");}', 'rust').diagnostics[0].message).toContain('macro');
   });
 
@@ -206,5 +212,98 @@ describe('AST control flow', () => {
     expect(cfg.completeness).toBe('complete');
     expect(cfg.nodes.some(n => n.kind === 'suspend')).toBe(true);
     expect(graph('fn f(){let future=async {work().await;};}', 'rust').completeness).toBe('partial');
+  });
+
+  it('splits Python exception groups across except* arms and carries the remainder', () => {
+    const cfg = graph(`def f():
+  try:
+    raise ExceptionGroup('errors', [ValueError(), TypeError()])
+  except* ValueError as error:
+    handle_value(error)
+  except* TypeError:
+    handle_type()
+  return 1
+`, 'python');
+    expect(cfg.completeness).toBe('complete');
+    expect(cfg.diagnostics).toEqual([]);
+    expect(cfg.nodes.filter(node => node.text.includes('exception group matches')).length).toBe(2);
+    expect(cfg.edges.some(edge => edge.kind === 'false')).toBe(true);
+    expect(cfg.nodes.some(node => node.binding === 'exception')).toBe(true);
+  });
+
+  it('models Python generator yield suspension and resumed cleanup', () => {
+    const cfg = graph('def f():\n yield value\n after()', 'python');
+    expect(cfg.completeness).toBe('complete');
+    const yielded = cfg.nodes.find(node => node.kind === 'suspend')!;
+    expect(yielded).toBeDefined();
+    expect(cfg.executionKind).toBe('generator');
+    expect(reachableNodes(cfg, yielded.id).has(nodes(cfg, 'after()')[0].id)).toBe(true);
+  });
+
+  it('models Python yield-from delegation as a repeated suspension until exhaustion', () => {
+    const cfg = graph('def f():\n yield from values\n after()', 'python');
+    expect(cfg.completeness).toBe('complete');
+    expect(nodes(cfg, 'yield from exhausted')).toHaveLength(1);
+    expect(nodes(cfg, 'yield from resume')).toHaveLength(1);
+    const exhausted = nodes(cfg, 'yield from exhausted')[0];
+    const next = nodes(cfg, 'yield from resume')[0];
+    expect(cfg.edges).toContainEqual({ from: next.id, to: exhausted.id, kind: 'resume' });
+    expect(cfg.edges).toContainEqual({ from: next.id, to: cfg.suspensionExit, kind: 'suspend' });
+    expect(reachableNodes(cfg, exhausted.id).has(nodes(cfg, 'after()')[0].id)).toBe(true);
+  });
+
+  it('lowers a single-clause Python comprehension filter as a loop back-edge', () => {
+    const cfg = graph('def f(xs):\n return [x for x in xs if x]', 'python');
+    expect(cfg.completeness).toBe('complete');
+    expect(cfg.nodes.some(node => node.text === 'comprehension filter')).toBe(true);
+    const filter = cfg.nodes.find(node => node.text === 'comprehension filter')!;
+    expect(cfg.edges).toContainEqual(expect.objectContaining({ from: filter.id, kind: 'back' }));
+  });
+
+  it('keeps filters between nested Python comprehension clauses on the current loop', () => {
+    const cfg = graph('def f(xs, ys):\n return [x+y for x in xs if x for y in ys if y]\n', 'python');
+    expect(cfg.completeness).toBe('complete');
+    expect(cfg.nodes.filter(node => node.text === 'comprehension filter')).toHaveLength(2);
+    expect(cfg.edges.filter(edge => edge.kind === 'back')).toHaveLength(4);
+  });
+
+  it('models async Python comprehension iteration as suspension and resume', () => {
+    const cfg = graph('async def f(xs):\n return [x async for x in xs]\n', 'python');
+    expect(cfg.executionKind).toBe('async');
+    expect(cfg.nodes.some(node => node.kind === 'suspend' && node.text === 'async comprehension iterator next')).toBe(true);
+    expect(cfg.nodes.some(node => node.kind === 'condition' && node.text === 'iterator has next')).toBe(true);
+    expect(cfg.completeness).toBe('complete');
+  });
+
+  it('keeps Python generator expression body effects deferred', () => {
+    const cfg = graph('def f(xs):\n return (danger(x) for x in xs)\n', 'python');
+    expect(cfg.completeness).toBe('partial');
+    expect(cfg.nodes.some(node => node.text === 'lazy generator expression')).toBe(true);
+    expect(cfg.nodes.some(node => node.text === 'danger(x)')).toBe(false);
+  });
+
+  it.each([
+    ['typescript', 'async function f(){for await (const item of items){work(item);}after();}'],
+    ['python', 'async def f():\n async for item in items:\n  work(item)\n after()'],
+  ] as const)('models %s async iteration suspension and exhaustion', (language, source) => {
+    const cfg = graph(source, language);
+    expect(cfg.completeness).toBe('complete');
+    const suspended = cfg.nodes.find(node => node.kind === 'suspend')!;
+    expect(suspended.text).toBe('async iterator next');
+    expect(cfg.edges).toContainEqual({ from: suspended.id, to: cfg.suspensionExit, kind: 'suspend' });
+    expect(cfg.edges).toContainEqual(expect.objectContaining({ from: suspended.id, kind: 'resume' }));
+    expect(reachableNodes(cfg).has(nodes(cfg, 'after()')[0].id)).toBe(true);
+  });
+
+  it('models Python async context enter and exit suspension', () => {
+    const cfg = graph('async def f():\n async with manager:\n  work()\n after()', 'python');
+    expect(cfg.completeness).toBe('complete');
+    expect(nodes(cfg, 'async context enter')).toHaveLength(1);
+    expect(nodes(cfg, 'async context exit')).toHaveLength(2);
+    expect(cfg.nodes.some(node => node.text === '__aenter__')).toBe(true);
+    expect(cfg.nodes.filter(node => node.text === '__aexit__')).toHaveLength(2);
+    expect(cfg.nodes.filter(node => node.kind === 'suspend')).toHaveLength(3);
+    expect(cfg.edges.filter(edge => edge.kind === 'suspend')).toHaveLength(3);
+    expect(reachableNodes(cfg).has(nodes(cfg, 'after()')[0].id)).toBe(true);
   });
 });

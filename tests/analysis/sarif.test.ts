@@ -4,7 +4,10 @@ import addFormats from 'ajv-formats';
 import { describe, expect, it } from 'vitest';
 import { analyzeFileContent, aggregateResults } from '../../src/registry/bsDetector.js';
 import { artifactUri, toSarif } from '../../src/analysis/sarif.js';
+import { toDataflowSarif } from '../../src/analysis/sarif.js';
 import { analysisOutcome, bsOutcome, fingerprintFindings } from '../../src/analysis/report.js';
+import { extractFile } from '../../src/registry/entityScanner.js';
+import type { DataflowResult } from '../../src/analysis/dataflow.js';
 
 const ajv = new Ajv({ strict: false, allErrors: true });
 addFormats(ajv);
@@ -33,7 +36,7 @@ describe('SARIF 2.1.0 contract', () => {
   });
 
   it('distinguishes incomplete analysis from failed execution and retains findings in both', () => {
-    const input = report('function* f(){yield 1;} debugger;', 'x.ts', 'typescript');
+    const input = report('function f(){with (resource) {work();}} debugger;', 'x.ts', 'typescript');
     const partial = toSarif(input, '/workspace');
     validate(partial);
     expect(partial.runs[0].invocations[0]).toMatchObject({ executionSuccessful: true, exitCode: 2 });
@@ -72,6 +75,73 @@ describe('SARIF 2.1.0 contract', () => {
     validate(sarif);
     expect(sarif.runs[0].columnKind).toBe('utf16CodeUnits');
     expect(sarif.runs[0].results[0].locations[0].physicalLocation.region.startColumn).toBe(source.indexOf('debugger') + 1);
+  });
+
+  it('validates semantic flow provenance code flows', () => {
+    const graph = extractFile('function f(){const h=acquire();return h.read();}', 'src/x.ts', 'typescript').controlFlow![0];
+    const flow = { owner: graph.owner, completeness: 'complete', diagnostics: [], definitions: [], uses: [], returns: [], throws: [], calls: [],
+      resourceEvents: [], resourceFindings: [{ kind: 'use-after-release', node: graph.exit, ids: ['resource-1'], certainty: 'definite', sourceNodes: [graph.entry] }],
+      ownershipFindings: [], reachableNodes: [], unknownEffects: [], iterations: 1, workUnits: 1 } as DataflowResult;
+    const sarif = toDataflowSarif(flow, graph, '/workspace');
+    validate(sarif);
+    expect(sarif.runs[0].results[0].ruleId).toBe('cxt/resource-use-after-release');
+    expect(sarif.runs[0].results[0].partialFingerprints.primaryLocationLineHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(sarif.runs[0].results[0].codeFlows?.[0].threadFlows[0].locations).toHaveLength(2);
+  });
+
+  it('downgrades resource and ownership certainty for partial flows', () => {
+    const graph = extractFile('function f(){return value;}', 'src/partial-state.ts', 'typescript').controlFlow![0];
+    const flow = { owner: graph.owner, completeness: 'partial', diagnostics: [], definitions: [], uses: [], returns: [], throws: [], calls: [],
+      resourceEvents: [], resourceFindings: [{ kind: 'use-after-release', node: graph.exit, ids: ['resource-1'], certainty: 'definite', sourceNodes: [graph.entry] }],
+      ownershipFindings: [{ kind: 'use-after-move', node: graph.exit, variable: 'value', certainty: 'definite', definitions: [] }], taintFindings: [],
+      reachableNodes: [], unknownEffects: [], iterations: 1, workUnits: 1 } as DataflowResult;
+    const sarif = toDataflowSarif(flow, graph, '/workspace');
+    validate(sarif);
+    expect(sarif.runs[0].results).toEqual(expect.arrayContaining([
+      expect.objectContaining({ ruleId: 'cxt/resource-use-after-release', level: 'warning', properties: expect.objectContaining({ certainty: 'possible' }) }),
+      expect.objectContaining({ ruleId: 'cxt/ownership-use-after-move', level: 'warning', properties: expect.objectContaining({ certainty: 'possible' }) }),
+    ]));
+    expect(sarif.runs[0].invocations[0]).toMatchObject({ exitCode: 2, executionSuccessful: true, properties: { findingsFail: false } });
+  });
+
+  it('exports explicit modeled taint sinks and fails strict flow output', () => {
+    const graph = extractFile('function f(){sink(input);}', 'src/taint.ts', 'typescript').controlFlow![0];
+    const flow = { owner: graph.owner, completeness: 'complete', diagnostics: [], definitions: [], uses: [], returns: [], throws: [], calls: [],
+      resourceEvents: [], resourceFindings: [], ownershipFindings: [], taintFindings: [{ node: graph.exit, target: 'src/taint.ts::sink', parameter: 0, atoms: ['tainted'], sourceDefinitions: [] }],
+      reachableNodes: [], unknownEffects: [], iterations: 1, workUnits: 1 } as DataflowResult;
+    const sarif = toDataflowSarif(flow, graph, '/workspace');
+    validate(sarif);
+    expect(sarif.runs[0].results[0]).toMatchObject({ ruleId: 'cxt/taint-sink', level: 'error' });
+    expect(sarif.runs[0].results[0].properties).toMatchObject({ parameter: 0, atoms: ['tainted'], evidenceKind: 'explicit-model-taint' });
+    expect(sarif.runs[0].invocations[0]).toMatchObject({ exitCode: 1, executionSuccessful: true });
+  });
+
+  it('marks taint from partial flow as possible warning evidence', () => {
+    const graph = extractFile('function f(){sink(input);with (resource) {work();}}', 'src/partial-taint.ts', 'typescript').controlFlow![0];
+    const flow = { owner: graph.owner, completeness: 'partial', diagnostics: [], definitions: [], uses: [], returns: [], throws: [], calls: [],
+      resourceEvents: [], resourceFindings: [], ownershipFindings: [], taintFindings: [{ node: graph.exit, target: 'src/partial-taint.ts::sink', parameter: 0, atoms: ['tainted'], sourceDefinitions: [] }],
+      reachableNodes: [], unknownEffects: [], iterations: 1, workUnits: 1 } as DataflowResult;
+    const sarif = toDataflowSarif(flow, graph, '/workspace');
+    validate(sarif);
+    expect(sarif.runs[0].results[0]).toMatchObject({ ruleId: 'cxt/taint-sink', level: 'warning', properties: { certainty: 'possible', analysisStatus: 'partial' } });
+    expect(sarif.runs[0].invocations[0]).toMatchObject({ exitCode: 2, executionSuccessful: true, properties: { findingsFail: false } });
+  });
+
+  it('includes intermediate static taint definition dependencies in the code flow', () => {
+    const graph = extractFile('function f(){const a=input;const b=a;sink(b);}', 'src/taint-chain.ts', 'typescript').controlFlow![0];
+    const flow = { owner: graph.owner, completeness: 'complete', diagnostics: [],
+      definitions: [
+        { id: 'source', location: 'var:a', node: 3, dependencies: [] },
+        { id: 'alias', location: 'var:b', node: 5, dependencies: ['source'] },
+      ], uses: [], returns: [], throws: [], calls: [], resourceEvents: [], resourceFindings: [], ownershipFindings: [],
+      taintFindings: [{ node: 6, target: 'sink', parameter: 0, atoms: ['tainted'], sourceDefinitions: ['alias'] }],
+      reachableNodes: [], unknownEffects: [], iterations: 1, workUnits: 1 } as DataflowResult;
+    const sarif = toDataflowSarif(flow, graph, '/workspace');
+    validate(sarif);
+    const result = sarif.runs[0].results[0];
+    expect(result.properties.pathDefinitions).toEqual(['source', 'alias']);
+    expect(result.codeFlows?.[0].threadFlows[0].locations).toHaveLength(3);
+    expect(result.codeFlows?.[0].threadFlows[0].locations[1].location.message.text).toBe('Taint propagation definition');
   });
 
   it('rejects invalid schema mutations and fails closed on missing completeness', () => {

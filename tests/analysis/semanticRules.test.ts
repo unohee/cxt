@@ -16,10 +16,16 @@ describe('semantic rule boundary', () => {
     expect(hit.flow?.owner).toBe('x.py::f');
     expect(hit.flow?.definitions.length).toBeGreaterThan(0);
     expect(hit.flow?.steps.at(-1)).toEqual(hit.span);
-    const partial = analyzeSemanticRules(source + '\n yield x', 'x.py', 'python');
+    const partial = analyzeSemanticRules(source + '\n async with manager:\n  work()', 'x.py', 'python');
     expect(partial.completeness).toBe('partial');
     expect(partial.diagnostics.length).toBeGreaterThan(0);
     expect(partial.findings.some(hit => hit.rule.id === 'cxt/uninitialized-read')).toBe(false);
+  });
+  it('does not report a context-manager alias as definitely uninitialized when its lifecycle is partial', () => {
+    const result = analyzeSemanticRules('def f(path):\n with open(path) as handle:\n  return handle', 'x.py', 'python');
+    expect(result.completeness).toBe('partial');
+    expect(result.findings.some(hit => hit.rule.id === 'cxt/uninitialized-read')).toBe(false);
+    expect(result.diagnostics.some(d => d.message.includes('ownership lifecycle are not modeled'))).toBe(true);
   });
   it('shares category suppression with AST rules and fails on invalid source', () => {
     expect(analyzeSemanticRules('def f():\n print(x) # cxt-ignore: correctness\n x=1', 'x.py', 'python').findings).toEqual([]);

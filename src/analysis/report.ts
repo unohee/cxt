@@ -19,7 +19,7 @@ export function bsOutcome(result: Pick<BsScanResult, 'critical' | 'errors' | 'an
 export function scanOutcome(result: ScanResult): AnalysisOutcome {
   const partial = !!(result.diagnostics.length || result.parserBreakdown.lexical || result.controlFlow.partial || result.dataflow.partial
     || result.summaries.partial || result.callSites.unresolved || result.callSites.external);
-  return analysisOutcome(result.errors, partial, false);
+  return analysisOutcome(result.errors, partial, result.taintFindings.proven > 0);
 }
 export const findingRuleId = (issue: BsIssue): string => issue.ruleId ?? `cxt/legacy-${issue.category.replaceAll('_', '-')}`;
 

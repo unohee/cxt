@@ -36,7 +36,7 @@ describe('model persistence and loading', () => {
       expect(migrated.getModelManifest('p')).toBeNull();
       expect(migrated.getModelManifest('other')).toEqual(manifest);
       const check = new Database(path, { readonly: true });
-      try { expect(check.pragma('user_version', { simple: true })).toBe(9); expect(check.pragma('foreign_key_check')).toEqual([]); }
+      try { expect(check.pragma('user_version', { simple: true })).toBe(10); expect(check.pragma('foreign_key_check')).toEqual([]); }
       finally { check.close(); }
     } finally { migrated.close(); }
   });

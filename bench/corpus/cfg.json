@@ -157,11 +157,11 @@
     ]
   },
   {
-    "id": "ts-unsupported-yield",
+    "id": "ts-async-iteration",
     "language": "typescript",
-    "source": "function* f(){yield 1;}",
-    "complexity": 1,
-    "completeness": "partial",
+    "source": "async function f(){for await (const item of items){work(item);}}",
+    "complexity": 2,
+    "completeness": "complete",
     "paths": []
   },
   {
@@ -312,11 +312,11 @@
     ]
   },
   {
-    "id": "py-unsupported-yield",
+    "id": "py-async-with",
     "language": "python",
-    "source": "def f():\n yield 1",
-    "complexity": 1,
-    "completeness": "partial",
+    "source": "async def f():\n async with manager:\n  work()",
+    "complexity": 2,
+    "completeness": "complete",
     "paths": []
   },
   {

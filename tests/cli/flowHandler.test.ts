@@ -46,7 +46,7 @@ describe('dataflow CLI', () => {
   });
 
   it('reads stored definitions and source locations, with partial and absent exit codes', async () => {
-    writeFileSync(join(dir, 'x.ts'), 'function complete(input){let saved=input;input=2;return saved;}\nfunction* partial(){yield work();}\nconst value=1;');
+    writeFileSync(join(dir, 'x.ts'), 'function complete(input){let saved=input;input=2;return saved;}\nfunction partial(){with (resource) {work();}}\nconst value=1;');
     const result = await scanRepository(dir, 'flow-cli', { parser: 'ast' });
     expect(result.errors).toEqual([]);
     expect(result.dataflow).toMatchObject({ total: 2, complete: 1, partial: 1 });
@@ -65,5 +65,26 @@ describe('dataflow CLI', () => {
     await handleFlow('value', { project: 'flow-cli', json: true });
     expect(JSON.parse(log.mock.calls[0][0]).error).toBe('dataflow_unavailable');
     expect(process.exitCode).toBe(1);
+  });
+
+  it('exports semantic resource provenance as SARIF code flows', async () => {
+    writeFileSync(join(dir, '.cxt-models.json'), JSON.stringify({ schemaVersion: 1,
+      versions: { 'npm:resource-api': '1.0.0' }, assumptions: ['unmodified-external-bindings'], packs: ['models.json'] }));
+    writeFileSync(join(dir, 'models.json'), JSON.stringify({ schemaVersion: 1, id: 'resource-pack', version: '1.0.0', models: [
+      { id: 'acquire', language: 'typescript', module: 'resource-api', symbol: 'acquire', package: 'npm:resource-api',
+        versions: { min: '1.0.0', before: '2.0.0' }, parameters: ['string'], returns: { type: 'unknown', dependsOn: [] }, effects: 'none',
+        resource: { action: 'acquire', identity: 'return' }, throws: { possible: false, dependsOn: [] }, source: 'https://example.com/resource' },
+      { id: 'release', language: 'typescript', module: 'resource-api', symbol: 'release', package: 'npm:resource-api',
+        versions: { min: '1.0.0', before: '2.0.0' }, parameters: ['any'], returns: { type: 'unit', dependsOn: [] }, effects: 'none',
+        resource: { action: 'release', identity: 'argument', parameter: 0 }, throws: { possible: false, dependsOn: [] }, source: 'https://example.com/resource' },
+    ] }));
+    writeFileSync(join(dir, 'x.ts'), "import {acquire, release} from 'resource-api'; function f(){const h=acquire('x'); release(h); return h.read();}");
+    await scanRepository(dir, 'p', { parser: 'ast' });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    await handleFlow('f', { project: 'p', sarif: true });
+    const sarif = JSON.parse(log.mock.calls[0][0]);
+    expect(sarif.runs[0].results.map((result: { ruleId: string }) => result.ruleId)).toContain('cxt/resource-use-after-release');
+    expect(sarif.runs[0].results.find((result: { ruleId: string }) => result.ruleId === 'cxt/resource-use-after-release').codeFlows[0].threadFlows[0].locations.length).toBeGreaterThan(1);
+    expect(process.exitCode).toBe(2);
   });
 });

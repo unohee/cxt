@@ -7,7 +7,7 @@
   {"id":"ts-alias","language":"typescript","source":"function f(){\n let a={x:1};\n let b=a;\n b.x=2;\n return a.x;\n}","parameters":[],"atoms":["number:2"],"reads":[[5,9,"a",[2],false]],"completeness":"complete"},
   {"id":"ts-finally","language":"typescript","source":"function f(){\n try{return 1;}finally{return 2;}\n}","parameters":[],"atoms":["number:2"],"reads":[],"completeness":"complete"},
   {"id":"ts-zero-iteration","language":"typescript","source":"function f(){\n let x=1;\n while(false){x=2;}\n return x;\n}","parameters":[],"atoms":["number:1"],"reads":[[4,9,"x",[2],false]],"completeness":"complete"},
-  {"id":"ts-yield-partial","language":"typescript","source":"function* f(){yield 1;}","parameters":[],"reads":[],"completeness":"partial"},
+  {"id":"ts-yield-resume","language":"typescript","source":"function* f(){yield 1;}","parameters":[],"reads":[],"completeness":"complete"},
   {"id":"py-kill","language":"python","source":"def f():\n x=1\n x=2\n return x","parameters":[],"atoms":["number:2"],"reads":[[4,9,"x",[3],false]],"completeness":"complete"},
   {"id":"py-copy","language":"python","source":"def f(input):\n saved=input\n input=2\n return saved","parameters":["input"],"reads":[[4,9,"saved",[2],false]],"completeness":"complete"},
   {"id":"py-merge","language":"python","source":"def f(flag):\n x=1\n if flag:\n  x=2\n return x","parameters":[],"atoms":["number:1","number:2"],"reads":[[5,9,"x",[2,4],false]],"completeness":"complete"},
@@ -16,7 +16,7 @@
   {"id":"py-alias","language":"python","source":"def f():\n a=[1]\n b=a\n b[0]=2\n return a[0]","parameters":[],"atoms":["number:2"],"reads":[[5,9,"a",[2],false]],"completeness":"complete"},
   {"id":"py-finally","language":"python","source":"def f():\n try:\n  return 1\n finally:\n  return 2","parameters":[],"atoms":["number:2"],"reads":[],"completeness":"complete"},
   {"id":"py-delete","language":"python","source":"def f():\n x=1\n del x\n return x","parameters":[],"atoms":["uninitialized"],"reads":[[4,9,"x",[3],true]],"completeness":"complete"},
-  {"id":"py-yield-partial","language":"python","source":"def f():\n yield 1","parameters":[],"reads":[],"completeness":"partial"},
+  {"id":"py-yield-resume","language":"python","source":"def f():\n yield 1","parameters":[],"reads":[],"completeness":"complete"},
   {"id":"rs-kill","language":"rust","source":"fn f()->i32{\n let mut x=1;\n x=2;\n return x;\n}","parameters":[],"atoms":["number:2"],"reads":[[4,9,"x",[3],false]],"completeness":"complete"},
   {"id":"rs-copy","language":"rust","source":"fn f(input:i32)->i32{\n let saved=input;\n return saved;\n}","parameters":["input"],"reads":[[3,9,"saved",[2],false]],"completeness":"complete"},
   {"id":"rs-merge","language":"rust","source":"fn f(flag:bool)->i32{\n let mut x=1;\n if flag{x=2;}\n return x;\n}","parameters":[],"atoms":["number:1","number:2"],"reads":[[4,9,"x",[2,3],false]],"completeness":"complete"},
@@ -25,5 +25,10 @@
   {"id":"rs-zero-iteration","language":"rust","source":"fn f()->i32{\n let mut x=1;\n while false{x=2;}\n return x;\n}","parameters":[],"atoms":["number:1"],"reads":[[4,9,"x",[2],false]],"completeness":"complete"},
   {"id":"rs-nonreturning","language":"rust","source":"fn f(){\n loop{}\n}","parameters":[],"atoms":[],"reads":[],"completeness":"complete"},
   {"id":"rs-tail","language":"rust","source":"fn f(input:i32)->i32{\n let saved=input;\n saved\n}","parameters":["input"],"reads":[[3,2,"saved",[2],false]],"completeness":"complete"},
-  {"id":"rs-macro-partial","language":"rust","source":"fn f(){println!(\"x\");}","parameters":[],"reads":[],"completeness":"partial"}
+  {"id":"rs-macro-partial","language":"rust","source":"fn f(){println!(\"x\");}","parameters":[],"reads":[],"completeness":"partial"},
+  {"id":"rs-move-use","language":"rust","source":"fn f(){\n let x=Value{value:1};\n let y=x;\n x.value;\n}","parameters":[],"reads":[[4,2,"x",[3],false]],"ownership":[[4,2,"x","use-after-move","possible"]],"completeness":"complete"},
+  {"id":"rs-borrow-use","language":"rust","source":"fn f(){\n let x=[1,2];\n let y=&x;\n x[0];\n}","parameters":[],"reads":[[4,2,"x",[2],false]],"ownership":[],"completeness":"complete"},
+  {"id":"rs-copy-struct","language":"rust","source":"struct Value{value:i32}\nimpl Copy for Value {}\nfn f(){\n let x=Value{value:1};\n let y=x;\n x;\n}","parameters":[],"reads":[[5,8,"x",[4],false],[6,2,"x",[4],false]],"ownership":[],"completeness":"complete"},
+  {"id":"rs-derived-copy-struct","language":"rust","source":"#[derive(Copy, Clone)]\nstruct Token{value:u32}\nfn f(){\n let x=Token{value:1};\n let y=x;\n x;\n}","parameters":[],"reads":[[5,8,"x",[4],false],[6,2,"x",[4],false]],"ownership":[],"completeness":"complete"},
+  {"id":"rs-generic-copy-bound","language":"rust","source":"fn f<T: Copy>(value:T){\n let owned=value;\n value;\n}","parameters":[],"reads":[[3,2,"value",[1],false]],"ownership":[],"completeness":"complete"}
 ]

@@ -44,6 +44,16 @@ describe('AST rule contracts', () => {
     expect(magic('RETRYABLE = {402, 429, 502}\nLIMITS = {"light": 4000}')).toEqual([]);
   });
 
+  it('uses a unique local Python signature for positional numeric domain arguments', () => {
+    const magic = (code: string) => analyzeAstRules(code, 'src/client.py', 'python').filter(hit => hit.rule.id === 'cxt/magic-number');
+    expect(magic('def scrub(text, limit):\n return text[:limit]\nresult = scrub(body, 200)')).toEqual([]);
+    expect(magic('class Client:\n def scrub(self, text, max_length):\n  return text[:max_length]\n def fetch(self, body):\n  return self.scrub(body, 300)')).toEqual([]);
+    expect(magic('class Client:\n def scrub(self, text, max_length):\n  return text[:max_length]\nresult = Client().scrub(body, 300)')).toHaveLength(1);
+    expect(magic('def calculate(value, factor):\n return value * factor\nresult = calculate(value, 200)')).toHaveLength(1);
+    expect(magic('def clip(text, limit):\n return text[:limit]\ndef clip(text, count):\n return text[:count]\nresult = clip(body, 200)')).toHaveLength(1);
+    expect(magic('def clip(text, *values):\n return text\nclip(body, *prefixes, 200)')).toHaveLength(1);
+  });
+
   it('does not suppress from literal text and scopes actual comment suppressions by category', () => {
     expect(analyzeAstRules("const x='// cxt-ignore'; eval(input);", 'x.ts', 'typescript').some(hit => hit.rule.id === 'cxt/eval-call')).toBe(true);
     expect(analyzeAstRules('eval(input); // cxt-ignore: security', 'x.ts', 'typescript')).toEqual([]);

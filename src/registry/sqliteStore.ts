@@ -199,7 +199,7 @@ export class SqliteRegistryStore {
   //           omitted — P1 (tree-sitter frontend) is expected to extend
   //           EntityKind and pinning it now would force another rebuild.
   //           relations' relation_type CHECK moves to P2 v4 (code_call_sites).
-  private static readonly SCHEMA_VERSION = 9;
+  private static readonly SCHEMA_VERSION = 10;
 
   // The last version in which the FTS index schema (set of indexed columns)
   // changed. Decoupled from the user_version bump: through v2 "version went up"
@@ -638,6 +638,12 @@ export class SqliteRegistryStore {
     `);
 
     // v4 adds source-located call facts independently of the entity/FTS schema.
+    // Fact views are also shape-healed when a compatible DB predates a newly
+    // exposed query column; CREATE VIEW IF NOT EXISTS would otherwise preserve
+    // the old projection forever.
+    const flowFactView = this.db.prepare("SELECT sql FROM sqlite_master WHERE type = 'view' AND name = 'cxt_query_flows'").get() as { sql?: string } | undefined;
+    const taintFactView = this.db.prepare("SELECT sql FROM sqlite_master WHERE type = 'view' AND name = 'cxt_query_taints'").get() as { sql?: string } | undefined;
+    const factViewsNeedRebuild = currentVersion < SqliteRegistryStore.SCHEMA_VERSION || !flowFactView?.sql?.includes('taint_finding_count') || !taintFactView?.sql?.includes('source_definitions');
     if (currentVersion <= SqliteRegistryStore.SCHEMA_VERSION) {
       this.db.transaction(() => this.db.exec(`
         CREATE TABLE IF NOT EXISTS code_call_sites (
@@ -696,6 +702,7 @@ export class SqliteRegistryStore {
           payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
           PRIMARY KEY (project_id, kind, cache_key)
         );
+        ${factViewsNeedRebuild ? DROP_FACT_VIEWS : ''}
         CREATE VIEW IF NOT EXISTS cxt_query_entities AS SELECT project_id, qualified_name, name, file_path, kind, status, risk_level, has_tests, line_start, line_end FROM code_entities;
         CREATE VIEW IF NOT EXISTS cxt_query_calls AS SELECT c.project_id, c.file_path, c.line, c.column_number, source.qualified_name AS caller, target.qualified_name AS target, c.resolution, c.reason, c.confidence
           FROM code_call_sites c LEFT JOIN code_entities source ON source.id = c.caller_id AND source.project_id = c.project_id
@@ -706,12 +713,25 @@ export class SqliteRegistryStore {
           FROM code_control_flow f JOIN code_entities e ON e.id = f.owner_id AND e.project_id = f.project_id;
         CREATE VIEW IF NOT EXISTS cxt_query_flows AS SELECT f.project_id, e.qualified_name AS owner, e.file_path, f.completeness,
           json_extract(f.result_json, '$.iterations') AS iterations, json_array_length(f.result_json, '$.unknownEffects') AS unknown_effect_count,
-          json_array_length(f.result_json, '$.definitions') AS definition_count
+          json_array_length(f.result_json, '$.definitions') AS definition_count,
+          coalesce(json_array_length(f.result_json, '$.resourceFindings'), 0) AS resource_finding_count,
+          coalesce(json_array_length(f.result_json, '$.ownershipFindings'), 0) AS ownership_finding_count,
+          coalesce(json_array_length(f.result_json, '$.taintFindings'), 0) AS taint_finding_count
           FROM code_dataflow f JOIN code_entities e ON e.id = f.owner_id AND e.project_id = f.project_id;
         CREATE VIEW IF NOT EXISTS cxt_query_summaries AS SELECT f.project_id, e.qualified_name AS owner, e.file_path, f.completeness,
           json_extract(f.summary_json, '$.mayReturn') AS may_return, json_extract(f.summary_json, '$.mayThrow') AS may_throw,
-          json_extract(f.summary_json, '$.returnParameters') AS return_parameters, json_extract(f.summary_json, '$.returnAtoms') AS return_atoms
+          json_extract(f.summary_json, '$.returnParameters') AS return_parameters, json_extract(f.summary_json, '$.returnAtoms') AS return_atoms,
+          coalesce(json_array_length(f.summary_json, '$.movesParameters'), 0) AS moved_parameter_count,
+          coalesce(json_array_length(f.summary_json, '$.borrowsParameters'), 0) AS borrowed_parameter_count,
+          coalesce(json_array_length(f.summary_json, '$.taintSinkParameters'), 0) AS taint_sink_parameter_count,
+          coalesce(json_array_length(f.summary_json, '$.callbackInvocations'), 0) AS callback_invocation_count
           FROM code_function_summaries f JOIN code_entities e ON e.id = f.owner_id AND e.project_id = f.project_id;
+        CREATE VIEW IF NOT EXISTS cxt_query_taints AS SELECT f.project_id, e.qualified_name AS owner, e.file_path,
+          json_extract(item.value, '$.node') AS node, json_extract(item.value, '$.target') AS target,
+          json_extract(item.value, '$.parameter') AS parameter, json_extract(item.value, '$.atoms') AS atoms,
+          coalesce(json_extract(item.value, '$.sourceDefinitions'), '[]') AS source_definitions
+          FROM code_dataflow f JOIN code_entities e ON e.id = f.owner_id AND e.project_id = f.project_id
+          JOIN json_each(f.result_json, '$.taintFindings') item;
       `)).immediate();
       this.db.transaction(() => {
         const columns = this.db.prepare('PRAGMA table_info(code_call_sites)').all() as Array<{ name: string }>;
@@ -793,6 +813,18 @@ export class SqliteRegistryStore {
     const compiled = compileFactQuery(projectId, query), statement = this.db.prepare(compiled.sql);
     if (!statement.readonly || !statement.reader) throw new Error('Fact queries must be read-only row queries');
     return statement.all(...compiled.parameters) as Array<Record<string, string | number | null>>;
+  }
+
+  /** Snapshot timestamp and indexed paths used by read-only freshness checks. */
+  getSnapshotFreshnessInputs(projectId: string): { updatedAt?: string; filePaths: string[]; cachedFiles: Array<{ filePath: string; inputHash: string }> } {
+    const row = this.db.prepare('SELECT max(updated_at) AS updated_at FROM code_entities WHERE project_id = ? AND status != ?')
+      .get(projectId, 'broken') as { updated_at?: string | null };
+    const paths = this.db.prepare('SELECT DISTINCT file_path FROM code_entities WHERE project_id = ? AND status != ?')
+      .all(projectId, 'broken') as Array<{ file_path: string }>;
+    const cachedFiles = this.db.prepare("SELECT cache_key, input_hash FROM code_analysis_cache WHERE project_id = ? AND kind = 'frontend'")
+      .all(projectId) as Array<{ cache_key: string; input_hash: string }>;
+    return { ...(row.updated_at ? { updatedAt: row.updated_at } : {}), filePaths: paths.map(path => path.file_path),
+      cachedFiles: cachedFiles.map(file => ({ filePath: file.cache_key, inputHash: file.input_hash })) };
   }
 
   getAnalysisCache(projectId: string, kind: CacheKind, key: string, inputHash: string): unknown | undefined {

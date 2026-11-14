@@ -4,7 +4,7 @@
 
 ## Scan 계약
 
-`cxt scan`은 DB v9의 `code_analysis_cache`를 재사용한다. `cxt scan --full`은 캐시 읽기를 건너뛰고 전체 결과와 캐시를 다시 계산한다. 두 경로 모두 기존 60초 제한과 동일한 분석 의미를 사용한다. 캐시 적중은 분석의 completeness를 높이지 않는다.
+`cxt scan`은 DB v10의 `code_analysis_cache`를 재사용한다. v9 snapshot은 semantic count query view를 원자적으로 재생성하며, `cxt scan --full`은 캐시 읽기를 건너뛰고 전체 결과와 캐시를 다시 계산한다. 두 경로 모두 기존 60초 제한과 동일한 분석 의미를 사용한다. 캐시 적중은 분석의 completeness를 높이지 않는다.
 
 | 단계 | 무효화 입력 |
 |---|---|
@@ -35,16 +35,17 @@ Native parser 부재를 cache가 숨기지 않는다. 캐시를 읽기 전에 lo
 cxt query entities --where '[{"column":"file_path","op":"prefix","value":"src/"}]' --limit 50 --json
 cxt query calls --where '[{"column":"resolution","op":"eq","value":"unresolved"}]' --json
 cxt query summaries --where '[{"column":"completeness","op":"eq","value":"partial"}]' --json
+cxt query taints --where '[{"column":"owner","op":"prefix","value":"src/"}]' --json
 ```
 
-Views: `entities`, `calls`, `cfg`, `flows`, `summaries`. 실제 SQL views는 `cxt_query_<view>`다. 필드 목록은 `src/analysis/factQuery.ts`의 `factViews`가 정본이다. `SqliteRegistryStore.queryFacts(projectId, query)`를 통해 API에서도 동일한 검증을 적용한다.
+Views: `entities`, `calls`, `cfg`, `flows`, `summaries`, `taints`. 실제 SQL views는 `cxt_query_<view>`다. `flows`에는 resource/ownership/taint finding count가, `summaries`에는 formal move/borrow, taint sink, callback invocation count가 포함된다. `taints`는 source definition provenance를 포함한 개별 sink row를 제공한다. 필드 목록은 `src/analysis/factQuery.ts`의 `factViews`가 정본이다. `SqliteRegistryStore.queryFacts(projectId, query)`를 통해 API에서도 동일한 검증을 적용한다.
 
 - raw SQL, 표현식, 임의 table/column은 입력으로 받지 않는다.
 - project ID는 필수 바인딩 조건이며 모든 값은 prepared statement parameter다.
 - 최대 16개 `eq`/`prefix` 조건, 문자열 최대 512자. prefix의 `%`, `_`, `!`는 literal로 escape한다.
 - `limit` 1–500(기본 100), `offset` 0–100000, 고정된 정렬 및 전체 column tie-break.
 - SQLite statement의 `readonly`/`reader`를 확인한다. 거부된 문법은 실행하지 않는다.
-- JSON은 `source: persisted-snapshot`, `freshness: not-verified`를 반환한다. query 성공/빈 결과가 최신 source 분석이나 전체 coverage를 보장하지 않는다.
+- JSON은 `source: persisted-snapshot`, `freshness: current|stale|not-verified`를 반환한다. indexed/source tree의 mtime guard가 stale를 탐지하지만, hash 기반 완전 검증이 아니므로 `current`가 전체 coverage나 의미적 최신성을 보장하지 않는다.
 - 기존 registry open은 schema migration/복구를 수행할 수 있다. 읽기 전용 계약은 query가 facts를 변조하지 않는다는 뜻이며 DB 파일을 OS readonly로 여는 모드는 아니다.
 
 ## 검증과 성능 재현

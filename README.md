@@ -210,7 +210,7 @@ recomputes every stage. Cache hits retain the original completeness diagnostics.
 
 `query entities|calls|cfg|flows|summaries` reads persisted facts using allowlisted
 columns, bound `eq`/`prefix` filters and a maximum of 500 rows. It accepts no raw
-SQL. JSON explicitly reports `freshness: not-verified`; refresh with `scan` before
+SQL. JSON reports `freshness: current`, `stale`, or `not-verified`; refresh with `scan` before
 using the results for the current checkout. See [contracts and performance
 measurements](docs/INCREMENTAL_FACTS.md).
 
@@ -265,6 +265,7 @@ loops and labeled jumps, switch fallthrough, match guards, return/throw,
 try/catch/else/finally, Python with/loop-else, Rust `?` and explicit await suspension/resumption.
 Cleanup paths are copied per pending completion to preserve finally overrides.
 Unknown call/member effects may throw; exception-type and value feasibility are approximated.
+Python `except (A, B)` handlers match each statically named exception independently; dynamic tuples and exception groups remain partial.
 `structuralComplexity` counts explicit decision sites plus one, without counting implicit
 exception edges or copied finally bodies again.
 

@@ -42,7 +42,7 @@ describe('CLI analysis output contract', () => {
 
   it.each(['bs', 'audit'] as const)('%s reports partial, syntax failure and configuration failure with distinct exit codes', async command => {
     const run = command === 'bs' ? handleBs : handleAudit;
-    writeFileSync(join(root, 'src', 'x.ts'), 'function* f(){yield 1;}');
+    writeFileSync(join(root, 'src', 'x.ts'), 'function f(){with (resource) {work();}}');
     await run({ json: true }); expect(output().outcome).toMatchObject({ status: 'partial', exitCode: 2, pass: false }); expect(process.exitCode).toBe(2);
     reset(); writeFileSync(join(root, 'src', 'x.ts'), 'function broken(');
     await run({ sarif: true }); expect(output().runs[0].invocations[0]).toMatchObject({ executionSuccessful: false, exitCode: 3 }); expect(process.exitCode).toBe(3);
@@ -54,11 +54,50 @@ describe('CLI analysis output contract', () => {
     writeFileSync(join(root, 'src', 'x.ts'), 'export function read(x){return x;}');
     await handleScan({ json: true, project: 'p', verbose: true });
     expect(output().outcome).toMatchObject({ status: 'complete', exitCode: 0 }); expect(output().registered).toBe(1);
-    reset(); writeFileSync(join(root, 'src', 'x.ts'), 'export function* read(){yield 1;}');
+    reset(); writeFileSync(join(root, 'src', 'x.ts'), 'export function read(){with (resource) {work();}}');
     await handleScan({ sarif: true, project: 'p' }); expect(output().runs[0].invocations[0].exitCode).toBe(2);
     reset(); writeFileSync(join(root, 'src', 'x.ts'), 'function broken(');
     await handleScan({ json: true, project: 'p' }); expect(output().outcome).toMatchObject({ status: 'failed', exitCode: 3 });
     expect(getRegistryStore(join(root, 'facts.db')).getStats('p').total).toBe(1);
     await expect(handleBs({ json: true, sarif: true })).rejects.toThrow('mutually exclusive');
+  });
+
+  it('includes current committed semantic flow findings in scan SARIF', async () => {
+    writeFileSync(join(root, '.cxt-models.json'), JSON.stringify({ schemaVersion: 1,
+      versions: { 'npm:resource-api': '1.0.0' }, assumptions: ['unmodified-external-bindings'], packs: ['models.json'] }));
+    writeFileSync(join(root, 'models.json'), JSON.stringify({ schemaVersion: 1, id: 'resource-pack', version: '1.0.0', models: [
+      { id: 'acquire', language: 'typescript', module: 'resource-api', symbol: 'acquire', package: 'npm:resource-api', versions: { min: '1.0.0', before: '2.0.0' }, parameters: ['string'], returns: { type: 'unknown', dependsOn: [] }, effects: 'none', resource: { action: 'acquire', identity: 'return' }, throws: { possible: false, dependsOn: [] }, source: 'https://example.com/resource' },
+      { id: 'release', language: 'typescript', module: 'resource-api', symbol: 'release', package: 'npm:resource-api', versions: { min: '1.0.0', before: '2.0.0' }, parameters: ['any'], returns: { type: 'unit', dependsOn: [] }, effects: 'none', resource: { action: 'release', identity: 'argument', parameter: 0 }, throws: { possible: false, dependsOn: [] }, source: 'https://example.com/resource' },
+    ] }));
+    writeFileSync(join(root, 'src', 'x.ts'), "import {acquire, release} from 'resource-api'; function f(){const h=acquire('x'); release(h); return h.read();}");
+    reset(); await handleScan({ sarif: true, project: 'p' });
+    const sarif = output();
+    expect(sarif.runs[0].results.some((finding: { ruleId: string }) => finding.ruleId === 'cxt/resource-use-after-release')).toBe(true);
+    reset(); await handleScan({ project: 'p' });
+    expect(logs.join('\n')).toContain('Resources');
+  });
+
+  it('fails scan outcome and emits SARIF for explicit modeled taint sinks', async () => {
+    writeFileSync(join(root, '.cxt-models.json'), JSON.stringify({ schemaVersion: 1,
+      versions: { 'npm:taint-api': '1.0.0' }, assumptions: ['unmodified-external-bindings'], packs: ['models.json'] }));
+    const base = { language: 'typescript', module: 'taint-api', package: 'npm:taint-api', versions: { min: '1.0.0', before: '2.0.0' }, effects: 'none', throws: { possible: false, dependsOn: [] }, source: 'https://example.com/taint' };
+    writeFileSync(join(root, 'models.json'), JSON.stringify({ schemaVersion: 1, id: 'taint-pack', version: '1.0.0', models: [
+      { ...base, id: 'readInput', symbol: 'readInput', parameters: [], returns: { type: 'unknown', dependsOn: [] }, taint: { source: true } },
+      { ...base, id: 'execute', symbol: 'execute', parameters: ['any'], returns: { type: 'unit', dependsOn: [] }, taint: { sinkParameters: [0] } },
+    ] }));
+    writeFileSync(join(root, 'src', 'x.ts'), "import {readInput, execute} from 'taint-api'; function f(){execute(readInput());}");
+    await handleScan({ json: true, project: 'p' });
+    expect(output().taintFindings).toEqual({ total: 1, proven: 1 });
+    expect(output().outcome).toMatchObject({ status: 'partial', exitCode: 2, findingsFail: true, pass: false });
+    reset(); writeFileSync(join(root, 'src', 'x.ts'), "import {readInput, execute} from 'taint-api'; function f(){execute(readInput()); with (resource) {work();}}");
+    await handleScan({ json: true, project: 'p' });
+    expect(output().taintFindings).toEqual({ total: 1, proven: 0 });
+    expect(output().outcome).toMatchObject({ status: 'partial', exitCode: 2, findingsFail: false, pass: false });
+    reset(); await handleScan({ project: 'p' });
+    expect(logs.join('\n')).toContain('1 total (0 proven, 1 possible sink reaches)');
+    reset(); await handleScan({ sarif: true, project: 'p' });
+    const sarif = output();
+    expect(sarif.runs[0].results.some((finding: { ruleId: string }) => finding.ruleId === 'cxt/taint-sink')).toBe(true);
+    expect(process.exitCode).toBe(2);
   });
 });

@@ -1,6 +1,6 @@
 {
   "timestamp": "2026-09-27T13:57:41.517Z",
-  "source": "/home/unohee/dev/cxt",
+  "source": ".",
   "sourceHash": "f13bfbd96cb8d2c9d482bcb7ab83555326952a2d5035a9d610eff19fcb4b8e8b",
   "artifacts": "/tmp/cxt-incremental-bench-U5UlKV",
   "samplesPerMode": 5,

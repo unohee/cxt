@@ -38,9 +38,9 @@ export type { SummaryAnalysis } from './analysis/summaries.js';
 export type { FunctionSummary, SummaryParameter } from './analysis/summaryTypes.js';
 export { parameterImpact } from './analysis/parameterImpact.js';
 export type { ParameterImpact, ImpactStep } from './analysis/parameterImpact.js';
-export type { DataflowResult, AbstractValue, FlowDefinition, FlowUse } from './analysis/dataflow.js';
+export type { DataflowResult, AbstractValue, FlowDefinition, FlowUse, OwnershipFinding } from './analysis/dataflow.js';
 export { LibraryModelCatalog, loadLibraryModels, modelPackSchema, modelConfigSchema, standardModelPack } from './analysis/libraryModels.js';
-export type { LibraryModel, ModelPack, ModelConfig, ModelManifest, ModelReference, ModelApplication } from './analysis/libraryModels.js';
+export type { LibraryModel, ModelPack, ModelConfig, ModelManifest, ModelReference, ModelApplication, ResourceContract } from './analysis/libraryModels.js';
 export type { DataflowFacts, DataflowDiagnostic, DataExpr, NodeEffect, FlowVariable, FlowLocation } from './analysis/dataflowTypes.js';
 
 // BS Detector

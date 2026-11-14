@@ -18,8 +18,10 @@ export interface CfgNode {
   span: SourceSpan;
   /** 분기에서 선택된 값의 원본. 없으면 이 노드 자체의 AST를 평가한다. */
   valueSource?: SourceSpan;
+  /** Python with cleanup이 enter에서 평가한 manager identity를 다시 참조한다. */
+  resourceSource?: SourceSpan;
   constantValue?: 'undefined' | 'unit';
-  binding?: 'parameter-default' | 'iteration' | 'exception' | 'exception-clear';
+  binding?: 'parameter-default' | 'iteration' | 'exception' | 'exception-clear' | 'resource-enter';
 }
 export interface CfgEdge { from: number; to: number; kind: CfgEdgeKind }
 export interface BasicBlock { id: number; nodes: number[] }

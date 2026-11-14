@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "tier": "held-out-review",
+  "labelProvenance": "separate source and label review from the synthetic development corpus",
+  "labelsSha256": "d514f004d8080cf824a6071cc90428507f8ec74151f2438ff091ade32c981ec8",
+  "overlapPolicy": "fixture IDs and source hashes must not overlap bench/corpus/dataflow.json",
+  "reviewStatus": "single-agent source review; independent second-reviewer sign-off remains pending",
+  "fixtures": [
+    {"id":"ho-ts-parameter-copy","language":"typescript","sourceOrigin":"TypeScript-style utility slice authored for held-out review","labelBasis":"manual line/definition review"},
+    {"id":"ho-ts-branch-value","language":"typescript","sourceOrigin":"TypeScript-style branch slice authored for held-out review","labelBasis":"manual line/value review"},
+    {"id":"ho-py-parameter-copy","language":"python","sourceOrigin":"Python-style utility slice authored for held-out review","labelBasis":"manual line/definition review"},
+    {"id":"ho-py-branch-value","language":"python","sourceOrigin":"Python-style branch slice authored for held-out review","labelBasis":"manual line/value review"},
+    {"id":"ho-rs-parameter-copy","language":"rust","sourceOrigin":"Rust-style parameter slice authored for held-out review","labelBasis":"manual line/definition review"},
+    {"id":"ho-rs-borrow-read","language":"rust","sourceOrigin":"Rust-style borrow slice authored for held-out review","labelBasis":"manual ownership/read review"}
+  ]
+}

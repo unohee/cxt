@@ -5,6 +5,7 @@ import { t } from '../i18n.js';
 import { escapeTerminal } from './outputSafety.js';
 import { assertOutputOptions, scanOutcome, failedBsScan, bsOutcome } from '../analysis/report.js';
 import { toSarif } from '../analysis/sarif.js';
+import { toDataflowSarif } from '../analysis/sarif.js';
 const c = { reset: '\x1b[0m', bold: '\x1b[1m', dim: '\x1b[2m', red: '\x1b[31m', green: '\x1b[32m', yellow: '\x1b[33m', cyan: '\x1b[36m' };
 
 export async function handleScan(opts: { json?: boolean; sarif?: boolean; verbose?: boolean; project?: string; full?: boolean }): Promise<void> {
@@ -33,7 +34,26 @@ export async function handleScan(opts: { json?: boolean; sarif?: boolean; verbos
       const report = { issues: [], filesScanned: result.scanned, critical: 0, warning: 0, minor: 0, bsScore: 0, errors: result.errors,
         analysis: { completeness: outcome.status === 'complete' ? 'complete' as const : 'partial' as const,
           engines: result.parserBreakdown, diagnostics: [...result.diagnostics, ...result.dataflow.diagnostics] } };
-      console.log(JSON.stringify(toSarif(report, projectPath, { outcome, properties: { scan: result } }), null, 2)); return;
+      const sarif = toSarif(report, projectPath, { outcome, properties: { scan: result } });
+      // A failed/incomplete scan preserves the previous DB snapshot; do not present those old
+      // facts as findings for the current source. A committed snapshot is current to this scan.
+      if (result.cache.committed) {
+        const graphs = new Map(store.getControlFlow(projectId).map(graph => [graph.owner, graph]));
+        const rules = new Map<string, any>(sarif.runs[0].tool.driver.rules.map(rule => [rule.id, rule]));
+        const semanticResults: any[] = [];
+        for (const flow of store.getDataflow(projectId)) {
+          const graph = graphs.get(flow.owner);
+          if (!graph) continue;
+          const semantic = toDataflowSarif(flow, graph, projectPath, { outcome });
+          for (const rule of semantic.runs[0].tool.driver.rules) rules.set(rule.id, rule);
+          semanticResults.push(...semantic.runs[0].results);
+        }
+        const orderedRules = [...rules.values()].sort((left, right) => left.id.localeCompare(right.id));
+        const ruleIndexes = new Map(orderedRules.map((rule, index) => [rule.id, index]));
+        sarif.runs[0].tool.driver.rules = orderedRules;
+        sarif.runs[0].results = semanticResults.map(result => ({ ...result, ruleIndex: ruleIndexes.get(result.ruleId) ?? 0 }));
+      }
+      console.log(JSON.stringify(sarif, null, 2)); return;
     }
     console.log(`${c.bold}${outcome.status === 'complete' ? m.scanComplete : m.scanIncomplete}${c.reset}`);
     console.log(`  Analysis: ${outcome.status}`);
@@ -50,6 +70,9 @@ export async function handleScan(opts: { json?: boolean; sarif?: boolean; verbos
     console.log(`  ${'Call sites'.padEnd(16)}${result.callSites.total} (${result.callSites.resolved} resolved, ${result.callSites.unresolved} unresolved, ${result.callSites.external} external)`);
     console.log(`  ${'CFGs'.padEnd(16)}${result.controlFlow.total} (${result.controlFlow.complete} complete, ${result.controlFlow.partial} partial)`);
     console.log(`  ${'Dataflow'.padEnd(16)}${result.dataflow.total} (${result.dataflow.complete} complete, ${result.dataflow.partial} partial)`);
+    if (result.resourceFindings.total) console.log(`  ${'Resources'.padEnd(16)}${result.resourceFindings.total} (${result.resourceFindings.definite} definite, ${result.resourceFindings.possible} possible; ${result.resourceFindings.useAfterRelease} use-after-release, ${result.resourceFindings.leak} leak)`);
+    if (result.ownershipFindings.total) console.log(`  ${'Ownership'.padEnd(16)}${result.ownershipFindings.total} (${result.ownershipFindings.definite} definite, ${result.ownershipFindings.possible} possible)`);
+    if (result.taintFindings.total) console.log(`  ${'Taint'.padEnd(16)}${result.taintFindings.total} total (${result.taintFindings.proven} proven, ${result.taintFindings.total - result.taintFindings.proven} possible sink reaches)`);
     console.log(`  ${'Summaries'.padEnd(16)}${result.summaries.total} (${result.summaries.complete} complete, ${result.summaries.partial} partial)`);
     console.log(`  ${'Library models'.padEnd(16)}${result.models.calls.applied ?? 0} applied; ${result.models.manifest.configured ? 'project-declared versions/assumptions' : 'no project version/assumption declaration'}`);
     for (const diagnostic of result.dataflow.diagnostics.slice(0, 10)) {

@@ -4,11 +4,12 @@ export const factViews = {
   entities: ['qualified_name', 'name', 'file_path', 'kind', 'status', 'risk_level', 'has_tests', 'line_start', 'line_end'],
   calls: ['file_path', 'line', 'column_number', 'caller', 'target', 'resolution', 'reason', 'confidence'],
   cfg: ['owner', 'file_path', 'completeness', 'node_count', 'edge_count', 'structural_complexity'],
-  flows: ['owner', 'file_path', 'completeness', 'iterations', 'unknown_effect_count', 'definition_count'],
-  summaries: ['owner', 'file_path', 'completeness', 'may_return', 'may_throw', 'return_parameters', 'return_atoms'],
+  flows: ['owner', 'file_path', 'completeness', 'iterations', 'unknown_effect_count', 'definition_count', 'resource_finding_count', 'ownership_finding_count', 'taint_finding_count'],
+  summaries: ['owner', 'file_path', 'completeness', 'may_return', 'may_throw', 'return_parameters', 'return_atoms', 'moved_parameter_count', 'borrowed_parameter_count', 'taint_sink_parameter_count', 'callback_invocation_count'],
+  taints: ['owner', 'file_path', 'node', 'target', 'parameter', 'atoms', 'source_definitions'],
 } as const;
 export const factQuerySchema = z.object({
-  view: z.enum(['entities', 'calls', 'cfg', 'flows', 'summaries']),
+  view: z.enum(['entities', 'calls', 'cfg', 'flows', 'summaries', 'taints']),
   where: z.array(z.object({ column: z.string().min(1).max(64), op: z.enum(['eq', 'prefix']),
     value: z.union([z.string().max(512), z.number().finite(), z.boolean(), z.null()]) }).strict()).max(16).default([]),
   orderBy: z.string().max(64).optional(), direction: z.enum(['asc', 'desc']).default('asc'),

@@ -24,14 +24,14 @@ writeFileSync(join(source, 'sample.ts'), 'export function read() {}');
 writeFileSync(join(source, 'sample.py'), 'def read(): pass');
 writeFileSync(join(source, 'sample.rs'), 'pub fn read() {}');
 writeFileSync(join(source, 'caller.ts'), "import { read as alias } from './sample.js';\nexport function caller() { alias(); missing(); }\ncaller();");
-writeFileSync(join(source, 'control.ts'), 'export function branch(x) { if(x) return 1; return 2; }\nexport function* partial() { yield task(); }\nexport async function awaited() { await task(); }\nexport function identity(input){return input;}\nexport function through(input){return identity(input);}\nexport function ignored(input){identity(input);return 0;}');
+writeFileSync(join(source, 'control.ts'), 'export function branch(x) { if(x) return 1; return 2; }\nexport function partial() { with (resource) { task(); } }\nexport async function awaited() { await task(); }\nexport function identity(input){return input;}\nexport function through(input){return identity(input);}\nexport function ignored(input){identity(input);return 0;}');
 writeFileSync(join(source, '.cxt-models.json'), JSON.stringify({ schemaVersion: 1, versions: { node: '22.19.0' }, assumptions: ['unmodified-external-bindings'] }));
 writeFileSync(join(source, 'library.ts'), "import {basename} from 'node:path';export function modeled(){return basename('x');}export function rejected(input){return basename(input);}");
 const rulesSource = join(scratch, 'rules');
 mkdirSync(rulesSource);
 mkdirSync(join(rulesSource, 'commands'));
 writeFileSync(join(rulesSource, 'sample.ts'), 'debugger;\nconst text = "debugger; eval(x)";');
-writeFileSync(join(rulesSource, 'read.py'), 'def read():\n print(x)\n x=1\ndef partial():\n yield 1');
+writeFileSync(join(rulesSource, 'read.py'), 'def read():\n print(x)\n x=1\ndef partial():\n with resource:\n  yield 1');
 writeFileSync(join(rulesSource, 'commands', 'report.ts'), 'console.log("complete");');
 writeFileSync(join(rulesSource, '.cxt-rules.json'), JSON.stringify({ schemaVersion: 1, roles: [{ prefix: 'commands', role: 'tooling' }] }));
 
@@ -122,7 +122,7 @@ for (const mode of ['full', 'missing']) {
   const queried = runStored(['query', 'entities', '--limit', '2', '--json']);
   assert.equal(queried.status, 0, queried.stderr + queried.stdout);
   assert.equal(JSON.parse(queried.stdout).rows.length, 2);
-  assert.equal(JSON.parse(queried.stdout).freshness, 'not-verified');
+  assert.equal(JSON.parse(queried.stdout).freshness, mode === 'full' ? 'current' : 'not-verified');
   const mutation = runStored(['query', 'entities', '--order-by', 'name; DELETE FROM code_entities', '--json']);
   assert.equal(mutation.status, 3, mutation.stderr + mutation.stdout);
   assert.equal(JSON.parse(mutation.stdout).outcome.status, 'failed');

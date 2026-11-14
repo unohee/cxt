@@ -19,9 +19,10 @@ import type { FrontendDiagnostic, FrontendResult, ParserMode } from '../frontend
 import type { SymbolFacts } from '../analysis/symbols.js';
 import type { CfgDiagnostic, ControlFlowGraph } from '../analysis/cfg.js';
 import { analyzeSummaries } from '../analysis/summaries.js';
+import { applyRustCopyTypes } from '../frontend/dataflowFacts.js';
 import { loadLibraryModels, type ModelManifest } from '../analysis/libraryModels.js';
 import type { DataflowDiagnostic } from '../analysis/dataflowTypes.js';
-import { resolveSymbols } from '../analysis/resolveSymbols.js';
+import { resolveSymbols, type SymbolResolutionOptions } from '../analysis/resolveSymbols.js';
 import { cacheEntry, deserializeFrontend, engineFingerprint, hashText, serializeFrontend, type AnalysisCache, type AnalysisCacheEntry } from '../analysis/cache.js';
 
 // ============ 상수 ============
@@ -1002,6 +1003,9 @@ export interface ScanResult {
     diagnostics: Array<CfgDiagnostic & { filePath: string; owner: string }> };
   dataflow: { total: number; complete: number; partial: number; iterations: number;
     diagnostics: Array<DataflowDiagnostic & { filePath: string; owner: string }> };
+  resourceFindings: { total: number; definite: number; possible: number; useAfterRelease: number; leak: number };
+  ownershipFindings: { total: number; definite: number; possible: number; useAfterMove: number };
+  taintFindings: { total: number; proven: number };
   summaries: { total: number; complete: number; partial: number; components: number };
   models: { manifest: ModelManifest; calls: Record<string, number> };
   cache: { engine: string; frontendHits: number; frontendMisses: number; summaryHits: number; summaryMisses: number; committed: boolean };
@@ -1045,10 +1049,17 @@ export async function scanRepository(
   const parserBreakdown: Record<string, number> = {};
   const diagnostics: FrontendDiagnostic[] = [];
   const symbolFiles: SymbolFacts[] = [];
+  const typescriptPackageRoots = new Map<string, string>();
+  const typescriptPackageMappings = new Map<string, string[]>();
+  const typescriptPackagePatterns = new Map<string, string[]>();
+  const typescriptRestrictedPackages = new Set<string>();
   const callSites = { total: 0, resolved: 0, unresolved: 0, external: 0 };
   const cfgs: ControlFlowGraph[] = [];
   const controlFlow: ScanResult['controlFlow'] = { total: 0, complete: 0, partial: 0, nodes: 0, edges: 0, diagnostics: [] };
   const dataflow: ScanResult['dataflow'] = { total: 0, complete: 0, partial: 0, iterations: 0, diagnostics: [] };
+  const resourceFindings: ScanResult['resourceFindings'] = { total: 0, definite: 0, possible: 0, useAfterRelease: 0, leak: 0 };
+  const ownershipFindings: ScanResult['ownershipFindings'] = { total: 0, definite: 0, possible: 0, useAfterMove: 0 };
+  const taintFindings: ScanResult['taintFindings'] = { total: 0, proven: 0 };
   const summaries = { total: 0, complete: 0, partial: 0, components: 0 };
   let scannedFiles = 0;
   let completeScan = true;
@@ -1081,6 +1092,44 @@ export async function scanRepository(
         await walk(fullPath, entryRelPath, depth + 1);
       } else if (entry.isFile()) {
         if (shouldSkipFile(entryRelPath, ignoreConfig)) continue;
+        if (entry.name === 'package.json') {
+          try {
+            const manifest = JSON.parse(await readFile(fullPath, 'utf-8')) as { name?: string; exports?: unknown };
+            if (typeof manifest.name === 'string' && manifest.name.length > 0) {
+              const packagePath = dirname(entryRelPath);
+              const root = packagePath === '.' ? '' : packagePath;
+              typescriptPackageRoots.set(manifest.name, root);
+              if (manifest.exports !== undefined) {
+                typescriptRestrictedPackages.add(manifest.name);
+                const exportTargets = (target: unknown): string[] => {
+                  if (typeof target === 'string') return [target];
+                  if (Array.isArray(target)) return target.flatMap(exportTargets);
+                  if (!target || typeof target !== 'object') return [];
+                  const record = target as Record<string, unknown>;
+                  // Node conditions are ordered by consumer intent. Unknown conditions
+                  // are ignored instead of being treated as a proven source target.
+                  return ['import', 'require', 'default', 'node', 'types'].flatMap(condition => exportTargets(record[condition]));
+                };
+                const addExport = (specifier: string, target: unknown): void => {
+                  const targets = exportTargets(target).filter(targetPath => targetPath.startsWith('./'));
+                  if (!targets.length) return;
+                  const key = specifier === '.' ? manifest.name! : `${manifest.name}/${specifier.slice(2)}`;
+                  const mapped = targets.map(targetPath => join(root, targetPath.slice(2)));
+                  if (specifier.includes('*')) typescriptPackagePatterns.set(key, mapped);
+                  else typescriptPackageMappings.set(key, mapped);
+                };
+                if (typeof manifest.exports === 'string' || Array.isArray(manifest.exports)) addExport('.', manifest.exports);
+                else if (manifest.exports && typeof manifest.exports === 'object') {
+                  const entries = Object.entries(manifest.exports);
+                  if (entries.some(([specifier]) => specifier.startsWith('.'))) {
+                    for (const [specifier, target] of entries) if (specifier.startsWith('.')) addExport(specifier, target);
+                  } else addExport('.', manifest.exports);
+                }
+              }
+            }
+          } catch { /* malformed manifests remain outside semantic source facts */ }
+          continue;
+        }
         const ext = extname(entry.name);
         if (!SOURCE_EXTENSIONS.has(ext)) continue;
 
@@ -1169,6 +1218,9 @@ export async function scanRepository(
       callSites,
       controlFlow,
       dataflow,
+      resourceFindings,
+      ownershipFindings,
+      taintFindings,
       summaries,
       models,
       cache,
@@ -1189,6 +1241,25 @@ export async function scanRepository(
   let testsMapped = 0;
   let removed = 0;
   let relationsLoaded = 0;
+
+  let symbolOptions: SymbolResolutionOptions | undefined;
+  try {
+    const tsconfig = JSON.parse(await readFile(join(projectPath, 'tsconfig.json'), 'utf-8')) as {
+      compilerOptions?: { baseUrl?: string; paths?: Record<string, string[]> };
+    };
+    const paths = tsconfig.compilerOptions?.paths;
+    if (paths && Object.values(paths).every(targets => Array.isArray(targets) && targets.every(target => typeof target === 'string'))) {
+      symbolOptions = { typescriptPaths: paths, typescriptBaseUrl: tsconfig.compilerOptions?.baseUrl ?? '.',
+        ...(typescriptPackageRoots.size ? { typescriptPackageRoots: Object.fromEntries(typescriptPackageRoots) } : {}),
+        ...(typescriptPackageMappings.size ? { typescriptPackageMappings: Object.fromEntries(typescriptPackageMappings) } : {}),
+        ...(typescriptPackagePatterns.size ? { typescriptPackagePatterns: [...typescriptPackagePatterns.entries()].map(([pattern, targets]) => ({ pattern, targets })) } : {}),
+        ...(typescriptRestrictedPackages.size ? { typescriptRestrictedPackages: [...typescriptRestrictedPackages] } : {}) };
+    }
+  } catch { /* tsconfig is optional; unresolved aliases remain explicit call-site facts. */ }
+  if (typescriptPackageRoots.size) symbolOptions = { ...symbolOptions, typescriptPackageRoots: Object.fromEntries(typescriptPackageRoots) };
+  if (typescriptPackageMappings.size) symbolOptions = { ...symbolOptions, typescriptPackageMappings: Object.fromEntries(typescriptPackageMappings) };
+  if (typescriptPackagePatterns.size) symbolOptions = { ...symbolOptions, typescriptPackagePatterns: [...typescriptPackagePatterns.entries()].map(([pattern, targets]) => ({ pattern, targets })) };
+  if (typescriptRestrictedPackages.size) symbolOptions = { ...symbolOptions, typescriptRestrictedPackages: [...typescriptRestrictedPackages] };
 
   try {
     store.runInTransaction(() => {
@@ -1287,9 +1358,34 @@ export async function scanRepository(
     }
 
     // ============ 관계 그래프 적재 (2-pass) ============
-    const semantic = resolveSymbols(symbolFiles);
+    const semantic = resolveSymbols(symbolFiles, symbolOptions);
+    // Python exception matching can use declarations from another file only
+    // when the short class name identifies one project entity. Ambiguous or
+    // unresolved names stay exact-only in dataflow instead of guessing across
+    // modules.
+    const exceptionEntities = new Map<string, Set<string>>();
+    const exceptionParents = new Map<string, Set<string>>();
+    for (const file of symbolFiles.filter(item => item.language === 'python')) {
+      for (const base of file.bases) {
+        const child = base.entity.split('::').at(-1);
+        const parent = base.type.kind === 'name' || base.type.kind === 'type' ? base.type.name : undefined;
+        if (!child || !parent) continue;
+        exceptionEntities.set(child, new Set([...(exceptionEntities.get(child) ?? []), base.entity]));
+        exceptionParents.set(child, new Set([...(exceptionParents.get(child) ?? []), parent]));
+      }
+    }
+    const projectExceptionParents = Object.fromEntries([...exceptionParents].flatMap(([child, parents]) =>
+      exceptionEntities.get(child)?.size === 1 ? [[child, [...parents].sort()]] : []));
+    const callbackRelations: Array<{ sourceId: string; targetId: string; relationType: RelationType }> = [];
+    const rustTypeCounts = new Map<string, number>();
+    for (const type of symbolFiles.filter(file => file.language === 'rust').flatMap(file => file.entities.filter(entity => entity.kind === 'class').map(entity => entity.name))) {
+      rustTypeCounts.set(type, (rustTypeCounts.get(type) ?? 0) + 1);
+    }
+    const unambiguousCopyTypes = new Set(symbolFiles.flatMap(file => file.copyTypes ?? []).filter(type => rustTypeCounts.get(type) === 1));
+    applyRustCopyTypes(cfgs, unambiguousCopyTypes);
     store.replaceCallSitesForProject(projectId, semantic.calls);
-    const analysis = analyzeSummaries(cfgs, semantic.calls, { models: libraryModels, cache: analysisCache, engineKey: cache.engine, checkDeadline: () => {
+    const analysis = analyzeSummaries(cfgs, semantic.calls, { models: libraryModels, cache: analysisCache, engineKey: cache.engine,
+      exceptionParents: projectExceptionParents, checkDeadline: () => {
       if (Date.now() - startTime > timeoutMs) throw new Error('scan timed out during dataflow');
     } });
     cache.summaryHits = analysis.cache.reusedComponents; cache.summaryMisses = analysis.cache.computedComponents;
@@ -1297,6 +1393,27 @@ export async function scanRepository(
     const graphByOwner = new Map(cfgs.map(graph => [graph.owner, graph]));
     for (const flow of analysis.flows) {
       for (const call of flow.calls) if (call.model) models.calls[call.model.status] = (models.calls[call.model.status] ?? 0) + 1;
+      for (const finding of flow.resourceFindings) {
+        resourceFindings.total++;
+        resourceFindings[flow.completeness === 'complete' ? finding.certainty : 'possible']++;
+        if (finding.kind === 'use-after-release') resourceFindings.useAfterRelease++;
+        else resourceFindings.leak++;
+      }
+      for (const finding of flow.ownershipFindings) {
+        ownershipFindings.total++;
+        ownershipFindings[flow.completeness === 'complete' ? finding.certainty : 'possible']++;
+        if (finding.kind === 'use-after-move') ownershipFindings.useAfterMove++;
+      }
+      taintFindings.total += flow.taintFindings.length;
+      // A taint edge from a partial flow is evidence of a possible path, not
+      // a complete/proven sink reach. Keep it visible in `total`, but require
+      // the flow solver to have completed before counting it as proven.
+      if (flow.completeness === 'complete') taintFindings.proven += flow.taintFindings.length;
+      const source = store.getEntityByName(flow.owner, projectId);
+      if (source) for (const call of flow.calls) for (const targetName of call.callbacks ?? []) {
+        const target = store.getEntityByName(targetName, projectId);
+        if (target) callbackRelations.push({ sourceId: source.id, targetId: target.id, relationType: 'registers' });
+      }
       dataflow.total++; dataflow[flow.completeness]++; dataflow.iterations += flow.iterations;
       dataflow.diagnostics.push(...flow.diagnostics.map(d => ({ ...d, filePath: graphByOwner.get(flow.owner)!.filePath, owner: flow.owner })));
     }
@@ -1313,7 +1430,7 @@ export async function scanRepository(
     }
     callSites.total = semantic.calls.length;
     for (const call of semantic.calls) callSites[call.resolution]++;
-    const relations = [...resolveRelations(store, projectId, refsByQName), ...store.getCallSiteRelations(projectId)];
+    const relations = [...resolveRelations(store, projectId, refsByQName), ...store.getCallSiteRelations(projectId), ...callbackRelations];
     for (const base of semantic.bases) {
       const source = store.getEntityByName(base.source, projectId);
       const target = store.getEntityByName(base.target, projectId);
@@ -1361,6 +1478,9 @@ export async function scanRepository(
     callSites,
     controlFlow,
     dataflow,
+    resourceFindings,
+    ownershipFindings,
+    taintFindings,
     summaries,
     models,
     cache,

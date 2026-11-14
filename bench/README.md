@@ -14,12 +14,17 @@ npm run bench:rules
 npm run bench:external
 npm run bench:self
 npm run bench:incremental
+npm run bench:all -- --output /tmp/cxt-bench-all.json
+npm run bench:all -- --require-independent-review
+npm run bench:flow -- --tier held-out-review
 npm run bench:accuracy -- --engine lexical --no-gate
 npm test
 npm run test:package
 ```
 
 `--output <path>`로 JSON을 저장한다. 기본 AST 실행은 gates.json을 적용하고 실패 시 exit 1이다. `--no-gate`는 과거 lexical 기준선 측정용이며 보고서에 `gateEnforced: false`가 표시된다. `--engine lexical`만 지정하면 현재 AST 게이트를 통과하지 못하고 exit 1이 된다.
+
+`bench:all`은 개별 정확도·CFG·dataflow·impact·rule·실제 소스 gate와 packed package smoke/self-scan을 하나의 순차 ratchet으로 실행한다. 하나라도 실패하거나 프로세스가 시작되지 않으면 전체 exit 1이며, 각 gate의 exit code와 보고서가 aggregate JSON에 보존된다. `--require-independent-review`를 붙이면 held-out dataflow의 독립 second-reviewer 상태도 필수로 검사한다. 현재 provenance는 의도적으로 pending이므로 이 모드는 실패한다. 증분 성능은 입력 저장소와 표본 수가 필요해 aggregate에 포함하지 않으며 `bench:incremental`을 별도로 실행한다.
 
 ## 실제 소스 선언 계층
 
@@ -56,6 +61,12 @@ Zod로 언어/종류/범위/필수 필드를 검증하고, 중복 fixture ID 및
 
 이 코퍼스는 개발 중 구현을 확인하는 회귀 자료다. CodeQL 대비 정확도, 실제 프로젝트의 일반화, 취약점 탐지율 또는 전체 언어 지원을 입증하지 않는다. 이후 심볼/CFG/dataflow/규칙마다 별도 fact family와 독립 정답을 확장한다.
 
+## Held-out dataflow tier
+
+`npm run bench:flow -- --tier held-out-review`는 synthetic corpus와 별도 ID/source를 가진 TS/Python/Rust 6개 fixture를 실행한다. `bench/corpus/held-out/provenance.json`의 label bytes SHA-256을 먼저 확인하고 synthetic corpus와 ID/source 중복을 거부한다. 현재 labels는 별도 source review로 작성했지만 `reviewStatus`가 명시하듯 독립 second-reviewer sign-off는 아직 pending이다. 따라서 `held-out-dataflow-baseline.json`은 개발 중 held-out 회귀 증거이며 독립 정확도 주장으로 사용하지 않는다. second review가 끝나면 provenance를 `approved`로 전환해야 independent gate가 상태 검사를 통과한다.
+독립 평가를 소비하는 자동화는 `--require-independent-review` 옵션을 사용해야 한다. 이 옵션은 서로 다른 primary/secondary reviewer ID, 각 reviewer가 모든 held-out fixture를 중복 없이 검토했다는 coverage, 현재 label bytes와 일치하는 reviewer별 SHA-256, pending 상태 해제를 모두 요구하며 현재 provenance에서는 의도적으로 실패한다. reviewer가 일부 fixture만 보거나 이전 label bytes를 서명하면 gate가 닫힌다.
+secondary reviewer에게 전달할 source/label-only 문서는 `npm run bench:flow:review-bundle -- --output /tmp/cxt-held-out-review.md`로 생성한다. bundle은 analyzer output을 포함하지 않고 fixture ID, source, expected labels, 현재 labels SHA-256과 sign-off template만 포함한다. bundle 생성은 review 자체나 pending gate 해제를 의미하지 않는다.
+
 ## 호출 정답과 게이트 — AGT-4565
 
 `corpus/calls.json`: `id`, `language`, `files`(상대경로→소스), `expected` 배열.
@@ -67,9 +78,11 @@ Zod로 언어/종류/범위/필수 필드를 검증하고, 중복 fixture ID 및
 
 `call-baseline.json`은 TS 17개 fixture/25개 위치(확정 대상 17), Python 11/15(10), Rust 11/15(11)를 기록한다. 현재 이 개발 코퍼스에서는 모든 측정값이 1.0이다. import/re-export/namespace, shadowing, alias, recursion, 간단한 receiver, 미해석·외부·재할당과 순환 관계를 포함한다. 알려진 범위를 겨냥한 합성 자료이므로 실제 프로젝트 정확도나 일반화의 근거로 사용하지 않는다.
 
+`npm run bench:calls:real-world`는 동일한 frozen upstream 파일에서 Python/Rust/TypeScript의 사전 선택 scope 3개, call 6개를 검사한다. `npm run bench:flow:real-world`는 CPython `fnmatch`/`fnmatchcase`, rust-fnv `Hasher::finish`, Zod `assertEqual`/`assertNotEqual`/`nullish`의 parameter return/read/atom/completeness를 검사하고, `npm run bench:rules:real-world`는 `any-type`, `magic-number`, `rust-incomplete` scope를 검사한다. 세 benchmark 모두 source SHA-256을 `real-world/provenance.json`과 대조하고 scope 밖 결과를 점수에서 제외한다. 현재 각 gate는 통과하지만 표본이 작고 독립 second-reviewer sign-off가 없으므로 CodeQL 수준 일반화나 독립 정확도 주장이 아니다.
+
 ## CFG 정답과 게이트 — AGT-4566
 
-`corpus/cfg.json`은 언어별 10개, 총 30개의 수기 fixture다. `complexity`, `completeness`, `paths: [fromNodeText, toNodeText, reachable]`가 정답이다. 호출·멤버 접근의 잠재 예외를 포함하는 CFG에서 경로를 확인한다. 존재하지 않는 label은 negative 경로가 맞았다고 세지 않는다. 언어마다 의도적으로 미지원인 구문 1개를 넣어 `partial` 보고도 검사한다. await 구현 후 기존 TypeScript 미지원 예제를 yield로 교체하고, 세 언어의 await 중단/재개 정답을 추가했다. 중단 terminal에서 후속 문장으로 직접 이동할 수 없으며 재개 edge는 별도로 존재한다.
+`corpus/cfg.json`은 언어별 10개, 총 30개의 수기 fixture다. `complexity`, `completeness`, `paths: [fromNodeText, toNodeText, reachable]`가 정답이다. 호출·멤버 접근의 잠재 예외를 포함하는 CFG에서 경로를 확인한다. 존재하지 않는 label은 negative 경로가 맞았다고 세지 않는다. 지원 밖 구문 fixture를 포함해 `partial` 보고도 검사한다. await, generator yield, async iteration, async with는 suspension/resume으로 모델링하며, Rust macro 같은 별도 미지원 구문은 partial로 유지한다. 중단 terminal에서 후속 문장으로 직접 이동할 수 없으며 재개 edge는 별도로 존재한다.
 
 `structuralComplexity`는 명시적 분기 지점 + 1이다. if/elif, 조건이 있는 loop, switch의 비-default case, match의 비-wildcard arm, guard/catch, 단락 평가, 기본 매개변수, Rust `?`, with 예외 억제 분기를 센다. 암묵적 예외 edge와 finally 경로 복제는 중복 계산하지 않는다. 전체 예외 그래프의 E−N+2 수치와는 구분한다.
 
@@ -77,11 +90,11 @@ Zod로 언어/종류/범위/필수 필드를 검증하고, 중복 fixture ID 및
 
 ## 함수 내부 dataflow 정답과 게이트 — AGT-4567
 
-`corpus/dataflow.json`: 언어별 9개, 총 27개 수기 fixture. `parameters`는 가능한 정상 반환값의 명시적 입력 의존성, `reads`는 `[useLine, useColumn, variableName, definitionLines, mayBeUninitialized]`이다. `atoms`가 있으면 추상 반환값 집합도 정확히 비교한다. source 줄/열은 1부터 시작한다. 조건의 control dependence는 이 value-dependence 라벨에 포함하지 않는다. Rust uninitialized 예제는 컴파일 가능한 정상 프로그램을 주장하는 대신 불완전 소스 분석을 검사한다.
+`corpus/dataflow.json`: TS/Python 각 9개, Rust 14개 총 32개 수기 fixture. `parameters`는 가능한 정상 반환값의 명시적 입력 의존성, `reads`는 `[useLine, useColumn, variableName, definitionLines, mayBeUninitialized]`이다. `atoms`가 있으면 추상 반환값 집합도 정확히 비교한다. 선택적 `ownership`은 `[useLine, useColumn, variableName, kind, certainty]`로 Rust `use-after-move` 경계를 검증한다. source 줄/열은 1부터 시작한다. 조건의 control dependence는 이 value-dependence 라벨에 포함하지 않는다. Rust uninitialized 예제는 컴파일 가능한 정상 프로그램을 주장하는 대신 불완전 소스 분석을 검사한다.
 
 정의/사용 라벨은 지정한 read 위치에서 definition source line까지의 집합이다. 동일 줄의 여러 정의를 구분하는 정답 코퍼스는 아니다. 반환 parameter relation과 합쳐 언어별 precision/recall을 측정한다. 미지원 예제를 각 언어에 하나 포함한다. `partial`은 라벨 정확도 통과와 별도로 남는다.
 
-게이트는 라벨 precision/recall=1, 명시된 atom·uninitialized·completeness 정답 일치다. 2026-09-27 개발 기준선 `dataflow-baseline.json`은 관계 30/30, read 상태 21/21, completeness 27/27이다. 임의의 결과 부재, 정의 누락, 거짓 parameter dependence, completeness 조작, assignment effect 삭제, solver 예산 소진 mutation은 실패해야 한다. 이 점수는 선택한 개발 라벨의 일치도이며 실제 프로젝트 정확도·CodeQL 동등성·resource/ownership 분석 완료를 의미하지 않는다.
+게이트는 라벨 precision/recall=1, 명시된 atom·uninitialized·ownership·completeness 정답 일치다. 2026-09-28 개발 기준선은 TS 9/Python 9/Rust 14 fixture에서 relation 37/37, read 상태 28/28, ownership 32/32, completeness 32/32이다. 임의의 결과 부재, 정의 누락, 거짓 parameter dependence, completeness 조작, assignment effect 삭제, solver 예산 소진 mutation은 실패해야 한다. 이 점수는 선택한 개발 라벨의 일치도이며 실제 프로젝트 정확도·CodeQL 동등성·resource/ownership 분석 완료를 의미하지 않는다.
 
 ## Parameter value impact 비교 — AGT-4568
 

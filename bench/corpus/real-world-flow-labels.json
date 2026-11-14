@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "selection": "Three contiguous upstream function bodies selected before evaluation; labels were handwritten from source and do not use cxt output.",
+  "fixtures": [
+    {
+      "id": "real/cpython-fnmatch-flow",
+      "language": "python",
+      "file": "fnmatch.py",
+      "owner": "fnmatch.py::fnmatch",
+      "parameters": ["name", "pat"],
+      "atoms": ["*boolean", "*function", "*number", "*object", "*string", "null", "undefined", "unit"],
+      "reads": [[34, 29, "name", [19], false], [35, 28, "pat", [19], false], [36, 24, "name", [34], false], [36, 30, "pat", [35], false]],
+      "completeness": "complete"
+    },
+    {
+      "id": "real/cpython-fnmatchcase-flow",
+      "language": "python",
+      "file": "fnmatch.py",
+      "owner": "fnmatch.py::fnmatchcase",
+      "parameters": ["name", "pat"],
+      "atoms": ["*boolean"],
+      "reads": [[70, 30, "pat", [64], false], [71, 12, "match", [70], false], [71, 18, "name", [64], false]],
+      "completeness": "complete"
+    },
+    {
+      "id": "real/fnv-finish-flow",
+      "language": "rust",
+      "file": "fnv.rs",
+      "owner": "fnv.rs::<FnvHasher as Hasher>.finish",
+      "parameters": ["self"],
+      "atoms": ["*boolean", "*function", "*number", "*object", "*string", "null", "undefined", "unit"],
+      "reads": [[111, 9, "self", [110], false]],
+      "completeness": "complete"
+    },
+    {
+      "id": "real/zod-assert-equal-flow",
+      "language": "typescript",
+      "file": "zod-util.ts",
+      "owner": "zod-util.ts::assertEqual",
+      "parameters": ["val"],
+      "reads": [[2, 10, "val", [1], false]],
+      "completeness": "complete"
+    },
+    {
+      "id": "real/zod-assert-not-equal-flow",
+      "language": "typescript",
+      "file": "zod-util.ts",
+      "owner": "zod-util.ts::assertNotEqual",
+      "parameters": ["val"],
+      "atoms": ["*boolean", "*function", "*number", "*object", "*string", "null", "parameter:zod-util.ts#3:val", "resource-param:zod-util.ts#3:val", "undefined", "unit"],
+      "reads": [[6, 10, "val", [5], false]],
+      "completeness": "complete"
+    },
+    {
+      "id": "real/zod-nullish-flow",
+      "language": "typescript",
+      "file": "zod-util.ts",
+      "owner": "zod-util.ts::nullish",
+      "parameters": ["input"],
+      "atoms": ["*boolean"],
+      "reads": [[48, 10, "input", [47], false], [48, 28, "input", [47], false]],
+      "completeness": "complete"
+    }
+  ]
+}

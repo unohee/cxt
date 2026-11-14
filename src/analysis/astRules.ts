@@ -83,9 +83,50 @@ function ipv4Comparison(node: Node): boolean {
 }
 
 /** 숫자가 아닌 AST 문맥을 먼저 확인해 상수/HTTP 도메인과 산술 리터럴을 구분한다. */
-function magicNumber(node: Node): boolean {
+function positionalNumericDomainArguments(nodes: Node[]): Set<number> {
+  const pythonFunctions = nodes.filter(node => node.type === 'function_definition');
+  const definitions = new Map<string, Node[]>();
+  for (const fn of pythonFunctions) {
+    const name = field(fn, 'name')?.text;
+    if (name) definitions.set(name, [...(definitions.get(name) ?? []), fn]);
+  }
+  const ignored = new Set<number>();
+  const parameterName = (parameter: Node | undefined): string | undefined => {
+    if (!parameter) return undefined;
+    return (field(parameter, 'name') ?? (parameter.type === 'identifier' ? parameter : parameter.namedChildren[0]))?.text;
+  };
+  for (const call of nodes.filter(node => node.type === 'call')) {
+    const name = callee(call)?.split('.').at(-1);
+    const matches = name ? definitions.get(name) : undefined;
+    if (!matches || matches.length !== 1) continue;
+    const params = field(matches[0], 'parameters')?.namedChildren ?? [];
+    const args = field(call, 'arguments')?.namedChildren ?? [];
+    const definitionClass = ancestors(matches[0]).find(parent => parent.type === 'class_definition');
+    const method = !!definitionClass;
+    if (method) {
+      const functionNode = field(call, 'function');
+      const receiver = functionNode?.type === 'attribute' ? field(functionNode, 'object')?.text : undefined;
+      const caller = ancestors(call).find(parent => parent.type === 'function_definition');
+      const callerClass = caller && ancestors(caller).find(parent => parent.type === 'class_definition');
+      if (!['self', 'cls'].includes(receiver ?? '') || callerClass?.id !== definitionClass.id) continue;
+    }
+    let parameterIndex = method && ['self', 'cls'].includes(parameterName(params[0]) ?? '') ? 1 : 0;
+    for (const arg of args) {
+      if (arg.type === 'list_splat') break;
+      if (arg.type === 'keyword_argument') continue;
+      const parameter = params[parameterIndex++];
+      if (parameter?.type === 'list_splat') break;
+      const name = parameterName(parameter);
+      if (name && numericDomainName(name) && ['integer', 'number'].includes(arg.type)) ignored.add(arg.startIndex);
+    }
+  }
+  return ignored;
+}
+
+function magicNumber(node: Node, positionalDomainArguments: Set<number>): boolean {
   const number = numericValue(node);
   if (number === undefined || !/^\d[\d_]*$/.test(node.text) || !Number.isInteger(number) || Math.abs(number) < 100 || [100, 1000, 1024, 365].includes(number)) return false;
+  if (positionalDomainArguments.has(node.startIndex)) return false;
   const parents = ancestors(node), binding = parents.find(parent => ['variable_declarator', 'assignment', 'const_item', 'static_item', 'let_declaration'].includes(parent.type));
   if (parents.some(parent => ['slice', 'slice_expression', 'typed_default_parameter', 'default_parameter'].includes(parent.type))) return false;
   const named = parents.find(parent => ['keyword_argument', 'pair'].includes(parent.type));
@@ -149,6 +190,7 @@ export function analyzeAstRules(content: string, filePath: string, language: Ast
   const nodes: Node[] = [], stack = [root];
   while (stack.length) { const node = stack.pop()!; nodes.push(node); stack.push(...node.namedChildren.reverse()); }
   const comments = nodes.filter(isComment), rules = new Map(builtInRules.map(rule => [rule.id.slice(4), rule]));
+  const positionalDomainArguments = language === 'python' ? positionalNumericDomainArguments(nodes) : new Set<number>();
   const role = pathRole(filePath, config), lines = content.split('\n'), findings: StructuralFinding[] = [];
   const ignored = (line: number, category: string): boolean => comments.some(comment => {
     const marker = comment.text.match(/^(?:\/\/|\/\*|#)\s*cxt-ignore(-next-line)?\b(?:\s*:\s*([a-z_]+(?:\s*,\s*[a-z_]+)*))?/);
@@ -211,7 +253,7 @@ export function analyzeAstRules(content: string, filePath: string, language: Ast
       const docstring = language === 'python' && node.parent?.type === 'expression_statement';
       if (!docstring && text && /(?:example\.com|localhost:\d{4}|127\.0\.0\.1:\d{4})/.test(text)) emit('placeholder-url', node);
     }
-    if (magicNumber(node)) emit('magic-number', node);
+    if (magicNumber(node, positionalDomainArguments)) emit('magic-number', node);
   }
   for (let line = 0; line < lines.length; line++) {
     if (lines[line].length < 200 || /https?:\/\//.test(lines[line])) continue;

@@ -9,12 +9,16 @@
     { "path": "rust.json", "language": "rust", "fixtures": 20 },
     { "path": "calls.json", "factFamily": "call-sites", "fixtures": 39 },
     { "path": "cfg.json", "factFamily": "control-flow", "fixtures": 30 },
-    { "path": "dataflow.json", "factFamily": "dataflow", "fixtures": 27 },
+    { "path": "dataflow.json", "factFamily": "dataflow", "fixtures": 32 },
+    { "path": "held-out/dataflow.json", "tier": "held-out-review", "factFamily": "dataflow", "fixtures": 6, "provenance": "held-out/provenance.json", "baseline": "../held-out-dataflow-baseline.json" },
     { "path": "impact.json", "factFamily": "parameter-value-impact", "fixtures": 15 },
     { "path": "rules.json", "factFamily": "rules", "fixtures": 42 },
     { "path": "real-world/provenance.json", "tier": "real-world", "factFamily": "entities-with-metadata", "fixtures": 3, "license": "per-source", "firstEvaluation": "../external-first-evaluation.json", "labelRevisions": "real-world/label-revisions.json" },
+    { "path": "real-world-call-labels.json", "tier": "real-world", "factFamily": "call-sites", "fixtures": 3, "provenance": "real-world/provenance.json" },
+    { "path": "real-world-flow-labels.json", "tier": "real-world", "factFamily": "intraprocedural-dataflow", "fixtures": 6, "provenance": "real-world/provenance.json" },
+    { "path": "real-world-rule-labels.json", "tier": "real-world", "factFamily": "structural-rules", "fixtures": 3, "provenance": "real-world/provenance.json" },
     { "path": "self/provenance.json", "tier": "self", "factFamily": "named-top-level-entities-with-metadata", "fixtures": 1, "labelProvenance": "Independent TypeScript compiler-assisted inventory, not handwritten" }
   ],
-  "pendingTiers": ["held-out"],
-  "pendingFacts": ["metadata-for-synthetic-entities", "real-world-call-flow-rule-labels", "independent-label-review"]
+  "pendingTiers": ["independent-second-review"],
+  "pendingFacts": ["metadata-for-synthetic-entities", "independent-label-review"]
 }

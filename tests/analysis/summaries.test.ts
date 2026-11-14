@@ -4,12 +4,21 @@ import { resolveSymbols } from '../../src/analysis/resolveSymbols.js';
 import { analyzeSummaries, linkSummaryCalls, summaryComponents } from '../../src/analysis/summaries.js';
 import type { AstLanguage } from '../../src/frontend/types.js';
 
-function analyze(files: Record<string, string>, language: AstLanguage = 'typescript', componentIterationBudget?: number) {
+function analyze(files: Record<string, string>, language: AstLanguage = 'typescript', componentIterationBudget?: number,
+  exceptionParents?: Record<string, string[]>) {
   const extracted = Object.entries(files).map(([path, source]) => extractFile(source, path, language, 'ast'));
-  return analyzeSummaries(extracted.flatMap(f => f.controlFlow ?? []), resolveSymbols(extracted.map(f => f.symbols!)).calls, { componentIterationBudget });
+  return analyzeSummaries(extracted.flatMap(f => f.controlFlow ?? []), resolveSymbols(extracted.map(f => f.symbols!)).calls, { componentIterationBudget, exceptionParents });
 }
 
 describe('interprocedural summaries', () => {
+  it('summarizes direct Rust parameter moves and borrows', () => {
+    const moved = analyze({ 'move.rs': 'struct Value { value: i32 } fn consume(value: Value) { let owned = value; owned.value; }' }, 'rust');
+    expect(moved.summaries.find(summary => summary.owner === 'move.rs::consume')?.movesParameters).toEqual([0]);
+    const borrowed = analyze({ 'borrow.rs': 'struct Value { value: i32 } fn inspect(value: Value) { let view = &value; view; }' }, 'rust');
+    expect(borrowed.summaries.find(summary => summary.owner === 'borrow.rs::inspect')?.borrowsParameters).toEqual([0]);
+    expect(borrowed.summaries.find(summary => summary.owner === 'borrow.rs::inspect')?.movesParameters).toBeUndefined();
+  });
+
   it.each([
     ['typescript', 'x.ts', 'function pick(a,b){return b;}function f(input,ignored){return pick(ignored,input);}'],
     ['python', 'x.py', 'def pick(a,b):\n return b\ndef f(input,ignored):\n return pick(ignored,input)'],
@@ -80,6 +89,16 @@ describe('interprocedural summaries', () => {
     expect(summary.returnParameters).toHaveLength(1);
     expect(summary.returnParameters[0]).toMatch(/:input$/);
     expect(result.summaries.find(s => s.owner === 'x.ts::fail')?.throwParameters[0]).toMatch(/:error$/);
+  });
+
+  it('uses a collision-free project exception hierarchy across Python files', () => {
+    const result = analyze({
+      'errors.py': 'class MyError(ValueError):\n pass\n',
+      'app.py': 'def f():\n try:\n  raise MyError\n except Exception:\n  return 1\n return 2\n',
+    }, 'python', undefined, { MyError: ['ValueError'] });
+    const flow = result.flows.find(item => item.owner === 'app.py::f')!;
+    expect(flow.completeness).toBe('complete');
+    expect(flow.returns.map(item => item.value.atoms)).toContainEqual(['number:1']);
   });
 
   it('does not claim complete summaries for unknown effects or unsupported argument binding', () => {
