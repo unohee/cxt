@@ -11,7 +11,7 @@ const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_TARGET = resolve(SCRIPT_DIR, '..');
 const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
 const SNAPSHOT_FILES = ['package.json', 'package-lock.json', 'tsconfig.json', 'vitest.config.ts'];
-const SNAPSHOT_DIRECTORIES = ['src', 'dist'];
+const SNAPSHOT_DIRECTORIES = ['src', 'scripts', 'dist'];
 
 export const TASKS = {
   callgraph: {
@@ -244,7 +244,7 @@ async function snapshotHash(root) {
 }
 
 export async function createSourceSnapshot(target, snapshot) {
-  const paths = ['src', ...SNAPSHOT_FILES];
+  const paths = ['src', 'scripts', ...SNAPSHOT_FILES];
   for (const item of paths) {
     await cp(join(target, item), join(snapshot, item), { recursive: true, force: false });
   }
@@ -336,7 +336,7 @@ async function main() {
   await writeFile(join(outdir, 'manifest.json'), JSON.stringify({
     options: { ...options, target },
     expectedByTask,
-    snapshotIncludes: ['src', 'package.json', 'package-lock.json', 'tsconfig.json', 'vitest.config.ts'],
+    snapshotIncludes: ['src', 'scripts', 'package.json', 'package-lock.json', 'tsconfig.json', 'vitest.config.ts'],
     snapshotBuild: 'npm run build',
     initialSnapshotHash,
   }, null, 2));

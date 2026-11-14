@@ -1,0 +1,539 @@
+[
+  {
+    "id": "ts-linear",
+    "language": "typescript",
+    "source": "function f(){one();two();}",
+    "complexity": 1,
+    "completeness": "complete",
+    "paths": [
+      [
+        "one()",
+        "two()",
+        true
+      ]
+    ]
+  },
+  {
+    "id": "ts-return",
+    "language": "typescript",
+    "source": "function f(x){if(x)return 1;else return 2;dead();}",
+    "complexity": 2,
+    "completeness": "complete",
+    "paths": [
+      [
+        "entry",
+        "dead()",
+        false
+      ],
+      [
+        "entry",
+        "normal exit",
+        true
+      ]
+    ]
+  },
+  {
+    "id": "ts-finally-return",
+    "language": "typescript",
+    "source": "function f(){try{return 1;}finally{cleanup();}dead();}",
+    "complexity": 1,
+    "completeness": "complete",
+    "paths": [
+      [
+        "return 1;",
+        "cleanup()",
+        true
+      ],
+      [
+        "return 1;",
+        "dead()",
+        false
+      ]
+    ]
+  },
+  {
+    "id": "ts-finally-override",
+    "language": "typescript",
+    "source": "function f(){try{throw error;}finally{return 2;}}",
+    "complexity": 1,
+    "completeness": "complete",
+    "paths": [
+      [
+        "throw error;",
+        "return 2;",
+        true
+      ],
+      [
+        "entry",
+        "exception exit",
+        false
+      ]
+    ]
+  },
+  {
+    "id": "ts-do",
+    "language": "typescript",
+    "source": "function f(){do{body();continue;dead();}while(check());after();}",
+    "complexity": 2,
+    "completeness": "complete",
+    "paths": [
+      [
+        "continue;",
+        "check()",
+        true
+      ],
+      [
+        "entry",
+        "dead()",
+        false
+      ],
+      [
+        "check()",
+        "body()",
+        true
+      ]
+    ]
+  },
+  {
+    "id": "ts-switch",
+    "language": "typescript",
+    "source": "function f(x){switch(x){case 1:one();case 2:two();break;default:other();}after();}",
+    "complexity": 3,
+    "completeness": "complete",
+    "paths": [
+      [
+        "one()",
+        "two()",
+        true
+      ],
+      [
+        "two()",
+        "other()",
+        false
+      ],
+      [
+        "two()",
+        "after()",
+        true
+      ]
+    ]
+  },
+  {
+    "id": "ts-short-circuit",
+    "language": "typescript",
+    "source": "function f(x){let y=x?yes():no();return x&&right();}",
+    "complexity": 3,
+    "completeness": "complete",
+    "paths": [
+      [
+        "yes()",
+        "no()",
+        false
+      ],
+      [
+        "no()",
+        "right()",
+        true
+      ]
+    ]
+  },
+  {
+    "id": "ts-default-param",
+    "language": "typescript",
+    "source": "function f(x=init()){work();}",
+    "complexity": 2,
+    "completeness": "complete",
+    "paths": [
+      [
+        "init()",
+        "work()",
+        true
+      ],
+      [
+        "entry",
+        "exception exit",
+        true
+      ]
+    ]
+  },
+  {
+    "id": "ts-async-iteration",
+    "language": "typescript",
+    "source": "async function f(){for await (const item of items){work(item);}}",
+    "complexity": 2,
+    "completeness": "complete",
+    "paths": []
+  },
+  {
+    "id": "py-linear",
+    "language": "python",
+    "source": "def f():\n one()\n two()",
+    "complexity": 1,
+    "completeness": "complete",
+    "paths": [
+      [
+        "one()",
+        "two()",
+        true
+      ]
+    ]
+  },
+  {
+    "id": "py-return",
+    "language": "python",
+    "source": "def f(x):\n if x: return 1\n else: return 2\n dead()",
+    "complexity": 2,
+    "completeness": "complete",
+    "paths": [
+      [
+        "entry",
+        "dead()",
+        false
+      ]
+    ]
+  },
+  {
+    "id": "py-elif",
+    "language": "python",
+    "source": "def f(x):\n if x: one()\n elif y: two()\n else: three()\n after()",
+    "complexity": 3,
+    "completeness": "complete",
+    "paths": [
+      [
+        "one()",
+        "two()",
+        false
+      ],
+      [
+        "three()",
+        "after()",
+        true
+      ]
+    ]
+  },
+  {
+    "id": "py-loop-else",
+    "language": "python",
+    "source": "def f(xs):\n for x in xs:\n  break\n else:\n  exhausted()\n after()",
+    "complexity": 2,
+    "completeness": "complete",
+    "paths": [
+      [
+        "break",
+        "exhausted()",
+        false
+      ],
+      [
+        "break",
+        "after()",
+        true
+      ],
+      [
+        "iterator has next",
+        "exhausted()",
+        true
+      ]
+    ]
+  },
+  {
+    "id": "py-finally-override",
+    "language": "python",
+    "source": "def f():\n try:\n  raise error\n finally:\n  return 2",
+    "complexity": 1,
+    "completeness": "complete",
+    "paths": [
+      [
+        "raise error",
+        "return 2",
+        true
+      ],
+      [
+        "entry",
+        "exception exit",
+        false
+      ]
+    ]
+  },
+  {
+    "id": "py-try-else",
+    "language": "python",
+    "source": "def f():\n try:\n  raise error\n except:\n  caught()\n else:\n  success()\n after()",
+    "complexity": 2,
+    "completeness": "complete",
+    "paths": [
+      [
+        "raise error",
+        "caught()",
+        true
+      ],
+      [
+        "caught()",
+        "success()",
+        false
+      ]
+    ]
+  },
+  {
+    "id": "py-with",
+    "language": "python",
+    "source": "def f():\n with resource() as r:\n  raise error\n after()",
+    "complexity": 2,
+    "completeness": "complete",
+    "paths": [
+      [
+        "raise error",
+        "__exit__",
+        true
+      ],
+      [
+        "raise error",
+        "after()",
+        true
+      ]
+    ]
+  },
+  {
+    "id": "py-match",
+    "language": "python",
+    "source": "def f(x):\n match x:\n  case 1 if guard():\n   one()\n  case _:\n   other()\n after()",
+    "complexity": 3,
+    "completeness": "complete",
+    "paths": [
+      [
+        "one()",
+        "other()",
+        false
+      ],
+      [
+        "other()",
+        "after()",
+        true
+      ]
+    ]
+  },
+  {
+    "id": "py-async-with",
+    "language": "python",
+    "source": "async def f():\n async with manager:\n  work()",
+    "complexity": 2,
+    "completeness": "complete",
+    "paths": []
+  },
+  {
+    "id": "rs-linear",
+    "language": "rust",
+    "source": "fn f(){one();two();}",
+    "complexity": 1,
+    "completeness": "complete",
+    "paths": [
+      [
+        "one()",
+        "two()",
+        true
+      ]
+    ]
+  },
+  {
+    "id": "rs-return",
+    "language": "rust",
+    "source": "fn f(x:bool){if x{return;}else{return;}dead();}",
+    "complexity": 2,
+    "completeness": "complete",
+    "paths": [
+      [
+        "entry",
+        "dead()",
+        false
+      ]
+    ]
+  },
+  {
+    "id": "rs-residual",
+    "language": "rust",
+    "source": "fn f(){let x=run()?;after();}",
+    "complexity": 2,
+    "completeness": "complete",
+    "paths": [
+      [
+        "Try::branch",
+        "normal exit",
+        true
+      ],
+      [
+        "run()",
+        "after()",
+        true
+      ]
+    ]
+  },
+  {
+    "id": "rs-infinite-loop",
+    "language": "rust",
+    "source": "fn f(){loop{body();}dead();}",
+    "complexity": 1,
+    "completeness": "complete",
+    "paths": [
+      [
+        "entry",
+        "dead()",
+        false
+      ],
+      [
+        "body()",
+        "loop header",
+        true
+      ]
+    ]
+  },
+  {
+    "id": "rs-break-loop",
+    "language": "rust",
+    "source": "fn f(){loop{body();break;dead();}after();}",
+    "complexity": 1,
+    "completeness": "complete",
+    "paths": [
+      [
+        "break",
+        "after()",
+        true
+      ],
+      [
+        "entry",
+        "dead()",
+        false
+      ]
+    ]
+  },
+  {
+    "id": "rs-continue-for",
+    "language": "rust",
+    "source": "fn f(xs:Vec<i32>){for x in xs{continue;dead();}after();}",
+    "complexity": 2,
+    "completeness": "complete",
+    "paths": [
+      [
+        "continue",
+        "iterator has next",
+        true
+      ],
+      [
+        "entry",
+        "dead()",
+        false
+      ]
+    ]
+  },
+  {
+    "id": "rs-match-guard",
+    "language": "rust",
+    "source": "fn f(x:i32){match x{1 if guard()=>one(),_=>other()};after();}",
+    "complexity": 3,
+    "completeness": "complete",
+    "paths": [
+      [
+        "one()",
+        "other()",
+        false
+      ],
+      [
+        "other()",
+        "after()",
+        true
+      ]
+    ]
+  },
+  {
+    "id": "rs-label",
+    "language": "rust",
+    "source": "fn f(){'outer:loop{loop{break 'outer;}}after();}",
+    "complexity": 1,
+    "completeness": "complete",
+    "paths": [
+      [
+        "break 'outer",
+        "after()",
+        true
+      ]
+    ]
+  },
+  {
+    "id": "rs-unsupported-macro",
+    "language": "rust",
+    "source": "fn f(){panic!(\"bad\");}",
+    "complexity": 1,
+    "completeness": "partial",
+    "paths": []
+  },
+  {
+    "id": "ts-await",
+    "language": "typescript",
+    "source": "async function f(){await work();after();}",
+    "complexity": 1,
+    "completeness": "complete",
+    "paths": [
+      [
+        "entry",
+        "suspended",
+        true
+      ],
+      [
+        "suspended",
+        "after()",
+        false
+      ],
+      [
+        "entry",
+        "after()",
+        true
+      ]
+    ]
+  },
+  {
+    "id": "py-await",
+    "language": "python",
+    "source": "async def f():\n await work()\n after()",
+    "complexity": 1,
+    "completeness": "complete",
+    "paths": [
+      [
+        "entry",
+        "suspended",
+        true
+      ],
+      [
+        "suspended",
+        "after()",
+        false
+      ],
+      [
+        "entry",
+        "after()",
+        true
+      ]
+    ]
+  },
+  {
+    "id": "rs-await",
+    "language": "rust",
+    "source": "async fn f(){work().await;after();}",
+    "complexity": 1,
+    "completeness": "complete",
+    "paths": [
+      [
+        "entry",
+        "suspended",
+        true
+      ],
+      [
+        "suspended",
+        "after()",
+        false
+      ],
+      [
+        "entry",
+        "after()",
+        true
+      ]
+    ]
+  }
+]

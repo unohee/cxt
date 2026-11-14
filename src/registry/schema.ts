@@ -34,7 +34,7 @@ export const WarningSeveritySchema = z.enum(['info', 'warning', 'error', 'critic
 export const WarningCategorySchema = z.enum(['security', 'performance', 'correctness', 'style']);
 
 // 관계 타입
-export const RelationTypeSchema = z.enum(['calls', 'extends', 'implements', 'uses', 'overrides']);
+export const RelationTypeSchema = z.enum(['calls', 'extends', 'implements', 'uses', 'overrides', 'registers']);
 
 // 이벤트 타입
 export const EntityEventTypeSchema = z.enum([

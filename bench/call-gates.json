@@ -1,0 +1,5 @@
+{
+  "typescript": { "precision": 0.95, "recall": 0.90, "siteAccuracy": 1.0, "resolutionAccuracy": 0.95 },
+  "python": { "precision": 0.95, "recall": 0.85, "siteAccuracy": 1.0, "resolutionAccuracy": 0.95 },
+  "rust": { "precision": 0.95, "recall": 0.75, "siteAccuracy": 1.0, "resolutionAccuracy": 0.95 }
+}

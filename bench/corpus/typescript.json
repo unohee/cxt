@@ -1,0 +1,396 @@
+[
+  {
+    "id": "typescript/exports",
+    "language": "typescript",
+    "filePath": "exports.ts",
+    "source": "export function add(a:number,b:number) { return a+b; }\nexport class Store {}",
+    "expected": [
+      [
+        "function",
+        "add",
+        1,
+        1
+      ],
+      [
+        "class",
+        "Store",
+        2,
+        2
+      ]
+    ]
+  },
+  {
+    "id": "typescript/private",
+    "language": "typescript",
+    "filePath": "private.ts",
+    "source": "type T = string;\ninterface Options { x:number }\nconst cache = new Map();",
+    "expected": [
+      [
+        "type",
+        "T",
+        1,
+        1
+      ],
+      [
+        "type",
+        "Options",
+        2,
+        2
+      ],
+      [
+        "constant",
+        "cache",
+        3,
+        3
+      ]
+    ]
+  },
+  {
+    "id": "typescript/arrow",
+    "language": "typescript",
+    "filePath": "arrow.ts",
+    "source": "const parse = (\n input: string,\n opts = { a: 1, b: 2 }\n) => input;",
+    "expected": [
+      [
+        "function",
+        "parse",
+        1,
+        4
+      ]
+    ]
+  },
+  {
+    "id": "typescript/methods",
+    "language": "typescript",
+    "filePath": "methods.ts",
+    "source": "class A { run() {} }\nclass B { run() {} }",
+    "expected": [
+      [
+        "class",
+        "A",
+        1,
+        1
+      ],
+      [
+        "function",
+        "run",
+        1,
+        1,
+        "A.run"
+      ],
+      [
+        "class",
+        "B",
+        2,
+        2
+      ],
+      [
+        "function",
+        "run",
+        2,
+        2,
+        "B.run"
+      ]
+    ]
+  },
+  {
+    "id": "typescript/nested",
+    "language": "typescript",
+    "filePath": "nested.ts",
+    "source": "function outer() {\n function inner() {}\n const work = () => inner();\n return work;\n}",
+    "expected": [
+      [
+        "function",
+        "outer",
+        1,
+        5
+      ],
+      [
+        "function",
+        "inner",
+        2,
+        2,
+        "outer.inner"
+      ],
+      [
+        "function",
+        "work",
+        3,
+        3,
+        "outer.work"
+      ]
+    ]
+  },
+  {
+    "id": "typescript/generic",
+    "language": "typescript",
+    "filePath": "generic.ts",
+    "source": "export function read<T>(\n value: T,\n opts: { nested: { key: string } }\n): T {\n return value;\n}",
+    "expected": [
+      [
+        "function",
+        "read",
+        1,
+        6
+      ]
+    ]
+  },
+  {
+    "id": "typescript/literal-braces",
+    "language": "typescript",
+    "filePath": "literal-braces.ts",
+    "source": "function real() {\n const value = '}}}}';\n return value;\n}",
+    "expected": [
+      [
+        "function",
+        "real",
+        1,
+        4
+      ]
+    ]
+  },
+  {
+    "id": "typescript/comment-ghost",
+    "language": "typescript",
+    "filePath": "comment-ghost.ts",
+    "source": "/*\nexport function ghost() {}\n*/\nfunction real() {}",
+    "expected": [
+      [
+        "function",
+        "real",
+        4,
+        4
+      ]
+    ]
+  },
+  {
+    "id": "typescript/template-regex",
+    "language": "typescript",
+    "filePath": "template-regex.ts",
+    "source": "const text = `function ghost() {}`;\nconst regex = /[{}]/;\nfunction real() { return text; }",
+    "expected": [
+      [
+        "constant",
+        "text",
+        1,
+        1
+      ],
+      [
+        "constant",
+        "regex",
+        2,
+        2
+      ],
+      [
+        "function",
+        "real",
+        3,
+        3
+      ]
+    ]
+  },
+  {
+    "id": "typescript/jsx",
+    "language": "typescript",
+    "filePath": "jsx.tsx",
+    "source": "export const View = () => <div>{'{}'}</div>;",
+    "expected": [
+      [
+        "function",
+        "View",
+        1,
+        1
+      ]
+    ]
+  },
+  {
+    "id": "typescript/destructuring",
+    "language": "typescript",
+    "filePath": "destructuring.ts",
+    "source": "const {a, key: b, ...rest} = source;\nconst [x, y = 2] = list;",
+    "expected": [
+      [
+        "constant",
+        "a",
+        1,
+        1
+      ],
+      [
+        "constant",
+        "b",
+        1,
+        1
+      ],
+      [
+        "constant",
+        "rest",
+        1,
+        1
+      ],
+      [
+        "constant",
+        "x",
+        2,
+        2
+      ],
+      [
+        "constant",
+        "y",
+        2,
+        2
+      ]
+    ]
+  },
+  {
+    "id": "typescript/multiple",
+    "language": "typescript",
+    "filePath": "multiple.ts",
+    "source": "export const one=1,two=2;",
+    "expected": [
+      [
+        "constant",
+        "one",
+        1,
+        1
+      ],
+      [
+        "constant",
+        "two",
+        1,
+        1
+      ]
+    ]
+  },
+  {
+    "id": "typescript/abstract",
+    "language": "typescript",
+    "filePath": "abstract.ts",
+    "source": "abstract class Base {\n abstract run(x: string): void;\n}",
+    "expected": [
+      [
+        "class",
+        "Base",
+        1,
+        3
+      ],
+      [
+        "function",
+        "run",
+        2,
+        2,
+        "Base.run"
+      ]
+    ]
+  },
+  {
+    "id": "typescript/enum",
+    "language": "typescript",
+    "filePath": "enum.ts",
+    "source": "enum Color { Red, Green }\nconst enum Flag { On=1 }",
+    "expected": [
+      [
+        "type",
+        "Color",
+        1,
+        1
+      ],
+      [
+        "type",
+        "Flag",
+        2,
+        2
+      ]
+    ]
+  },
+  {
+    "id": "typescript/namespace",
+    "language": "typescript",
+    "filePath": "namespace.ts",
+    "source": "namespace N {\n export function run() {}\n}",
+    "expected": [
+      [
+        "module",
+        "N",
+        1,
+        3
+      ],
+      [
+        "function",
+        "run",
+        2,
+        2,
+        "N.run"
+      ]
+    ]
+  },
+  {
+    "id": "typescript/default-function",
+    "language": "typescript",
+    "filePath": "default-function.ts",
+    "source": "export default function () {}",
+    "expected": [
+      [
+        "function",
+        "default",
+        1,
+        1
+      ]
+    ]
+  },
+  {
+    "id": "typescript/default-class",
+    "language": "typescript",
+    "filePath": "default-class.ts",
+    "source": "export default class {\n run() {}\n}",
+    "expected": [
+      [
+        "class",
+        "default",
+        1,
+        3
+      ],
+      [
+        "function",
+        "run",
+        2,
+        2,
+        "default.run"
+      ]
+    ]
+  },
+  {
+    "id": "typescript/default-arrow",
+    "language": "typescript",
+    "filePath": "default-arrow.ts",
+    "source": "export default (a: number) => a;",
+    "expected": [
+      [
+        "function",
+        "default",
+        1,
+        1
+      ]
+    ]
+  },
+  {
+    "id": "typescript/async-generator",
+    "language": "typescript",
+    "filePath": "async-generator.ts",
+    "source": "export async function* stream() {\n yield 1;\n}",
+    "expected": [
+      [
+        "function",
+        "stream",
+        1,
+        3
+      ]
+    ]
+  },
+  {
+    "id": "typescript/negative",
+    "language": "typescript",
+    "filePath": "negative.ts",
+    "source": "// function ghost() {}\n/* class Fake {} */",
+    "expected": []
+  }
+]

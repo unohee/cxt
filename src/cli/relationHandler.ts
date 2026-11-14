@@ -11,6 +11,7 @@ import { resolveProjectId } from './checkHandler.js';
 import { t } from '../i18n.js';
 import type { CodeEntity, RelationType } from '../registry/schema.js';
 import { escapeTerminal } from './outputSafety.js';
+import { loadParameterImpact, presentParameterImpact, printParameterPaths } from './parameterImpactHandler.js';
 
 const c = {
   reset: '\x1b[0m', bold: '\x1b[1m', dim: '\x1b[2m',
@@ -23,6 +24,9 @@ export interface RelationOptions {
   type?: string;       // calls | extends | implements (필터)
   depth?: string;      // impact 전용
   json?: boolean;
+  param?: string;
+  explain?: boolean;
+  strict?: boolean;
 }
 
 const RELATION_TYPES = new Set<RelationType>(['calls', 'extends', 'implements', 'uses', 'overrides']);
@@ -79,7 +83,7 @@ function resolveTarget(name: string, projectId: string, json: boolean): CodeEnti
 }
 
 /** qualifiedName(`file::name`) 또는 단순 name 모두 허용. */
-function lookup(nameOrQualified: string, projectId: string, json: boolean): CodeEntity | null {
+export function lookupEntity(nameOrQualified: string, projectId: string, json: boolean): CodeEntity | null {
   const m = t();
   const store = getRegistryStore();
   if (nameOrQualified.includes('::')) {
@@ -102,7 +106,7 @@ export async function handleWhoCalls(name: string, opts: RelationOptions): Promi
   try {
     const relType = parseRelationType(opts.type, !!opts.json);
     if (relType === null) return;
-    const target = lookup(name, projectId, !!opts.json);
+    const target = lookupEntity(name, projectId, !!opts.json);
     if (!target) { process.exitCode = 1; return; }
 
     const callers = store.getIncomingRelations(target.id, relType);
@@ -137,20 +141,25 @@ export async function handleCalls(name: string, opts: RelationOptions): Promise<
   try {
     const relType = parseRelationType(opts.type, !!opts.json);
     if (relType === null) return;
-    const target = lookup(name, projectId, !!opts.json);
+    const target = lookupEntity(name, projectId, !!opts.json);
     if (!target) { process.exitCode = 1; return; }
 
     const callees = store.getOutgoingRelations(target.id, relType);
+    const callSites = !relType || relType === 'calls' ? store.getCallSites(projectId, target.id) : [];
 
     if (opts.json) {
       console.log(JSON.stringify({
         source: target.qualifiedName,
         callees: callees.map(r => ({ name: r.targetName, file: r.targetFile, type: r.relationType })),
+        callSites,
       }, null, 2));
       return;
     }
 
     console.log(`${c.bold}${safe(m.relCalls(target.name, target.filePath, target.lineStart))}${c.reset}`);
+    for (const site of callSites.filter(site => site.resolution !== 'resolved')) {
+      console.log(`  ${c.yellow}? ${safe(site.expression)}${c.reset} ${c.dim}[${site.resolution}: ${site.reason}] ${safe(site.filePath)}:${site.line}:${site.column}${c.reset}`);
+    }
     if (callees.length === 0) {
       console.log(`  ${c.dim}${m.relCallsNone}${c.reset}\n`);
       return;
@@ -170,10 +179,33 @@ export async function handleImpact(name: string, opts: RelationOptions): Promise
   const projectId = opts.project?.trim() || resolveProjectId(process.cwd());
   const store = getRegistryStore();
   try {
+    if (opts.explain && opts.param === undefined) {
+      if (opts.json) console.log(JSON.stringify({ error: 'explain_requires_param' })); else console.error('--explain requires --param');
+      process.exitCode = 1; return;
+    }
     const maxDepth = parseImpactDepth(opts.depth, !!opts.json);
     if (maxDepth === null) return;
-    const target = lookup(name, projectId, !!opts.json);
+    const target = lookupEntity(name, projectId, !!opts.json);
     if (!target) { process.exitCode = 1; return; }
+
+    if (opts.param !== undefined) {
+      try {
+        const result = loadParameterImpact(store, projectId, target.qualifiedName, opts.param, maxDepth);
+        if (opts.json) console.log(JSON.stringify({ ...presentParameterImpact(result, !!opts.explain), impactCount: result.impacted.length }, null, 2));
+        else {
+          console.log(`Parameter value impact: ${safe(result.target)} / ${safe(result.parameter)} — ${result.completeness}`);
+          if (result.models?.length) console.log(`  Conditional on ${result.models.length} model contracts and unmodified external bindings; --explain lists versions.`);
+          for (const item of result.impacted) console.log(`  ${item.depth}: ${safe(item.owner)}`);
+          if (opts.explain) printParameterPaths(result);
+        }
+        if (opts.strict && result.completeness === 'partial') process.exitCode = 2;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (opts.json) console.log(JSON.stringify({ error: 'parameter_analysis_unavailable', message })); else console.error(safe(message));
+        process.exitCode = 1;
+      }
+      return;
+    }
 
     const impacted = store.getImpactSet(target.id, maxDepth);
 

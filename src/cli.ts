@@ -31,7 +31,7 @@ let initialLocale: string = detectLocale();
 const valueOptions = new Set([
   '--search', '--tag', '--dir', '--kind', '--project', '--status', '--untag', '--note',
   '--risk', '--warn', '--output', '-o', '--ext', '--target', '--path', '--type', '--depth',
-  '--days', '--keep-days',
+  '--days', '--keep-days', '--where', '--order-by', '--limit', '--offset',
 ]);
 const protectedValues = new Map<string, string>();
 function findExplicitLang(args: string[]): { found: boolean; value?: string } {
@@ -174,10 +174,29 @@ program
   .command('scan')
   .description(h('Scan codebase and sync entities to registry', '코드베이스를 스캔하고 엔티티를 레지스트리와 동기화'))
   .option('-v, --verbose', h('Verbose output', '상세 출력'))
+  .option('--json', h('JSON output including analysis status', '분석 상태를 포함한 JSON 출력'))
+  .option('--sarif', h('SARIF 2.1.0 output', 'SARIF 2.1.0 출력'))
+  .option('--full', h('Recompute all facts and refresh caches', '모든 fact를 재계산하고 캐시 갱신'))
   .option('--project <id>', h('Project ID override', '프로젝트 ID 재정의'))
   .action(async (opts) => {
-    const { handleCheck } = await import('./cli/checkHandler.js');
-    await handleCheck(undefined, { scan: true, verbose: opts.verbose, project: opts.project });
+    const { handleScan } = await import('./cli/scanHandler.js');
+    await handleScan(opts);
+  });
+
+program
+  .command('query')
+  .description(h('Read stored facts through bounded SQL views', '제한된 SQL view로 저장된 fact 읽기'))
+  .argument('<view>', 'entities | calls | cfg | flows | summaries')
+  .option('--where <json>', h('JSON filter array: column, op (eq/prefix), value', 'JSON 필터 배열: column, op(eq/prefix), value'))
+  .option('--order-by <column>', h('Sort by an allowed column', '허용된 열로 정렬'))
+  .option('--descending', h('Descending sort', '내림차순 정렬'))
+  .option('--limit <count>', h('Maximum rows (1-500, default 100)', '최대 행 수(1-500, 기본 100)'))
+  .option('--offset <count>', h('Row offset (0-100000)', '행 시작 위치(0-100000)'))
+  .option('--project <id>', h('Project ID override', '프로젝트 ID 재정의'))
+  .option('--json', h('JSON output', 'JSON 출력'))
+  .action(async (view, opts) => {
+    const { handleQuery } = await import('./cli/queryHandler.js');
+    handleQuery(view, opts);
   });
 
 // ---- bs (shortcut) ----
@@ -187,10 +206,11 @@ program
   .description(h('Scan for BS patterns (bad code smells)', 'BS 패턴(나쁜 코드 냄새) 스캔'))
   .option('-v, --verbose', h('Verbose output', '상세 출력'))
   .option('--json', h('JSON output (machine-readable)', 'JSON 출력 (기계 판독용)'))
+  .option('--sarif', h('SARIF 2.1.0 output', 'SARIF 2.1.0 출력'))
   .option('--dir <path>', h('Limit scan to a directory prefix', '지정 디렉터리로 스캔 제한'))
   .action(async (opts) => {
     const { handleBs } = await import('./cli/bsHandler.js');
-    await handleBs({ verbose: opts.verbose, json: opts.json, dir: opts.dir });
+    await handleBs(opts);
   });
 
 // ---- annotate ----
@@ -335,12 +355,39 @@ program
     await handleCalls(name, opts);
   });
 
+// ---- CFG ----
+program
+  .command('cfg <name>')
+  .description(h('Show a function control-flow graph from the latest AST scan', '최근 AST scan의 함수 제어 흐름 그래프 조회'))
+  .option('--project <id>', h('Project ID override', '프로젝트 ID 재정의'))
+  .option('--json', h('JSON output', 'JSON 출력'))
+  .option('--strict', h('Exit 2 for a partial graph', '부분 그래프면 exit 2'))
+  .action(async (name, opts) => {
+    const { handleCfg } = await import('./cli/cfgHandler.js');
+    await handleCfg(name, opts);
+  });
+
+program
+  .command('flow <name>')
+  .description(h('Show stored intraprocedural dataflow facts', '저장된 함수 내부 데이터 흐름 조회'))
+  .option('--project <id>', h('Project ID override', '프로젝트 ID 재정의'))
+  .option('--json', h('JSON output', 'JSON 출력'))
+  .option('--sarif', h('SARIF 2.1.0 output', 'SARIF 2.1.0 출력'))
+  .option('--strict', h('Exit 2 for partial analysis', '부분 분석이면 exit 2'))
+  .action(async (name, opts) => {
+    const { handleFlow } = await import('./cli/flowHandler.js');
+    await handleFlow(name, opts);
+  });
+
 // ---- impact (transitive 역방향) ----
 program
   .command('impact <name>')
   .description(h('Transitive impact analysis: all entities affected if <name> changes', '전이 영향 분석: <name> 변경 시 영향을 받는 모든 엔티티'))
   .option('--project <id>', h('Project ID override', '프로젝트 ID 재정의'))
   .option('--depth <n>', h('Max BFS depth (default: 5)', '최대 BFS 깊이 (기본값: 5)'))
+  .option('--param <name>', h('Trace current parameter value dependence into caller outputs', '현재 매개변수 값 의존성이 호출자 출력에 미치는 영향'))
+  .option('--explain', h('Include definition paths (requires --param)', '정의 경로 포함 (--param 필요)'))
+  .option('--strict', h('Exit 2 for partial parameter analysis', '매개변수 부분 분석이면 exit 2'))
   .option('--json', h('JSON output', 'JSON 출력'))
   .action(async (name, opts) => {
     const { handleImpact } = await import('./cli/relationHandler.js');
@@ -352,8 +399,10 @@ program
   .description(h('Build a deterministic change-review checklist from impact, risk, tests, and warnings', '영향도·위험도·테스트·경고 기반의 결정론적 변경 점검표 생성'))
   .option('--project <id>', h('Project ID override', '프로젝트 ID 재정의'))
   .option('--depth <n>', h('Max impact depth (default: 5)', '최대 영향 깊이 (기본값: 5)'))
+  .option('--param <name>', h('Review parameter value impact candidates', '매개변수 값 영향 후보 점검'))
+  .option('--explain', h('Include definition paths (requires --param)', '정의 경로 포함 (--param 필요)'))
   .option('--json', h('JSON output', 'JSON 출력'))
-  .option('--strict', h('Exit 1 when impacted candidates are high-risk, untested, or warned', '영향 후보에 고위험·미테스트·경고가 있으면 종료 코드 1'))
+  .option('--strict', h('Exit 1 for review findings, 2 for partial parameter analysis', '검토 발견 사항은 exit 1, 매개변수 부분 분석은 exit 2'))
   .action(async (name, opts) => {
     const { handlePreflight } = await import('./cli/preflightHandler.js');
     await handlePreflight(name, opts);
@@ -438,6 +487,7 @@ program
   .command('audit')
   .description(h('Code audit: BS pattern scan + registry integrity (untested/high-risk/deprecated)', '코드 감사: BS 패턴 스캔 + 레지스트리 무결성 (미테스트/고위험/사용 중단)'))
   .option('--json', h('JSON output, exit 1 on critical (CI mode)', 'JSON 출력, 치명적 문제 시 종료 코드 1 (CI 모드)'))
+  .option('--sarif', h('SARIF 2.1.0 output', 'SARIF 2.1.0 출력'))
   .option('--quick', h('BS patterns only — skip registry stats', 'BS 패턴만 검사 — 레지스트리 통계 생략'))
   .option('--dir <path>', h('Limit to a directory prefix', '지정 디렉터리로 제한'))
   .option('--project <id>', h('Project ID override', '프로젝트 ID 재정의'))
@@ -453,4 +503,15 @@ if (hasExplicitLang) {
     program.error(`error: unsupported language '${escapeTerminal(explicitLang ?? '')}' (expected en or ko)`);
   }
 }
-program.parse(preparedArgv);
+try {
+  await program.parseAsync(preparedArgv);
+} catch (error) {
+  const { failedBsScan, bsOutcome } = await import('./analysis/report.js');
+  const report = failedBsScan(error), outcome = bsOutcome(report);
+  process.exitCode = outcome.exitCode;
+  if (preparedArgv.includes('--sarif')) {
+    const { toSarif } = await import('./analysis/sarif.js');
+    console.log(JSON.stringify(toSarif(report, process.cwd(), { outcome }), null, 2));
+  } else if (preparedArgv.includes('--json') || preparedArgv.includes('--ci')) console.log(JSON.stringify({ errors: report.errors, outcome }, null, 2));
+  else console.error(escapeTerminal(report.errors.join('\n')));
+}

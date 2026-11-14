@@ -37,6 +37,7 @@ Use the commands according to the question being answered:
 | Review impact, risk, tests, and warnings before changing an entity | `cxt preflight <name>` |
 | Enforce preflight findings in automation | `cxt preflight <name> --strict --json` |
 | Run registry integrity checks in CI | `cxt check --ci` |
+| Query persisted facts with bounded filters | `cxt query entities --json` / `cxt query calls --json` |
 
 Recommended agent workflow:
 
@@ -63,7 +64,9 @@ cxt scan
 cxt audit --json
 ```
 
-`audit` does not replace `scan`: BS detection reads source files directly, while integrity, call-graph, impact, and preflight results use the persisted registry at `~/.cxt/registry.db`. Refresh the registry whenever the checkout has changed. The current analyzer uses the lexical/regex frontend; AST, symbol-resolution, CFG, and dataflow phases are roadmap work and must not be claimed as active capabilities.
+`audit` does not replace `scan`: BS detection reads source files directly, while integrity, call-graph, impact, and preflight results use the persisted registry at `~/.cxt/registry.db`. Refresh the registry whenever the checkout has changed. `scan` uses AST extraction and project-local symbol/call resolution for TS/JS, Python and Rust; other languages use lexical extraction with diagnostics. Source-located calls, including unresolved/external reasons, live in `code_call_sites` and appear in `calls --json`. Confidence values are policy scores, not calibrated probabilities. DB v5 also stores source-located CFGs/basic blocks in `code_control_flow`; `cfg <name> --json --strict` returns exit 2 for partial graphs. Await has explicit suspension/resumption/exception paths; yield, deferred async blocks, macros and other unsupported constructs stay partial. Complete CFG construction is not proof of runtime feasibility or scheduler progress. DB v6 adds intraprocedural dataflow results in `code_dataflow`, queried by `flow <name> --json --strict` (partial exit 2, absent exit 1). Finite worklist analysis retains reaching definitions, value/alias facts and unknown effect locations; explicit transfer/state/work budgets prevent unbounded joins. Scan deadline failures roll back the entire snapshot. Complete analysis means this abstract domain converged, not program safety. DB v7 stores bounded SCC function summaries in `code_function_summaries`; `flow` JSON includes separate local/summary and combined analysisCompleteness. `impact/preflight --param <name> --explain` traces current explicit parameter-value dependence into caller outputs, with source/definition paths and partial boundaries; implicit control dependence, signature changes and new behavior are outside that query. Unknown summaries never become effect-free calls. DB v8 preserves external import identities and conditional library model manifests. `.cxt-models.json` declares exact target versions and the unmodified-external-bindings assumption; named imports/aliases also need proven callable and argument domains. Models retain IDs, versions, content hashes and rejection reasons through flow/summary/impact. See `docs/LIBRARY_MODELS.md`. Full type/dispatch/package resolution and namespace/framework/resource/ownership models remain roadmap work. AST BS rules are implemented with explicit partial-flow boundaries; see `docs/STRUCTURAL_RULES.md`. See `docs/STATIC_ANALYSIS_ROADMAP.md` and `bench/README.md` for current scope and evidence.
+
+DB v9 adds atomic frontend/SCC caches and bounded `cxt_query_*` views. `scan --full` bypasses cached reads; engine, content, parser, dependency and model changes invalidate the relevant stages. Query output explicitly does not verify source freshness. Do not replace engine files inside a running process; restart after rebuilds. See `docs/INCREMENTAL_FACTS.md` for contracts and cold/warm measurements.
 
 ## Architecture
 
@@ -89,11 +92,14 @@ src/
 
 ## Key Design Decisions
 
-### Regex-based parser (no AST)
-- 8 languages: TypeScript, JavaScript, Python, Go, Rust, Java, C/C++, C#
-- Regex extraction of top-level functions/classes/constants/types
-- Block end estimation: brace counting (C-family) or indent tracking (Python)
-- Complexity score: LOC + nesting depth + parameter count (0-10)
+### AST frontend with explicit lexical fallback
+- `src/frontend/`: `LanguageFrontend`, native tree-sitter loaders, `.scm` declaration queries.
+- AST: TypeScript/TSX, JavaScript/JSX, Python, Rust. Lexical: Go, Java, C/C++, C#.
+- `CXT_PARSER=auto|ast|lexical`. Native unavailability is diagnostic; syntax/query errors preserve the previous registry and fail scan.
+- Declarations retain display names and scoped qualified names; AST ranges/parameters replace brace/indent guesses on supported languages.
+- Complexity is still the existing LOC/nesting/parameter heuristic, not cyclomatic complexity.
+- `npm run build` copies `.scm` assets. Benchmark snapshots must include `scripts/`.
+- Native packages are pinned in optionalDependencies. Root overrides permit contributor installation; the packed consumer must work without inherited overrides (`npm run test:package`).
 
 ### SQLite + FTS5
 - `~/.cxt/registry.db` with per-project entity storage
@@ -102,7 +108,11 @@ src/
 - Auto-migration from old (Rust-era) schemas
 
 ### BS Detector
-- Regex line matching + excludeIf filters to reduce false positives
+- AST predicates for TS/JS/Python/Rust, definite uninitialized-read dataflow; explicit lexical fallback for other languages
+- `src/analysis/rulePack.ts`: 21 rule contracts; `.cxt-rules.json` path roles; AST-comment category suppression
+- Partial CFG/effects skip definite-read solver with diagnostics; scan errors and partial coverage remain visible
+- Migration/measurement: `docs/STRUCTURAL_RULES.md`; rule gate: `npm run bench:rules`
+- `scan/bs/audit`: text/JSON/SARIF share outcome; exit 0 pass, 1 finding policy, 2 partial, 3 execution failure. See `docs/ANALYSIS_REPORTS.md`.
 - i18n files auto-excluded to prevent self-detection
 - Severity: critical (fix now), warning (recommended), minor (info)
 - BS Score = (critical*10 + warning*3 + minor*1) / filesScanned
@@ -117,7 +127,7 @@ src/
 
 ## Conventions
 
-- qualified_name: `{relative_file_path}::{entity_name}`
+- qualified_name: `{relative_file_path}::{scoped_name}` for AST, `{relative_file_path}::{entity_name}` for lexical. AST overload/repeated-binding collisions add `@line:column`.
 - Entity kind: function, class, module, type, constant
 - Entity status: active, deprecated, experimental, planned, broken
 - risk_level: complexity >=8 → high, >=6+untested → high, >=6 → medium, >=4+untested → medium, else low

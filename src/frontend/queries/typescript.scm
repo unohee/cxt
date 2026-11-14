@@ -1,0 +1,20 @@
+[
+  (function_declaration)
+  (generator_function_declaration)
+  (function_signature)
+  (class_declaration)
+  (abstract_class_declaration)
+  (interface_declaration)
+  (type_alias_declaration)
+  (enum_declaration)
+  (internal_module)
+  (method_definition)
+  (abstract_method_signature)
+  (method_signature)
+  (variable_declarator)
+  (public_field_definition)
+] @declaration
+
+(export_statement value: (function_expression) @declaration)
+(export_statement value: (arrow_function) @declaration)
+(export_statement value: (class) @declaration)

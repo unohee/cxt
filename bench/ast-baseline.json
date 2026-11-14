@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "engine": "ast",
+  "factFamily": "entities",
+  "tier": "synthetic",
+  "corpusSha256": "4a8c946d55b389ae9b92ebfacf81246a84de1cb58fec3f82960ffd89f52abf79",
+  "generatedAt": "2026-09-27T08:38:16.303Z",
+  "node": "v24.20.0",
+  "durationMs": 195.71359700000002,
+  "processMaxRssKiB": 121808,
+  "pass": true,
+  "gateEnforced": true,
+  "results": [
+    {
+      "language": "typescript",
+      "fixtures": 20,
+      "tp": 38,
+      "fp": 0,
+      "fn": 0,
+      "spanCorrect": 38,
+      "scopeCorrect": 38,
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "spanAccuracy": 1,
+      "scopeAccuracy": 1,
+      "failures": [],
+      "pass": true
+    },
+    {
+      "language": "python",
+      "fixtures": 20,
+      "tp": 34,
+      "fp": 0,
+      "fn": 0,
+      "spanCorrect": 34,
+      "scopeCorrect": 34,
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "spanAccuracy": 1,
+      "scopeAccuracy": 1,
+      "failures": [],
+      "pass": true
+    },
+    {
+      "language": "rust",
+      "fixtures": 20,
+      "tp": 28,
+      "fp": 0,
+      "fn": 0,
+      "spanCorrect": 28,
+      "scopeCorrect": 28,
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "spanAccuracy": 1,
+      "scopeAccuracy": 1,
+      "failures": [],
+      "pass": true
+    }
+  ]
+}

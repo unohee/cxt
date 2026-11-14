@@ -8,6 +8,11 @@ import { readFile } from 'node:fs/promises';
 import { extname } from 'node:path';
 import { t } from '../i18n.js';
 import { maskLiteralsAndComments } from './lexical.js';
+import { analyzeSemanticRules, type RuleAnalysis } from '../analysis/semanticRules.js';
+import { ruleConfigSchema, type RuleConfig } from '../analysis/rulePack.js';
+import { FrontendError, parserMode, type FrontendDiagnostic, type ParserMode } from '../frontend/types.js';
+import type { SourceSpan } from '../analysis/cfg.js';
+import { fingerprintFindings } from '../analysis/report.js';
 
 // ============ 타입 ============
 
@@ -25,6 +30,16 @@ export interface BsIssue {
    * cannot silently re-grade a finding without engaging its justification.
    */
   rationale?: string;
+  ruleId?: string;
+  ruleVersion?: string;
+  column?: number;
+  endLine?: number;
+  endColumn?: number;
+  precision?: 'high' | 'medium' | 'low';
+  precisionBasis?: 'policy-estimate';
+  fingerprint?: string;
+  ruleRationale?: string;
+  flow?: { owner: string; definitions: string[]; steps: SourceSpan[] };
 }
 
 export interface BsScanResult {
@@ -35,6 +50,7 @@ export interface BsScanResult {
   minor: number;
   bsScore: number;
   errors: string[];
+  analysis?: { completeness: 'complete' | 'partial'; engines: Record<string, number>; diagnostics: Array<FrontendDiagnostic | RuleAnalysis['diagnostics'][number]> };
 }
 
 // ============ 패턴 정의 ============
@@ -466,7 +482,7 @@ function scanCatchSwallow(
   return found;
 }
 
-export function scanFileContent(
+export function scanLegacyFileContent(
   content: string,
   filePath: string,
   language: string,
@@ -507,7 +523,7 @@ export function scanFileContent(
         message: msgs[bp.messageKey] as string,
         filePath,
         line: i + 1,
-        matchedText: match[0].slice(0, 80),
+        matchedText: bp.category === 'hardcoded_secret' ? '<redacted literal>' : match[0].slice(0, 80),
         rationale: rationaleFor(bp.severity, bp.category, msgs),
       });
     }
@@ -535,6 +551,44 @@ export function scanFileContent(
   }
 
   return issues;
+}
+
+export interface BsFileAnalysis {
+  issues: BsIssue[]; engine: 'ast' | 'lexical' | 'excluded'; completeness: 'complete' | 'partial'; diagnostics: Array<FrontendDiagnostic | RuleAnalysis['diagnostics'][number]>;
+}
+export function analyzeFileContent(content: string, filePath: string, language: string,
+  options: { parser?: ParserMode; rules?: RuleConfig; checkDeadline?: () => void } = {}): BsFileAnalysis {
+  if (isI18nPath(filePath)) return { issues: [], engine: 'excluded', completeness: 'complete', diagnostics: [] };
+  const mode = parserMode(options.parser), astLanguage = language === 'javascript' ? 'typescript' : language;
+  const diagnostics: FrontendDiagnostic[] = [];
+  if (mode !== 'lexical' && ['typescript', 'python', 'rust'].includes(astLanguage)) {
+    try {
+      const msgs = t();
+      const analysis = analyzeSemanticRules(content, filePath, astLanguage as 'typescript' | 'python' | 'rust', options.rules, options.checkDeadline);
+      const issues = analysis.findings.map(hit => ({
+        severity: hit.rule.severity, category: hit.rule.category, message: msgs[hit.rule.messageKey] as string, filePath,
+        line: hit.span.line, column: hit.span.column, endLine: hit.span.endLine, endColumn: hit.span.endColumn, matchedText: hit.matchedText,
+        rationale: rationaleFor(hit.rule.severity, hit.rule.category, msgs), ruleId: hit.rule.id, ruleVersion: hit.rule.version,
+        precision: hit.rule.precision, precisionBasis: hit.rule.precisionBasis, ruleRationale: hit.rule.rationale,
+        ...(hit.flow ? { flow: hit.flow } : {}),
+      }));
+      return { issues, engine: 'ast', completeness: analysis.completeness, diagnostics: analysis.diagnostics };
+    } catch (error) {
+      if (!(error instanceof FrontendError) || error.diagnostic.code !== 'parser-unavailable' || mode === 'ast') throw error;
+      diagnostics.push(error.diagnostic);
+    }
+  } else {
+    const diagnostic: FrontendDiagnostic = { code: 'unsupported-language', filePath, message: mode === 'lexical' ? 'Explicit lexical BS analysis' : `No AST rules for ${language}` };
+    if (mode === 'ast') throw new FrontendError(diagnostic);
+    diagnostics.push(diagnostic);
+  }
+  return { issues: scanLegacyFileContent(content, filePath, language), engine: 'lexical', completeness: 'partial', diagnostics };
+}
+
+/** 소스 오류는 예외로 드러낸다. fallback 진단까지 필요하면 analyzeFileContent를 사용한다. */
+export function scanFileContent(content: string, filePath: string, language: string,
+  options: { parser?: ParserMode; rules?: RuleConfig } = {}): BsIssue[] {
+  return analyzeFileContent(content, filePath, language, options).issues;
 }
 
 // ============ 파일 스캔 (비동기) ============
@@ -599,9 +653,18 @@ export async function scanRepository(
   // dir 옵션이 있으면 그 하위만 스캔 (정규화하여 trailing slash 통일)
   const dirFilter = normalizeDirFilter(options?.dir);
   const ignoreConfig = buildIgnoreConfig(projectPath);
+  let rules: RuleConfig | undefined;
+  try {
+    const path = join(projectPath, '.cxt-rules.json');
+    if ((await stat(path)).size > MAX_FILE_SIZE) throw new Error('Rule configuration exceeds size limit');
+    rules = ruleConfigSchema.parse(JSON.parse(await readFile(path, 'utf8')));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
   const allIssues: BsIssue[] = [];
   let filesScanned = 0;
   const errors: string[] = [];
+  const analysis: NonNullable<BsScanResult['analysis']> = { completeness: 'complete', engines: {}, diagnostics: [] };
   const matchesDir = (candidate: string, directory: string): boolean =>
     candidate === directory || candidate.startsWith(`${directory}/`);
 
@@ -653,7 +716,13 @@ export async function scanRepository(
 
         try {
           const content = await readFile(fullPath, 'utf-8');
-          const issues = scanFileContent(content, entryRelPath, language);
+          const result = analyzeFileContent(content, entryRelPath, language, { rules, checkDeadline: () => {
+            if (Date.now() - startTime > timeoutMs) throw new Error('scan timed out during semantic rules');
+          } });
+          const issues = result.issues;
+          analysis.engines[result.engine] = (analysis.engines[result.engine] ?? 0) + 1;
+          analysis.diagnostics.push(...result.diagnostics);
+          if (result.completeness === 'partial') analysis.completeness = 'partial';
           allIssues.push(...issues);
           filesScanned++;
 
@@ -662,6 +731,7 @@ export async function scanRepository(
           }
         } catch (err) {
           errors.push(`${entryRelPath}: ${err instanceof Error ? err.message : String(err)}`);
+          if (err instanceof FrontendError) analysis.diagnostics.push(err.diagnostic);
           continue;
         }
       }
@@ -669,5 +739,6 @@ export async function scanRepository(
   }
 
   await walk(projectPath, '', 0);
-  return aggregateResults(allIssues, filesScanned, errors);
+  if (errors.length) analysis.completeness = 'partial';
+  return { ...aggregateResults(fingerprintFindings(allIssues), filesScanned, errors), analysis };
 }

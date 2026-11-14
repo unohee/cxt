@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "selection": "Three contiguous call-bearing scopes selected before evaluation from the frozen real-world entity corpus; labels were handwritten from source text and do not use cxt output.",
+  "fixtures": [
+    {
+      "id": "real/cpython-fnmatch-normalize",
+      "language": "python",
+      "file": "fnmatch.py",
+      "startLine": 32,
+      "endLine": 36,
+      "expected": [
+        ["fnmatch.py", 34, 12, null, "external", 34, 34],
+        ["fnmatch.py", 35, 11, null, "external", 35, 32],
+        ["fnmatch.py", 36, 12, "fnmatch.py::fnmatchcase", "resolved", 36, 34]
+      ]
+    },
+    {
+      "id": "real/fnv-hasher-constructors",
+      "language": "rust",
+      "file": "fnv.rs",
+      "startLine": 91,
+      "endLine": 105,
+      "expected": [
+        ["fnv.rs", 95, 9, "fnv.rs::FnvHasher", "resolved", 95, 38],
+        ["fnv.rs", 104, 9, "fnv.rs::FnvHasher", "resolved", 104, 23]
+      ]
+    },
+    {
+      "id": "real/zod-util-error-constructor",
+      "language": "typescript",
+      "file": "zod-util.ts",
+      "startLine": 11,
+      "endLine": 13,
+      "expected": [
+        ["zod-util.ts", 12, 9, null, "unresolved", 12, 58]
+      ]
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "selection": "Three rule-bearing scopes selected before evaluation from frozen upstream files; labels were handwritten from source and do not use cxt output.",
+  "fixtures": [
+    { "id": "real/zod-any-type", "language": "typescript", "file": "zod-util.ts", "startLine": 14, "endLine": 14, "rule": "cxt/any-type", "lines": [14] },
+    { "id": "real/cpython-magic-number", "language": "python", "file": "fnmatch.py", "startLine": 38, "endLine": 38, "rule": "cxt/magic-number", "lines": [38] },
+    { "id": "real/fnv-no-incomplete-macro", "language": "rust", "file": "fnv.rs", "startLine": 1, "endLine": 136, "rule": "cxt/rust-incomplete", "lines": [] }
+  ]
+}

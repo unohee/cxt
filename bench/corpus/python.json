@@ -1,0 +1,375 @@
+[
+  {
+    "id": "python/function",
+    "language": "python",
+    "filePath": "function.py",
+    "source": "def add(a, b):\n return a+b",
+    "expected": [
+      [
+        "function",
+        "add",
+        1,
+        2
+      ]
+    ]
+  },
+  {
+    "id": "python/async",
+    "language": "python",
+    "filePath": "async.py",
+    "source": "async def fetch(url):\n return await client.get(url)",
+    "expected": [
+      [
+        "function",
+        "fetch",
+        1,
+        2
+      ]
+    ]
+  },
+  {
+    "id": "python/decorator",
+    "language": "python",
+    "filePath": "decorator.py",
+    "source": "@cache()\ndef read(key):\n return key",
+    "expected": [
+      [
+        "function",
+        "read",
+        1,
+        3
+      ]
+    ]
+  },
+  {
+    "id": "python/class",
+    "language": "python",
+    "filePath": "class.py",
+    "source": "class A:\n def run(self):\n  return 1",
+    "expected": [
+      [
+        "class",
+        "A",
+        1,
+        3
+      ],
+      [
+        "function",
+        "run",
+        2,
+        3,
+        "A.run"
+      ]
+    ]
+  },
+  {
+    "id": "python/same-method",
+    "language": "python",
+    "filePath": "same-method.py",
+    "source": "class A:\n def run(self): pass\nclass B:\n def run(self): pass",
+    "expected": [
+      [
+        "class",
+        "A",
+        1,
+        2
+      ],
+      [
+        "function",
+        "run",
+        2,
+        2,
+        "A.run"
+      ],
+      [
+        "class",
+        "B",
+        3,
+        4
+      ],
+      [
+        "function",
+        "run",
+        4,
+        4,
+        "B.run"
+      ]
+    ]
+  },
+  {
+    "id": "python/nested",
+    "language": "python",
+    "filePath": "nested.py",
+    "source": "def outer():\n def inner(): pass\n return inner()",
+    "expected": [
+      [
+        "function",
+        "outer",
+        1,
+        3
+      ],
+      [
+        "function",
+        "inner",
+        2,
+        2,
+        "outer.inner"
+      ]
+    ]
+  },
+  {
+    "id": "python/multiline",
+    "language": "python",
+    "filePath": "multiline.py",
+    "source": "def scan(\n path: str,\n opts: dict = {'a':1, 'b':2}\n):\n return path",
+    "expected": [
+      [
+        "function",
+        "scan",
+        1,
+        5
+      ]
+    ]
+  },
+  {
+    "id": "python/docstring-ghost",
+    "language": "python",
+    "filePath": "docstring-ghost.py",
+    "source": "\"\"\"\ndef ghost(): pass\n\"\"\"\ndef real(): pass",
+    "expected": [
+      [
+        "function",
+        "real",
+        4,
+        4
+      ]
+    ]
+  },
+  {
+    "id": "python/literal",
+    "language": "python",
+    "filePath": "literal.py",
+    "source": "TEXT = 'class Ghost: pass'\ndef real(): return TEXT",
+    "expected": [
+      [
+        "constant",
+        "TEXT",
+        1,
+        1
+      ],
+      [
+        "function",
+        "real",
+        2,
+        2
+      ]
+    ]
+  },
+  {
+    "id": "python/constants",
+    "language": "python",
+    "filePath": "constants.py",
+    "source": "LIMIT: int = 5\nNAME = 'test'",
+    "expected": [
+      [
+        "constant",
+        "LIMIT",
+        1,
+        1
+      ],
+      [
+        "constant",
+        "NAME",
+        2,
+        2
+      ]
+    ]
+  },
+  {
+    "id": "python/tuple",
+    "language": "python",
+    "filePath": "tuple.py",
+    "source": "A, B = (1, 2)",
+    "expected": [
+      [
+        "constant",
+        "A",
+        1,
+        1
+      ],
+      [
+        "constant",
+        "B",
+        1,
+        1
+      ]
+    ]
+  },
+  {
+    "id": "python/class-constant",
+    "language": "python",
+    "filePath": "class-constant.py",
+    "source": "class A:\n VALUE = 1\n def run(self): return self.VALUE",
+    "expected": [
+      [
+        "class",
+        "A",
+        1,
+        3
+      ],
+      [
+        "constant",
+        "VALUE",
+        2,
+        2,
+        "A.VALUE"
+      ],
+      [
+        "function",
+        "run",
+        3,
+        3,
+        "A.run"
+      ]
+    ]
+  },
+  {
+    "id": "python/decorated-class",
+    "language": "python",
+    "filePath": "decorated-class.py",
+    "source": "@register\nclass A(Base):\n pass",
+    "expected": [
+      [
+        "class",
+        "A",
+        1,
+        3
+      ]
+    ]
+  },
+  {
+    "id": "python/properties",
+    "language": "python",
+    "filePath": "properties.py",
+    "source": "class A:\n @property\n def value(self): return 1",
+    "expected": [
+      [
+        "class",
+        "A",
+        1,
+        3
+      ],
+      [
+        "function",
+        "value",
+        2,
+        3,
+        "A.value"
+      ]
+    ]
+  },
+  {
+    "id": "python/nested-class",
+    "language": "python",
+    "filePath": "nested-class.py",
+    "source": "class A:\n class B:\n  def run(self): pass",
+    "expected": [
+      [
+        "class",
+        "A",
+        1,
+        3
+      ],
+      [
+        "class",
+        "B",
+        2,
+        3,
+        "A.B"
+      ],
+      [
+        "function",
+        "run",
+        3,
+        3,
+        "A.B.run"
+      ]
+    ]
+  },
+  {
+    "id": "python/keyword-params",
+    "language": "python",
+    "filePath": "keyword-params.py",
+    "source": "def run(a, /, b=2, *, c=3, **kw):\n pass",
+    "expected": [
+      [
+        "function",
+        "run",
+        1,
+        2
+      ]
+    ]
+  },
+  {
+    "id": "python/eof",
+    "language": "python",
+    "filePath": "eof.py",
+    "source": "class A:\n def last(self): pass\n",
+    "expected": [
+      [
+        "class",
+        "A",
+        1,
+        2
+      ],
+      [
+        "function",
+        "last",
+        2,
+        2,
+        "A.last"
+      ]
+    ]
+  },
+  {
+    "id": "python/branch",
+    "language": "python",
+    "filePath": "branch.py",
+    "source": "if condition:\n def selected(): pass\nelse:\n def fallback(): pass",
+    "expected": [
+      [
+        "function",
+        "selected",
+        2,
+        2
+      ],
+      [
+        "function",
+        "fallback",
+        4,
+        4
+      ]
+    ]
+  },
+  {
+    "id": "python/except",
+    "language": "python",
+    "filePath": "except.py",
+    "source": "def recover():\n try:\n  work()\n except ValueError:\n  return None",
+    "expected": [
+      [
+        "function",
+        "recover",
+        1,
+        5
+      ]
+    ]
+  },
+  {
+    "id": "python/negative",
+    "language": "python",
+    "filePath": "negative.py",
+    "source": "# def ghost(): pass\nprint('class Ghost: pass')",
+    "expected": []
+  }
+]

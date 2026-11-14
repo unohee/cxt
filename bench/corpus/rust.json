@@ -1,0 +1,338 @@
+[
+  {
+    "id": "rust/function",
+    "language": "rust",
+    "filePath": "function.rs",
+    "source": "pub fn add(a:i32,b:i32)->i32 { a+b }",
+    "expected": [
+      [
+        "function",
+        "add",
+        1,
+        1
+      ]
+    ]
+  },
+  {
+    "id": "rust/async",
+    "language": "rust",
+    "filePath": "async.rs",
+    "source": "pub async fn fetch() -> i32 {\n 1\n}",
+    "expected": [
+      [
+        "function",
+        "fetch",
+        1,
+        3
+      ]
+    ]
+  },
+  {
+    "id": "rust/struct",
+    "language": "rust",
+    "filePath": "struct.rs",
+    "source": "pub struct Point { x:i32, y:i32 }",
+    "expected": [
+      [
+        "class",
+        "Point",
+        1,
+        1
+      ]
+    ]
+  },
+  {
+    "id": "rust/enum",
+    "language": "rust",
+    "filePath": "enum.rs",
+    "source": "enum Result { Ok(i32), Err }",
+    "expected": [
+      [
+        "type",
+        "Result",
+        1,
+        1
+      ]
+    ]
+  },
+  {
+    "id": "rust/trait",
+    "language": "rust",
+    "filePath": "trait.rs",
+    "source": "trait Run {\n fn run(&self);\n}",
+    "expected": [
+      [
+        "type",
+        "Run",
+        1,
+        3
+      ],
+      [
+        "function",
+        "run",
+        2,
+        2,
+        "Run.run"
+      ]
+    ]
+  },
+  {
+    "id": "rust/impl",
+    "language": "rust",
+    "filePath": "impl.rs",
+    "source": "struct A;\nimpl A {\n fn run(&self) {}\n}",
+    "expected": [
+      [
+        "class",
+        "A",
+        1,
+        1
+      ],
+      [
+        "function",
+        "run",
+        3,
+        3,
+        "A.run"
+      ]
+    ]
+  },
+  {
+    "id": "rust/trait-impl",
+    "language": "rust",
+    "filePath": "trait-impl.rs",
+    "source": "impl Display for A {\n fn fmt(&self) {}\n}",
+    "expected": [
+      [
+        "function",
+        "fmt",
+        2,
+        2,
+        "<A as Display>.fmt"
+      ]
+    ]
+  },
+  {
+    "id": "rust/same-method",
+    "language": "rust",
+    "filePath": "same-method.rs",
+    "source": "impl A { fn run(&self) {} }\nimpl B { fn run(&self) {} }",
+    "expected": [
+      [
+        "function",
+        "run",
+        1,
+        1,
+        "A.run"
+      ],
+      [
+        "function",
+        "run",
+        2,
+        2,
+        "B.run"
+      ]
+    ]
+  },
+  {
+    "id": "rust/module",
+    "language": "rust",
+    "filePath": "module.rs",
+    "source": "mod utils {\n pub fn run() {}\n}",
+    "expected": [
+      [
+        "module",
+        "utils",
+        1,
+        3
+      ],
+      [
+        "function",
+        "run",
+        2,
+        2,
+        "utils.run"
+      ]
+    ]
+  },
+  {
+    "id": "rust/nested",
+    "language": "rust",
+    "filePath": "nested.rs",
+    "source": "fn outer() {\n fn inner() {}\n inner();\n}",
+    "expected": [
+      [
+        "function",
+        "outer",
+        1,
+        4
+      ],
+      [
+        "function",
+        "inner",
+        2,
+        2,
+        "outer.inner"
+      ]
+    ]
+  },
+  {
+    "id": "rust/constants",
+    "language": "rust",
+    "filePath": "constants.rs",
+    "source": "const LIMIT: usize = 16;\nstatic NAME: &str = \"x\";",
+    "expected": [
+      [
+        "constant",
+        "LIMIT",
+        1,
+        1
+      ],
+      [
+        "constant",
+        "NAME",
+        2,
+        2
+      ]
+    ]
+  },
+  {
+    "id": "rust/type",
+    "language": "rust",
+    "filePath": "type.rs",
+    "source": "type Id = u64;",
+    "expected": [
+      [
+        "type",
+        "Id",
+        1,
+        1
+      ]
+    ]
+  },
+  {
+    "id": "rust/generic",
+    "language": "rust",
+    "filePath": "generic.rs",
+    "source": "fn read<T: Clone>(\n input: &T,\n) -> T where T: Sized {\n input.clone()\n}",
+    "expected": [
+      [
+        "function",
+        "read",
+        1,
+        5
+      ]
+    ]
+  },
+  {
+    "id": "rust/lifetime",
+    "language": "rust",
+    "filePath": "lifetime.rs",
+    "source": "fn first<'a>(s: &'a str) -> &'a str { s }",
+    "expected": [
+      [
+        "function",
+        "first",
+        1,
+        1
+      ]
+    ]
+  },
+  {
+    "id": "rust/raw-string",
+    "language": "rust",
+    "filePath": "raw-string.rs",
+    "source": "const TEXT: &str = r#\"fn ghost() {}}\"#;\nfn real() {}",
+    "expected": [
+      [
+        "constant",
+        "TEXT",
+        1,
+        1
+      ],
+      [
+        "function",
+        "real",
+        2,
+        2
+      ]
+    ]
+  },
+  {
+    "id": "rust/comment-ghost",
+    "language": "rust",
+    "filePath": "comment-ghost.rs",
+    "source": "/* fn ghost() {} */\nfn real() {}",
+    "expected": [
+      [
+        "function",
+        "real",
+        2,
+        2
+      ]
+    ]
+  },
+  {
+    "id": "rust/macro-negative",
+    "language": "rust",
+    "filePath": "macro-negative.rs",
+    "source": "macro_rules! make { () => { fn hidden() {} } }\nfn real() {}",
+    "expected": [
+      [
+        "function",
+        "real",
+        2,
+        2
+      ]
+    ]
+  },
+  {
+    "id": "rust/associated-type",
+    "language": "rust",
+    "filePath": "associated-type.rs",
+    "source": "impl Iterator for A {\n type Item = i32;\n fn next(&mut self) -> Option<i32> { None }\n}",
+    "expected": [
+      [
+        "type",
+        "Item",
+        2,
+        2,
+        "<A as Iterator>.Item"
+      ],
+      [
+        "function",
+        "next",
+        3,
+        3,
+        "<A as Iterator>.next"
+      ]
+    ]
+  },
+  {
+    "id": "rust/restricted-pub",
+    "language": "rust",
+    "filePath": "restricted-pub.rs",
+    "source": "pub(crate) fn internal() {}\nunsafe fn risky() {}",
+    "expected": [
+      [
+        "function",
+        "internal",
+        1,
+        1
+      ],
+      [
+        "function",
+        "risky",
+        2,
+        2
+      ]
+    ]
+  },
+  {
+    "id": "rust/negative",
+    "language": "rust",
+    "filePath": "negative.rs",
+    "source": "// fn ghost() {}\n/* struct Ghost {} */",
+    "expected": []
+  }
+]

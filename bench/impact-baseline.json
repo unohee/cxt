@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "factFamily": "parameter-value-impact",
+  "tier": "synthetic-development",
+  "corpusSha256": "c16fe5b7d6df6396e87c90a6c18d43b9bb4be95d048dbfa2f058384864c1fe39",
+  "generatedAt": "2026-09-27T11:36:13.267Z",
+  "durationMs": 1319.229127,
+  "processMaxRssKiB": 125608,
+  "pass": true,
+  "results": [
+    {
+      "language": "typescript",
+      "fixtures": 5,
+      "precisionFixtures": 4,
+      "tp": 3,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1,
+      "baseline": {
+        "tp": 3,
+        "fp": 3,
+        "fn": 0
+      },
+      "baselinePrecision": 0.5,
+      "precisionGain": 0.5,
+      "failures": [],
+      "pass": true
+    },
+    {
+      "language": "python",
+      "fixtures": 5,
+      "precisionFixtures": 4,
+      "tp": 3,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1,
+      "baseline": {
+        "tp": 3,
+        "fp": 3,
+        "fn": 0
+      },
+      "baselinePrecision": 0.5,
+      "precisionGain": 0.5,
+      "failures": [],
+      "pass": true
+    },
+    {
+      "language": "rust",
+      "fixtures": 5,
+      "precisionFixtures": 4,
+      "tp": 3,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1,
+      "baseline": {
+        "tp": 3,
+        "fp": 3,
+        "fn": 0
+      },
+      "baselinePrecision": 0.5,
+      "precisionGain": 0.5,
+      "failures": [],
+      "pass": true
+    }
+  ]
+}

@@ -1,0 +1,319 @@
+{
+  "schemaVersion": 1,
+  "authoredAt": "2026-09-27T14:13:42.166Z",
+  "engineEvaluated": true,
+  "labelProvenance": "Source-read labels; three trait scopes corrected after first evaluation against Rust Reference and pre-existing rust/trait-impl fixture. Analyzer unchanged. Original labels retained as expected.v1.json.",
+  "exportContract": "Syntactic export/pub; Python leading-underscore convention. This is not runtime reachability or trait visibility.",
+  "parameterContract": "Syntactic parameters including self/receiver, excluding type parameters and separator markers.",
+  "fixtures": [
+    {
+      "id": "real/zod-util",
+      "language": "typescript",
+      "filePath": "zod-util.ts",
+      "entities": [
+        {
+          "kind": "function",
+          "name": "assertEqual",
+          "lineStart": 1,
+          "lineEnd": 3,
+          "scopedName": "assertEqual",
+          "isExported": true,
+          "paramCount": 1
+        },
+        {
+          "kind": "function",
+          "name": "assertNotEqual",
+          "lineStart": 5,
+          "lineEnd": 7,
+          "scopedName": "assertNotEqual",
+          "isExported": true,
+          "paramCount": 1
+        },
+        {
+          "kind": "function",
+          "name": "assertIs",
+          "lineStart": 9,
+          "lineEnd": 9,
+          "scopedName": "assertIs",
+          "isExported": true,
+          "paramCount": 1
+        },
+        {
+          "kind": "function",
+          "name": "assertNever",
+          "lineStart": 11,
+          "lineEnd": 13,
+          "scopedName": "assertNever",
+          "isExported": true,
+          "paramCount": 1
+        },
+        {
+          "kind": "function",
+          "name": "assert",
+          "lineStart": 14,
+          "lineEnd": 14,
+          "scopedName": "assert",
+          "isExported": true,
+          "paramCount": 1
+        },
+        {
+          "kind": "function",
+          "name": "getEnumValues",
+          "lineStart": 16,
+          "lineEnd": 22,
+          "scopedName": "getEnumValues",
+          "isExported": true,
+          "paramCount": 1
+        },
+        {
+          "kind": "function",
+          "name": "<lambda@17:55>",
+          "lineStart": 17,
+          "lineEnd": 17,
+          "scopedName": "getEnumValues.<lambda@17:55>",
+          "isExported": false,
+          "paramCount": 1
+        },
+        {
+          "kind": "function",
+          "name": "<lambda@19:13>",
+          "lineStart": 19,
+          "lineEnd": 19,
+          "scopedName": "getEnumValues.<lambda@19:13>",
+          "isExported": false,
+          "paramCount": 1
+        },
+        {
+          "kind": "function",
+          "name": "<lambda@20:10>",
+          "lineStart": 20,
+          "lineEnd": 20,
+          "scopedName": "getEnumValues.<lambda@20:10>",
+          "isExported": false,
+          "paramCount": 1
+        },
+        {
+          "kind": "function",
+          "name": "joinValues",
+          "lineStart": 24,
+          "lineEnd": 26,
+          "scopedName": "joinValues",
+          "isExported": true,
+          "paramCount": 2
+        },
+        {
+          "kind": "function",
+          "name": "<lambda@25:20>",
+          "lineStart": 25,
+          "lineEnd": 25,
+          "scopedName": "joinValues.<lambda@25:20>",
+          "isExported": false,
+          "paramCount": 1
+        },
+        {
+          "kind": "function",
+          "name": "jsonStringifyReplacer",
+          "lineStart": 28,
+          "lineEnd": 31,
+          "scopedName": "jsonStringifyReplacer",
+          "isExported": true,
+          "paramCount": 2
+        },
+        {
+          "kind": "function",
+          "name": "cached",
+          "lineStart": 33,
+          "lineEnd": 45,
+          "scopedName": "cached",
+          "isExported": true,
+          "paramCount": 1
+        },
+        {
+          "kind": "function",
+          "name": "value",
+          "lineStart": 36,
+          "lineEnd": 43,
+          "scopedName": "cached.value",
+          "isExported": false,
+          "paramCount": 0
+        },
+        {
+          "kind": "function",
+          "name": "nullish",
+          "lineStart": 47,
+          "lineEnd": 49,
+          "scopedName": "nullish",
+          "isExported": true,
+          "paramCount": 1
+        },
+        {
+          "kind": "function",
+          "name": "cleanRegex",
+          "lineStart": 51,
+          "lineEnd": 55,
+          "scopedName": "cleanRegex",
+          "isExported": true,
+          "paramCount": 1
+        },
+        {
+          "kind": "function",
+          "name": "floatSafeRemainder",
+          "lineStart": 57,
+          "lineEnd": 72,
+          "scopedName": "floatSafeRemainder",
+          "isExported": true,
+          "paramCount": 2
+        },
+        {
+          "kind": "constant",
+          "name": "EVALUATING",
+          "lineStart": 74,
+          "lineEnd": 74,
+          "scopedName": "EVALUATING",
+          "isExported": false,
+          "paramCount": 0
+        }
+      ]
+    },
+    {
+      "id": "real/cpython-fnmatch",
+      "language": "python",
+      "filePath": "fnmatch.py",
+      "entities": [
+        {
+          "kind": "constant",
+          "name": "__all__",
+          "lineStart": 17,
+          "lineEnd": 17,
+          "scopedName": "__all__",
+          "isExported": false,
+          "paramCount": 0
+        },
+        {
+          "kind": "function",
+          "name": "fnmatch",
+          "lineStart": 19,
+          "lineEnd": 36,
+          "scopedName": "fnmatch",
+          "isExported": true,
+          "paramCount": 2
+        },
+        {
+          "kind": "function",
+          "name": "_compile_pattern",
+          "lineStart": 38,
+          "lineEnd": 46,
+          "scopedName": "_compile_pattern",
+          "isExported": false,
+          "paramCount": 1
+        },
+        {
+          "kind": "function",
+          "name": "filter",
+          "lineStart": 48,
+          "lineEnd": 62,
+          "scopedName": "filter",
+          "isExported": true,
+          "paramCount": 2
+        },
+        {
+          "kind": "function",
+          "name": "fnmatchcase",
+          "lineStart": 64,
+          "lineEnd": 71,
+          "scopedName": "fnmatchcase",
+          "isExported": true,
+          "paramCount": 2
+        },
+        {
+          "kind": "function",
+          "name": "translate",
+          "lineStart": 74,
+          "lineEnd": 185,
+          "scopedName": "translate",
+          "isExported": true,
+          "paramCount": 1
+        }
+      ]
+    },
+    {
+      "id": "real/fnv-hasher",
+      "language": "rust",
+      "filePath": "fnv.rs",
+      "entities": [
+        {
+          "kind": "class",
+          "name": "FnvHasher",
+          "lineStart": 89,
+          "lineEnd": 89,
+          "scopedName": "FnvHasher",
+          "isExported": true,
+          "paramCount": 0
+        },
+        {
+          "kind": "function",
+          "name": "default",
+          "lineStart": 94,
+          "lineEnd": 96,
+          "scopedName": "<FnvHasher as Default>.default",
+          "isExported": false,
+          "paramCount": 0
+        },
+        {
+          "kind": "function",
+          "name": "with_key",
+          "lineStart": 103,
+          "lineEnd": 105,
+          "scopedName": "FnvHasher.with_key",
+          "isExported": true,
+          "paramCount": 1
+        },
+        {
+          "kind": "function",
+          "name": "finish",
+          "lineStart": 110,
+          "lineEnd": 112,
+          "scopedName": "<FnvHasher as Hasher>.finish",
+          "isExported": false,
+          "paramCount": 1
+        },
+        {
+          "kind": "function",
+          "name": "write",
+          "lineStart": 115,
+          "lineEnd": 124,
+          "scopedName": "<FnvHasher as Hasher>.write",
+          "isExported": false,
+          "paramCount": 2
+        },
+        {
+          "kind": "type",
+          "name": "FnvBuildHasher",
+          "lineStart": 128,
+          "lineEnd": 128,
+          "scopedName": "FnvBuildHasher",
+          "isExported": true,
+          "paramCount": 0
+        },
+        {
+          "kind": "type",
+          "name": "FnvHashMap",
+          "lineStart": 132,
+          "lineEnd": 132,
+          "scopedName": "FnvHashMap",
+          "isExported": true,
+          "paramCount": 0
+        },
+        {
+          "kind": "type",
+          "name": "FnvHashSet",
+          "lineStart": 136,
+          "lineEnd": 136,
+          "scopedName": "FnvHashSet",
+          "isExported": true,
+          "paramCount": 0
+        }
+      ]
+    }
+  ]
+}

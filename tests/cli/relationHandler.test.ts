@@ -5,6 +5,7 @@ const store = {
   findEntityByQualifiedName: vi.fn(),
   getIncomingRelations: vi.fn(),
   getOutgoingRelations: vi.fn(),
+  getCallSites: vi.fn(),
   getImpactSet: vi.fn(),
 };
 
@@ -13,7 +14,7 @@ vi.mock('../../src/registry/sqliteStore.js', () => ({
   closeRegistryStore: vi.fn(),
 }));
 
-import { handleImpact, handleWhoCalls } from '../../src/cli/relationHandler.js';
+import { handleCalls, handleImpact, handleWhoCalls } from '../../src/cli/relationHandler.js';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -22,6 +23,21 @@ afterEach(() => {
 });
 
 describe('relation handler safety', () => {
+  it('includes unresolved sites in JSON and escapes their expressions in text', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    store.findEntitiesByName.mockReturnValue([{ id: 'id', name: 'run', qualifiedName: 'x.ts::run', filePath: 'x.ts', lineStart: 1 }]);
+    store.getOutgoingRelations.mockReturnValue([]);
+    const sites = [{ expression: '\u001b]52;clipboard\u0007unknown', resolution: 'unresolved', reason: 'unbound-name', filePath: 'x.ts', line: 2, column: 3 }];
+    store.getCallSites.mockReturnValue(sites);
+    await handleCalls('run', { project: 'p', json: true });
+    expect(JSON.parse(log.mock.calls[0][0]).callSites).toEqual(sites);
+    log.mockClear();
+    await handleCalls('run', { project: 'p' });
+    const output = log.mock.calls.flat().join('\n');
+    expect(output).toContain('unresolved: unbound-name');
+    expect(output).not.toContain('\u001b]52;clipboard');
+  });
+
   it('rejects unsupported relation type filters before querying the registry', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     await handleWhoCalls('target', { project: 'p', type: 'invalid', json: true });

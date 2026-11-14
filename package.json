@@ -15,13 +15,30 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/copy-frontend-queries.mjs",
     "dev": "node --import=tsx src/cli.ts",
     "lint": "tsc --noEmit",
     "test": "vitest run",
     "test:bench-harness": "node --test testing/cxt_bench_codex.test.mjs",
     "bench:codex": "node testing/cxt_bench_codex.mjs",
     "test:watch": "vitest",
+    "bench:accuracy": "node --import=tsx bench/accuracy.ts",
+    "bench:calls": "node --import=tsx bench/call-accuracy.ts",
+    "bench:calls:real-world": "node --import=tsx bench/real-world-call-accuracy.ts",
+    "bench:flow:real-world": "node --import=tsx bench/real-world-flow-accuracy.ts",
+    "bench:rules:real-world": "node --import=tsx bench/real-world-rule-accuracy.ts",
+    "bench:cfg": "node --import=tsx bench/cfg-accuracy.ts",
+    "bench:flow": "node --import=tsx bench/dataflow-accuracy.ts",
+    "bench:flow:heldout": "node --import=tsx bench/dataflow-accuracy.ts --tier held-out-review",
+    "bench:flow:review-bundle": "node --import=tsx bench/held-out-review-bundle.ts",
+    "bench:impact": "node --import=tsx bench/impact-accuracy.ts",
+    "bench:rules": "node --import=tsx bench/rule-accuracy.ts",
+    "bench:all": "node --import=tsx bench/all.ts",
+    "bench:incremental": "npm run build && node bench/incremental.mjs",
+    "bench:external": "node --import=tsx bench/external-accuracy.ts",
+    "bench:self": "node --import=tsx bench/external-accuracy.ts --tier self",
+    "test:package": "npm run build && node scripts/test-packed-frontends.mjs",
+    "ci:self-scan": "node scripts/ci-self-scan.mjs",
     "test:coverage": "vitest run --coverage",
     "prepublishOnly": "npm run build && npm test"
   },
@@ -35,6 +52,8 @@
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.0.0",
     "@vitest/coverage-v8": "^4.1.4",
+    "ajv-draft-04": "1.0.0",
+    "ajv-formats": "3.0.1",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"
@@ -44,5 +63,15 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "optionalDependencies": {
+    "tree-sitter": "0.25.1",
+    "tree-sitter-javascript": "0.23.1",
+    "tree-sitter-python": "0.25.0",
+    "tree-sitter-rust": "0.24.0",
+    "tree-sitter-typescript": "0.23.2"
+  },
+  "overrides": {
+    "tree-sitter": "$tree-sitter"
   }
 }

@@ -13,6 +13,17 @@ import { buildIgnoreConfig, shouldSkipDir, shouldSkipFile } from './ignoreRules.
 import type { EntityKind, RiskLevel, RelationType } from './schema.js';
 import type { SqliteRegistryStore } from './sqliteStore.js';
 import { maskLiteralsAndComments } from './lexical.js';
+import { loadTreeSitterFrontend } from '../frontend/treeSitter.js';
+import { entityQualifiedName, FrontendError, parserMode } from '../frontend/types.js';
+import type { FrontendDiagnostic, FrontendResult, ParserMode } from '../frontend/types.js';
+import type { SymbolFacts } from '../analysis/symbols.js';
+import type { CfgDiagnostic, ControlFlowGraph } from '../analysis/cfg.js';
+import { analyzeSummaries } from '../analysis/summaries.js';
+import { applyRustCopyTypes } from '../frontend/dataflowFacts.js';
+import { loadLibraryModels, type ModelManifest } from '../analysis/libraryModels.js';
+import type { DataflowDiagnostic } from '../analysis/dataflowTypes.js';
+import { resolveSymbols, type SymbolResolutionOptions } from '../analysis/resolveSymbols.js';
+import { cacheEntry, deserializeFrontend, engineFingerprint, hashText, serializeFrontend, type AnalysisCache, type AnalysisCacheEntry } from '../analysis/cache.js';
 
 // ============ 상수 ============
 
@@ -24,7 +35,7 @@ const SCAN_TIMEOUT_MS = 60_000;
 
 // ============ 언어 정의 ============
 
-type Language = 'typescript' | 'python' | 'go' | 'rust' | 'java' | 'c' | 'cpp' | 'csharp';
+export type Language = 'typescript' | 'python' | 'go' | 'rust' | 'java' | 'c' | 'cpp' | 'csharp';
 
 interface LanguageConfig {
   extensions: string[];
@@ -241,6 +252,8 @@ function isTestFile(name: string, language: Language): boolean {
 export interface ExtractedEntity {
   kind: EntityKind;
   name: string;
+  /** AST 스코프를 포함한 파일 내 식별자. 표시 이름은 name에 보존한다. */
+  scopedName?: string;
   filePath: string;
   lineStart: number;
   lineEnd?: number;
@@ -253,6 +266,7 @@ export interface ExtractedEntity {
 
 // ============ 엔티티 추출 ============
 
+/** Legacy lexical extraction. Use extractFile for the configured frontend and diagnostics. */
 export function extractEntities(
   content: string,
   filePath: string,
@@ -341,6 +355,38 @@ export function extractEntities(
   }
 
   return entities;
+}
+
+/** 실제 scan과 공개 API가 공유하는 프론트엔드 선택 경로. */
+export function extractFile(content: string, filePath: string, language: Language, mode = parserMode()): FrontendResult {
+  mode = parserMode(mode);
+  const diagnostics: FrontendDiagnostic[] = [];
+  if (mode !== 'lexical') {
+    if (language === 'typescript' || language === 'python' || language === 'rust') {
+      // 초기화 실패만 auto fallback을 허용한다. 소스 문법 오류는 오류로 전파한다.
+      let frontend;
+      try {
+        frontend = loadTreeSitterFrontend(language, filePath);
+      } catch (error) {
+        if (!(error instanceof FrontendError) || error.diagnostic.code !== 'parser-unavailable' || mode === 'ast') throw error;
+        diagnostics.push(error.diagnostic);
+      }
+      if (frontend) return frontend.extract(content, filePath);
+    } else {
+      const diagnostic: FrontendDiagnostic = { code: 'unsupported-language', filePath,
+        message: `AST frontend is not available for ${language}; lexical extraction only` };
+      if (mode === 'ast') throw new FrontendError(diagnostic);
+      diagnostics.push(diagnostic);
+    }
+  }
+  const entities = extractEntities(content, filePath, language);
+  const lexicalRefs = extractReferences(content, entities, language);
+  const references = new Map<string, ReferenceSet>();
+  for (const entity of entities) {
+    const refs = lexicalRefs.get(entity.lineStart);
+    if (refs) references.set(entityQualifiedName(entity), refs);
+  }
+  return { engine: 'lexical', entities, references, diagnostics };
 }
 
 // ============ 블록 끝 추정 ============
@@ -871,7 +917,7 @@ function buildTestMap(
       const matchedEntities = entitiesByBasename.get(sourceBasename);
       if (matchedEntities && sourceBasename.length > 0) {
         for (const entity of matchedEntities) {
-          const qName = `${entity.filePath}::${entity.name}`;
+          const qName = entityQualifiedName(entity);
           if (!result.has(qName)) {
             result.set(qName, { hasTests: true, testFile: tf.testFilePath });
           }
@@ -889,7 +935,7 @@ function buildTestMap(
         if (!fileEntities) continue;
         for (const entity of fileEntities) {
           if (symbols.has(entity.name)) {
-            result.set(`${entity.filePath}::${entity.name}`, { hasTests: true, testFile: tf.testFilePath });
+            result.set(entityQualifiedName(entity), { hasTests: true, testFile: tf.testFilePath });
           }
         }
         break;
@@ -900,7 +946,7 @@ function buildTestMap(
       const matchingEntities = entityByName.get(refName);
       if (!matchingEntities) continue;
       for (const entity of matchingEntities) {
-        const qName = `${entity.filePath}::${entity.name}`;
+        const qName = entityQualifiedName(entity);
         if (result.has(qName)) continue;
         if (isNearbyTest(entity.filePath, tf.testFilePath)) {
           result.set(qName, { hasTests: true, testFile: tf.testFilePath });
@@ -950,6 +996,19 @@ export interface ScanResult {
   errors: string[];
   durationMs: number;
   languageBreakdown: Record<string, number>;
+  parserBreakdown: Record<string, number>;
+  diagnostics: FrontendDiagnostic[];
+  callSites: { total: number; resolved: number; unresolved: number; external: number };
+  controlFlow: { total: number; complete: number; partial: number; nodes: number; edges: number;
+    diagnostics: Array<CfgDiagnostic & { filePath: string; owner: string }> };
+  dataflow: { total: number; complete: number; partial: number; iterations: number;
+    diagnostics: Array<DataflowDiagnostic & { filePath: string; owner: string }> };
+  resourceFindings: { total: number; definite: number; possible: number; useAfterRelease: number; leak: number };
+  ownershipFindings: { total: number; definite: number; possible: number; useAfterMove: number };
+  taintFindings: { total: number; proven: number };
+  summaries: { total: number; complete: number; partial: number; components: number };
+  models: { manifest: ModelManifest; calls: Record<string, number> };
+  cache: { engine: string; frontendHits: number; frontendMisses: number; summaryHits: number; summaryMisses: number; committed: boolean };
 }
 
 // ============ 메인 스캔 함수 ============
@@ -957,9 +1016,13 @@ export interface ScanResult {
 export async function scanRepository(
   projectPath: string,
   projectId: string,
-  options?: { maxDepth?: number; timeoutMs?: number; verbose?: boolean },
+  options?: { maxDepth?: number; timeoutMs?: number; verbose?: boolean; parser?: ParserMode; full?: boolean },
 ): Promise<ScanResult> {
   const startTime = Date.now();
+  const mode = parserMode(options?.parser);
+  // 설정 오류는 scan을 시작하기 전에 드러내고 이전 snapshot을 보존한다.
+  const libraryModels = await loadLibraryModels(projectPath);
+  const models: ScanResult['models'] = { manifest: libraryModels.manifest, calls: {} };
   const requestedDepth = options?.maxDepth ?? MAX_DEPTH;
   const requestedTimeout = options?.timeoutMs ?? SCAN_TIMEOUT_MS;
   if (!Number.isFinite(requestedDepth) || requestedDepth < 0 || !Number.isFinite(requestedTimeout) || requestedTimeout <= 0) {
@@ -969,6 +1032,12 @@ export async function scanRepository(
   const timeoutMs = Math.min(requestedTimeout, SCAN_TIMEOUT_MS);
   const verbose = options?.verbose ?? false;
   const store = getRegistryStore();
+  const cache = { engine: engineFingerprint(), frontendHits: 0, frontendMisses: 0, summaryHits: 0, summaryMisses: 0, committed: false };
+  const entries = new Map<string, AnalysisCacheEntry>();
+  const analysisCache: AnalysisCache = {
+    get: (kind, key, inputHash) => options?.full ? undefined : store.getAnalysisCache(projectId, kind, key, inputHash),
+    set: (kind, key, inputHash, value) => { entries.set(`${kind}:${key}`, cacheEntry(kind, key, inputHash, value)); },
+  };
   const ignoreConfig = buildIgnoreConfig(projectPath);
 
   const allExtracted: ExtractedEntity[] = [];
@@ -977,6 +1046,21 @@ export async function scanRepository(
   const testFiles: TestFileInfo[] = [];
   const errors: string[] = [];
   const languageBreakdown: Record<string, number> = {};
+  const parserBreakdown: Record<string, number> = {};
+  const diagnostics: FrontendDiagnostic[] = [];
+  const symbolFiles: SymbolFacts[] = [];
+  const typescriptPackageRoots = new Map<string, string>();
+  const typescriptPackageMappings = new Map<string, string[]>();
+  const typescriptPackagePatterns = new Map<string, string[]>();
+  const typescriptRestrictedPackages = new Set<string>();
+  const callSites = { total: 0, resolved: 0, unresolved: 0, external: 0 };
+  const cfgs: ControlFlowGraph[] = [];
+  const controlFlow: ScanResult['controlFlow'] = { total: 0, complete: 0, partial: 0, nodes: 0, edges: 0, diagnostics: [] };
+  const dataflow: ScanResult['dataflow'] = { total: 0, complete: 0, partial: 0, iterations: 0, diagnostics: [] };
+  const resourceFindings: ScanResult['resourceFindings'] = { total: 0, definite: 0, possible: 0, useAfterRelease: 0, leak: 0 };
+  const ownershipFindings: ScanResult['ownershipFindings'] = { total: 0, definite: 0, possible: 0, useAfterMove: 0 };
+  const taintFindings: ScanResult['taintFindings'] = { total: 0, proven: 0 };
+  const summaries = { total: 0, complete: 0, partial: 0, components: 0 };
   let scannedFiles = 0;
   let completeScan = true;
 
@@ -1008,6 +1092,44 @@ export async function scanRepository(
         await walk(fullPath, entryRelPath, depth + 1);
       } else if (entry.isFile()) {
         if (shouldSkipFile(entryRelPath, ignoreConfig)) continue;
+        if (entry.name === 'package.json') {
+          try {
+            const manifest = JSON.parse(await readFile(fullPath, 'utf-8')) as { name?: string; exports?: unknown };
+            if (typeof manifest.name === 'string' && manifest.name.length > 0) {
+              const packagePath = dirname(entryRelPath);
+              const root = packagePath === '.' ? '' : packagePath;
+              typescriptPackageRoots.set(manifest.name, root);
+              if (manifest.exports !== undefined) {
+                typescriptRestrictedPackages.add(manifest.name);
+                const exportTargets = (target: unknown): string[] => {
+                  if (typeof target === 'string') return [target];
+                  if (Array.isArray(target)) return target.flatMap(exportTargets);
+                  if (!target || typeof target !== 'object') return [];
+                  const record = target as Record<string, unknown>;
+                  // Node conditions are ordered by consumer intent. Unknown conditions
+                  // are ignored instead of being treated as a proven source target.
+                  return ['import', 'require', 'default', 'node', 'types'].flatMap(condition => exportTargets(record[condition]));
+                };
+                const addExport = (specifier: string, target: unknown): void => {
+                  const targets = exportTargets(target).filter(targetPath => targetPath.startsWith('./'));
+                  if (!targets.length) return;
+                  const key = specifier === '.' ? manifest.name! : `${manifest.name}/${specifier.slice(2)}`;
+                  const mapped = targets.map(targetPath => join(root, targetPath.slice(2)));
+                  if (specifier.includes('*')) typescriptPackagePatterns.set(key, mapped);
+                  else typescriptPackageMappings.set(key, mapped);
+                };
+                if (typeof manifest.exports === 'string' || Array.isArray(manifest.exports)) addExport('.', manifest.exports);
+                else if (manifest.exports && typeof manifest.exports === 'object') {
+                  const entries = Object.entries(manifest.exports);
+                  if (entries.some(([specifier]) => specifier.startsWith('.'))) {
+                    for (const [specifier, target] of entries) if (specifier.startsWith('.')) addExport(specifier, target);
+                  } else addExport('.', manifest.exports);
+                }
+              }
+            }
+          } catch { /* malformed manifests remain outside semantic source facts */ }
+          continue;
+        }
         const ext = extname(entry.name);
         if (!SOURCE_EXTENSIONS.has(ext)) continue;
 
@@ -1030,15 +1152,29 @@ export async function scanRepository(
           if (isTestFile(entry.name, language)) {
             testFiles.push(parseTestFile(content, entryRelPath, language));
           } else {
-            const entities = extractEntities(content, entryRelPath, language);
+            const inputHash = hashText(JSON.stringify([cache.engine, mode, language, content]));
+            const cached = analysisCache.get('frontend', entryRelPath, inputHash) as ReturnType<typeof serializeFrontend> | undefined;
+            let reusable = !!cached;
+            if (cached && mode !== 'lexical' && ['typescript', 'python', 'rust'].includes(language)) {
+              // 캐시가 native runtime 부재 또는 강제 AST 정책을 가려서는 안 된다.
+              try { loadTreeSitterFrontend(language as 'typescript' | 'python' | 'rust', entryRelPath); reusable = cached.engine === 'ast'; }
+              catch (error) {
+                if (!(error instanceof FrontendError) || error.diagnostic.code !== 'parser-unavailable' || mode === 'ast') throw error;
+                reusable = false;
+              }
+            }
+            const parsed = reusable ? deserializeFrontend(cached!) : extractFile(content, entryRelPath, language, mode);
+            if (reusable) cache.frontendHits++; else cache.frontendMisses++;
+            analysisCache.set('frontend', entryRelPath, inputHash, serializeFrontend(parsed));
+            const entities = parsed.entities;
             allExtracted.push(...entities);
+            diagnostics.push(...parsed.diagnostics);
+            parserBreakdown[parsed.engine] = (parserBreakdown[parsed.engine] ?? 0) + 1;
 
             // 참조 추출 (관계 그래프 2-pass용).
-            const refs = extractReferences(content, entities, language);
-            for (const ent of entities) {
-              const r = refs.get(ent.lineStart);
-              if (r) refsByQName.set(`${entryRelPath}::${ent.name}`, r);
-            }
+            if (parsed.symbols) symbolFiles.push(parsed.symbols);
+            else for (const [key, refs] of parsed.references) refsByQName.set(key, refs);
+            cfgs.push(...parsed.controlFlow ?? []);
 
             scannedFiles++;
             languageBreakdown[language] = (languageBreakdown[language] ?? 0) + 1;
@@ -1049,6 +1185,7 @@ export async function scanRepository(
           }
         } catch (err) { // cxt-ignore: exception_hiding — err는 errors[]에 수집되어 ScanResult로 보고됨
           completeScan = false;
+          if (err instanceof FrontendError) diagnostics.push(err.diagnostic);
           errors.push(`${entryRelPath}: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
@@ -1076,6 +1213,17 @@ export async function scanRepository(
       errors,
       durationMs: Date.now() - startTime,
       languageBreakdown,
+      parserBreakdown,
+      diagnostics,
+      callSites,
+      controlFlow,
+      dataflow,
+      resourceFindings,
+      ownershipFindings,
+      taintFindings,
+      summaries,
+      models,
+      cache,
     };
   }
 
@@ -1094,10 +1242,29 @@ export async function scanRepository(
   let removed = 0;
   let relationsLoaded = 0;
 
+  let symbolOptions: SymbolResolutionOptions | undefined;
+  try {
+    const tsconfig = JSON.parse(await readFile(join(projectPath, 'tsconfig.json'), 'utf-8')) as {
+      compilerOptions?: { baseUrl?: string; paths?: Record<string, string[]> };
+    };
+    const paths = tsconfig.compilerOptions?.paths;
+    if (paths && Object.values(paths).every(targets => Array.isArray(targets) && targets.every(target => typeof target === 'string'))) {
+      symbolOptions = { typescriptPaths: paths, typescriptBaseUrl: tsconfig.compilerOptions?.baseUrl ?? '.',
+        ...(typescriptPackageRoots.size ? { typescriptPackageRoots: Object.fromEntries(typescriptPackageRoots) } : {}),
+        ...(typescriptPackageMappings.size ? { typescriptPackageMappings: Object.fromEntries(typescriptPackageMappings) } : {}),
+        ...(typescriptPackagePatterns.size ? { typescriptPackagePatterns: [...typescriptPackagePatterns.entries()].map(([pattern, targets]) => ({ pattern, targets })) } : {}),
+        ...(typescriptRestrictedPackages.size ? { typescriptRestrictedPackages: [...typescriptRestrictedPackages] } : {}) };
+    }
+  } catch { /* tsconfig is optional; unresolved aliases remain explicit call-site facts. */ }
+  if (typescriptPackageRoots.size) symbolOptions = { ...symbolOptions, typescriptPackageRoots: Object.fromEntries(typescriptPackageRoots) };
+  if (typescriptPackageMappings.size) symbolOptions = { ...symbolOptions, typescriptPackageMappings: Object.fromEntries(typescriptPackageMappings) };
+  if (typescriptPackagePatterns.size) symbolOptions = { ...symbolOptions, typescriptPackagePatterns: [...typescriptPackagePatterns.entries()].map(([pattern, targets]) => ({ pattern, targets })) };
+  if (typescriptRestrictedPackages.size) symbolOptions = { ...symbolOptions, typescriptRestrictedPackages: [...typescriptRestrictedPackages] };
+
   try {
     store.runInTransaction(() => {
     for (const ext of allExtracted) {
-    const qualifiedName = `${ext.filePath}::${ext.name}`;
+    const qualifiedName = entityQualifiedName(ext);
     extractedQNames.add(qualifiedName);
 
     const testInfo = testMap.get(qualifiedName);
@@ -1117,6 +1284,7 @@ export async function scanRepository(
           kind: ext.kind,
           name: ext.name,
           filePath: ext.filePath,
+          qualifiedName,
           lineStart: ext.lineStart,
           lineEnd: ext.lineEnd,
           signature: ext.signature,
@@ -1146,6 +1314,7 @@ export async function scanRepository(
       }
 
       const needsUpdate =
+        existingEntity.kind !== ext.kind ||
         existingEntity.lineStart !== ext.lineStart ||
         existingEntity.lineEnd !== ext.lineEnd ||
         existingEntity.signature !== ext.signature ||
@@ -1161,6 +1330,7 @@ export async function scanRepository(
 
       if (needsUpdate) {
         store.updateEntity(existingEntity.id, {
+          kind: ext.kind,
           lineStart: ext.lineStart,
           lineEnd: ext.lineEnd,
           signature: ext.signature,
@@ -1188,9 +1358,89 @@ export async function scanRepository(
     }
 
     // ============ 관계 그래프 적재 (2-pass) ============
-    const relations = completeScan ? resolveRelations(store, projectId, refsByQName) : [];
+    const semantic = resolveSymbols(symbolFiles, symbolOptions);
+    // Python exception matching can use declarations from another file only
+    // when the short class name identifies one project entity. Ambiguous or
+    // unresolved names stay exact-only in dataflow instead of guessing across
+    // modules.
+    const exceptionEntities = new Map<string, Set<string>>();
+    const exceptionParents = new Map<string, Set<string>>();
+    for (const file of symbolFiles.filter(item => item.language === 'python')) {
+      for (const base of file.bases) {
+        const child = base.entity.split('::').at(-1);
+        const parent = base.type.kind === 'name' || base.type.kind === 'type' ? base.type.name : undefined;
+        if (!child || !parent) continue;
+        exceptionEntities.set(child, new Set([...(exceptionEntities.get(child) ?? []), base.entity]));
+        exceptionParents.set(child, new Set([...(exceptionParents.get(child) ?? []), parent]));
+      }
+    }
+    const projectExceptionParents = Object.fromEntries([...exceptionParents].flatMap(([child, parents]) =>
+      exceptionEntities.get(child)?.size === 1 ? [[child, [...parents].sort()]] : []));
+    const callbackRelations: Array<{ sourceId: string; targetId: string; relationType: RelationType }> = [];
+    const rustTypeCounts = new Map<string, number>();
+    for (const type of symbolFiles.filter(file => file.language === 'rust').flatMap(file => file.entities.filter(entity => entity.kind === 'class').map(entity => entity.name))) {
+      rustTypeCounts.set(type, (rustTypeCounts.get(type) ?? 0) + 1);
+    }
+    const unambiguousCopyTypes = new Set(symbolFiles.flatMap(file => file.copyTypes ?? []).filter(type => rustTypeCounts.get(type) === 1));
+    applyRustCopyTypes(cfgs, unambiguousCopyTypes);
+    store.replaceCallSitesForProject(projectId, semantic.calls);
+    const analysis = analyzeSummaries(cfgs, semantic.calls, { models: libraryModels, cache: analysisCache, engineKey: cache.engine,
+      exceptionParents: projectExceptionParents, checkDeadline: () => {
+      if (Date.now() - startTime > timeoutMs) throw new Error('scan timed out during dataflow');
+    } });
+    cache.summaryHits = analysis.cache.reusedComponents; cache.summaryMisses = analysis.cache.computedComponents;
+    store.replaceControlFlowForProject(projectId, analysis.graphs);
+    const graphByOwner = new Map(cfgs.map(graph => [graph.owner, graph]));
+    for (const flow of analysis.flows) {
+      for (const call of flow.calls) if (call.model) models.calls[call.model.status] = (models.calls[call.model.status] ?? 0) + 1;
+      for (const finding of flow.resourceFindings) {
+        resourceFindings.total++;
+        resourceFindings[flow.completeness === 'complete' ? finding.certainty : 'possible']++;
+        if (finding.kind === 'use-after-release') resourceFindings.useAfterRelease++;
+        else resourceFindings.leak++;
+      }
+      for (const finding of flow.ownershipFindings) {
+        ownershipFindings.total++;
+        ownershipFindings[flow.completeness === 'complete' ? finding.certainty : 'possible']++;
+        if (finding.kind === 'use-after-move') ownershipFindings.useAfterMove++;
+      }
+      taintFindings.total += flow.taintFindings.length;
+      // A taint edge from a partial flow is evidence of a possible path, not
+      // a complete/proven sink reach. Keep it visible in `total`, but require
+      // the flow solver to have completed before counting it as proven.
+      if (flow.completeness === 'complete') taintFindings.proven += flow.taintFindings.length;
+      const source = store.getEntityByName(flow.owner, projectId);
+      if (source) for (const call of flow.calls) for (const targetName of call.callbacks ?? []) {
+        const target = store.getEntityByName(targetName, projectId);
+        if (target) callbackRelations.push({ sourceId: source.id, targetId: target.id, relationType: 'registers' });
+      }
+      dataflow.total++; dataflow[flow.completeness]++; dataflow.iterations += flow.iterations;
+      dataflow.diagnostics.push(...flow.diagnostics.map(d => ({ ...d, filePath: graphByOwner.get(flow.owner)!.filePath, owner: flow.owner })));
+    }
+    if (Date.now() - startTime > timeoutMs) throw new Error('scan timed out during dataflow');
+    store.replaceDataflowForProject(projectId, analysis.flows);
+    store.replaceSummariesForProject(projectId, analysis.summaries);
+    store.setModelManifest(projectId, libraryModels.manifest);
+    summaries.total = analysis.summaries.length; summaries.components = analysis.components.length;
+    for (const summary of analysis.summaries) summaries[summary.completeness]++;
+    for (const graph of cfgs) {
+      controlFlow.total++; controlFlow[graph.completeness]++;
+      controlFlow.nodes += graph.nodes.length; controlFlow.edges += graph.edges.length;
+      controlFlow.diagnostics.push(...graph.diagnostics.map(d => ({ ...d, filePath: graph.filePath, owner: graph.owner })));
+    }
+    callSites.total = semantic.calls.length;
+    for (const call of semantic.calls) callSites[call.resolution]++;
+    const relations = [...resolveRelations(store, projectId, refsByQName), ...store.getCallSiteRelations(projectId), ...callbackRelations];
+    for (const base of semantic.bases) {
+      const source = store.getEntityByName(base.source, projectId);
+      const target = store.getEntityByName(base.target, projectId);
+      if (source && target) relations.push({ sourceId: source.id, targetId: target.id, relationType: base.type });
+    }
     relationsLoaded = completeScan ? store.replaceRelationsForProject(projectId, relations) : 0;
+    store.replaceAnalysisCache(projectId, [...entries.values()]);
+    if (Date.now() - startTime > timeoutMs) throw new Error('scan timed out during snapshot commit');
     });
+    cache.committed = true;
   } catch (err) {
     errors.push(err instanceof Error ? err.message : String(err));
     registered = 0;
@@ -1198,6 +1448,13 @@ export async function scanRepository(
     testsMapped = 0;
     removed = 0;
     relationsLoaded = 0;
+    callSites.total = callSites.resolved = callSites.unresolved = callSites.external = 0;
+    controlFlow.total = controlFlow.complete = controlFlow.partial = controlFlow.nodes = controlFlow.edges = 0;
+    controlFlow.diagnostics = [];
+    dataflow.total = dataflow.complete = dataflow.partial = dataflow.iterations = 0;
+    dataflow.diagnostics = [];
+    summaries.total = summaries.complete = summaries.partial = summaries.components = 0;
+    models.calls = {};
     completeScan = false;
   }
   if (verbose) {
@@ -1216,6 +1473,17 @@ export async function scanRepository(
     errors,
     durationMs: Date.now() - startTime,
     languageBreakdown,
+    parserBreakdown,
+    diagnostics,
+    callSites,
+    controlFlow,
+    dataflow,
+    resourceFindings,
+    ownershipFindings,
+    taintFindings,
+    summaries,
+    models,
+    cache,
   };
 }
 

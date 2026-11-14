@@ -59,17 +59,19 @@ test('builds the isolated snapshot instead of reusing target dist', async (t) =>
   t.after(() => rm(project, { recursive: true, force: true }));
   await Promise.all([
     mkdir(join(project, 'src'), { recursive: true }),
+    mkdir(join(project, 'scripts'), { recursive: true }),
     mkdir(join(project, 'dist'), { recursive: true }),
     mkdir(snapshot),
   ]);
   await Promise.all([
     writeFile(join(project, 'src', 'marker.txt'), 'fresh source'),
+    writeFile(join(project, 'scripts', 'build.mjs'), "import fs from 'node:fs';fs.mkdirSync('dist',{recursive:true});fs.copyFileSync('src/marker.txt','dist/cli.js');"),
     writeFile(join(project, 'dist', 'cli.js'), 'stale target build'),
     writeFile(join(project, 'package-lock.json'), '{}'),
     writeFile(join(project, 'tsconfig.json'), '{}'),
     writeFile(join(project, 'vitest.config.ts'), 'export default {}'),
     writeFile(join(project, 'package.json'), JSON.stringify({
-      scripts: { build: 'node -e "const fs=require(\'fs\');fs.mkdirSync(\'dist\',{recursive:true});fs.copyFileSync(\'src/marker.txt\',\'dist/cli.js\')"' },
+      scripts: { build: 'node scripts/build.mjs' },
     })),
   ]);
   await createSourceSnapshot(project, snapshot);
@@ -86,6 +88,7 @@ test('creates a fresh prepared workspace for each condition', async (t) => {
   t.after(() => rm(project, { recursive: true, force: true }));
   await Promise.all([
     mkdir(join(project, 'src'), { recursive: true }),
+    mkdir(join(project, 'scripts'), { recursive: true }),
     mkdir(join(project, 'node_modules'), { recursive: true }),
     mkdir(template),
     mkdir(first),
@@ -93,11 +96,12 @@ test('creates a fresh prepared workspace for each condition', async (t) => {
   ]);
   await Promise.all([
     writeFile(join(project, 'src', 'marker.txt'), 'baseline'),
+    writeFile(join(project, 'scripts', 'build.mjs'), "import fs from 'node:fs';fs.mkdirSync('dist',{recursive:true});fs.copyFileSync('src/marker.txt','dist/cli.js');"),
     writeFile(join(project, 'package-lock.json'), '{}'),
     writeFile(join(project, 'tsconfig.json'), '{}'),
     writeFile(join(project, 'vitest.config.ts'), 'export default {}'),
     writeFile(join(project, 'package.json'), JSON.stringify({
-      scripts: { build: 'node -e "const fs=require(\'fs\');fs.mkdirSync(\'dist\',{recursive:true});fs.copyFileSync(\'src/marker.txt\',\'dist/cli.js\')"' },
+      scripts: { build: 'node scripts/build.mjs' },
     })),
   ]);
   await createSourceSnapshot(project, template);

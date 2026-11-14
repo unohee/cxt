@@ -22,11 +22,34 @@ export type {
 } from './registry/schema.js';
 
 // Scanner
-export { scanRepository, extractEntities } from './registry/entityScanner.js';
-export type { ScanResult, ExtractedEntity } from './registry/entityScanner.js';
+export { scanRepository, extractEntities, extractFile } from './registry/entityScanner.js';
+export type { ScanResult, ExtractedEntity, Language } from './registry/entityScanner.js';
+export type { LanguageFrontend, FrontendResult, FrontendDiagnostic, ParserMode } from './frontend/types.js';
+
+// Symbol resolution
+export { resolveSymbols } from './analysis/resolveSymbols.js';
+export type { SymbolResolution } from './analysis/resolveSymbols.js';
+export type { SymbolFacts, SymbolValue, CallSite, ResolvedCallSite, ResolutionReason } from './analysis/symbols.js';
+export { reachableNodes, buildBasicBlocks } from './analysis/cfg.js';
+export type { ControlFlowGraph, CfgNode, CfgEdge, CfgDiagnostic, SourceSpan, BasicBlock } from './analysis/cfg.js';
+export { analyzeDataflow } from './analysis/dataflow.js';
+export { analyzeSummaries } from './analysis/summaries.js';
+export type { SummaryAnalysis } from './analysis/summaries.js';
+export type { FunctionSummary, SummaryParameter } from './analysis/summaryTypes.js';
+export { parameterImpact } from './analysis/parameterImpact.js';
+export type { ParameterImpact, ImpactStep } from './analysis/parameterImpact.js';
+export type { DataflowResult, AbstractValue, FlowDefinition, FlowUse, OwnershipFinding } from './analysis/dataflow.js';
+export { LibraryModelCatalog, loadLibraryModels, modelPackSchema, modelConfigSchema, standardModelPack } from './analysis/libraryModels.js';
+export type { LibraryModel, ModelPack, ModelConfig, ModelManifest, ModelReference, ModelApplication, ResourceContract } from './analysis/libraryModels.js';
+export type { DataflowFacts, DataflowDiagnostic, DataExpr, NodeEffect, FlowVariable, FlowLocation } from './analysis/dataflowTypes.js';
 
 // BS Detector
 export { scanRepository as scanBs, scanFile as scanFileForBs, scanFileContent, aggregateResults } from './registry/bsDetector.js';
+export { analyzeFileContent, scanLegacyFileContent } from './registry/bsDetector.js';
+export { toSarif } from './analysis/sarif.js';
+export { analysisOutcome, bsOutcome, scanOutcome, fingerprintFindings } from './analysis/report.js';
+export { factQuerySchema, factViews, type FactQuery } from './analysis/factQuery.js';
+export { builtInRules, builtInRulePack, rulePackSchema, ruleConfigSchema } from './analysis/rulePack.js';
 export type { BsIssue, BsScanResult, BsSeverity } from './registry/bsDetector.js';
 
 // Ignore Rules
